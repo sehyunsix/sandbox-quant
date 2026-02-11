@@ -1,0 +1,127 @@
+use serde::Deserialize;
+
+/// Deserialize Binance string-encoded numbers to f64.
+pub fn string_to_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse::<f64>().map_err(serde::de::Error::custom)
+}
+
+/// Binance trade stream event (symbol@trade).
+#[derive(Debug, Deserialize)]
+pub struct BinanceTradeEvent {
+    #[serde(rename = "e")]
+    pub event_type: String,
+    #[serde(rename = "E")]
+    pub event_time: u64,
+    #[serde(rename = "s")]
+    pub symbol: String,
+    #[serde(rename = "t")]
+    pub trade_id: u64,
+    #[serde(rename = "p", deserialize_with = "string_to_f64")]
+    pub price: f64,
+    #[serde(rename = "q", deserialize_with = "string_to_f64")]
+    pub qty: f64,
+    #[serde(rename = "m")]
+    pub is_buyer_maker: bool,
+}
+
+/// Binance order response (newOrderRespType=FULL).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceOrderResponse {
+    pub symbol: String,
+    pub order_id: u64,
+    pub client_order_id: String,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub price: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub orig_qty: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub executed_qty: f64,
+    pub status: String,
+    pub r#type: String,
+    pub side: String,
+    #[serde(default)]
+    pub fills: Vec<BinanceFill>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceFill {
+    #[serde(deserialize_with = "string_to_f64")]
+    pub price: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub qty: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub commission: f64,
+    pub commission_asset: String,
+}
+
+/// Binance API error response.
+#[derive(Debug, Deserialize)]
+pub struct BinanceApiErrorResponse {
+    pub code: i64,
+    pub msg: String,
+}
+
+/// Binance server time response.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerTimeResponse {
+    pub server_time: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_trade_event() {
+        let json = r#"{
+            "e": "trade",
+            "E": 1672515782136,
+            "s": "BTCUSDT",
+            "t": 12345,
+            "p": "42000.50",
+            "q": "0.001",
+            "T": 1672515782136,
+            "m": false
+        }"#;
+        let event: BinanceTradeEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.symbol, "BTCUSDT");
+        assert!((event.price - 42000.50).abs() < f64::EPSILON);
+        assert!((event.qty - 0.001).abs() < f64::EPSILON);
+        assert_eq!(event.trade_id, 12345);
+        assert!(!event.is_buyer_maker);
+    }
+
+    #[test]
+    fn deserialize_order_response() {
+        let json = r#"{
+            "symbol": "BTCUSDT",
+            "orderId": 12345,
+            "clientOrderId": "sq-test",
+            "price": "0.00000000",
+            "origQty": "0.00100000",
+            "executedQty": "0.00100000",
+            "status": "FILLED",
+            "type": "MARKET",
+            "side": "BUY",
+            "fills": [
+                {
+                    "price": "42000.50000000",
+                    "qty": "0.00100000",
+                    "commission": "0.00000100",
+                    "commissionAsset": "BTC"
+                }
+            ]
+        }"#;
+        let resp: BinanceOrderResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.status, "FILLED");
+        assert_eq!(resp.fills.len(), 1);
+        assert!((resp.fills[0].price - 42000.50).abs() < 0.01);
+    }
+}
