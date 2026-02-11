@@ -26,6 +26,11 @@ use crate::ui::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install rustls crypto provider (required by rustls 0.23+)
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     // Load config
     let config = match Config::load() {
         Ok(c) => c,
