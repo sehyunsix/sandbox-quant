@@ -1,0 +1,18 @@
+[binance]
+rest_base_url = "https://testnet.binance.vision"
+ws_base_url = "wss://testnet.binance.vision/ws"
+symbol = "BTCUSDT"
+recv_window = 5000
+
+[strategy]
+fast_period = 10
+slow_period = 30
+order_qty = 0.001
+min_ticks_between_signals = 50
+
+[ui]
+refresh_rate_ms = 100
+price_history_len = 120
+
+[logging]
+level = "debug"
