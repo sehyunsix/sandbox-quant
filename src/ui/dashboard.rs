@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
 use crate::model::order::OrderSide;
@@ -13,11 +13,15 @@ use crate::order_manager::OrderUpdate;
 
 pub struct PositionPanel<'a> {
     position: &'a Position,
+    current_price: Option<f64>,
 }
 
 impl<'a> PositionPanel<'a> {
-    pub fn new(position: &'a Position) -> Self {
-        Self { position }
+    pub fn new(position: &'a Position, current_price: Option<f64>) -> Self {
+        Self {
+            position,
+            current_price,
+        }
     }
 }
 
@@ -44,7 +48,21 @@ impl Widget for PositionPanel<'_> {
             }
         };
 
+        let price_str = self
+            .current_price
+            .map(|p| format!("{:.2}", p))
+            .unwrap_or_else(|| "---".to_string());
+
         let lines = vec![
+            Line::from(vec![
+                Span::styled("Price:", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" {}", price_str),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
             Line::from(vec![
                 Span::styled("Side: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
@@ -200,11 +218,21 @@ impl Widget for StatusBar<'_> {
         let conn_status = if self.ws_connected {
             Span::styled("CONNECTED", Style::default().fg(Color::Green))
         } else {
-            Span::styled("DISCONNECTED", Style::default().fg(Color::Red))
+            Span::styled(
+                "DISCONNECTED",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            )
         };
 
         let pause_status = if self.paused {
-            Span::styled(" PAUSED ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            Span::styled(
+                " PAUSED ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
             Span::styled(" RUNNING ", Style::default().fg(Color::Green))
         };
@@ -230,6 +258,53 @@ impl Widget for StatusBar<'_> {
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);
+    }
+}
+
+/// Scrolling system log panel that shows recent events.
+pub struct LogPanel<'a> {
+    messages: &'a [String],
+}
+
+impl<'a> LogPanel<'a> {
+    pub fn new(messages: &'a [String]) -> Self {
+        Self { messages }
+    }
+}
+
+impl Widget for LogPanel<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .title(" System Log ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let inner_height = block.inner(area).height as usize;
+
+        // Take the last N messages that fit in the panel
+        let visible: Vec<Line> = self
+            .messages
+            .iter()
+            .rev()
+            .take(inner_height)
+            .rev()
+            .map(|msg| {
+                let (color, text) = if msg.starts_with("[ERR]") {
+                    (Color::Red, msg.as_str())
+                } else if msg.starts_with("[WARN]") {
+                    (Color::Yellow, msg.as_str())
+                } else if msg.contains("FILLED") || msg.contains("Connected") {
+                    (Color::Green, msg.as_str())
+                } else {
+                    (Color::DarkGray, msg.as_str())
+                };
+                Line::from(Span::styled(text, Style::default().fg(color)))
+            })
+            .collect();
+
+        Paragraph::new(visible)
+            .block(block)
+            .wrap(Wrap { trim: true })
+            .render(area, buf);
     }
 }
 

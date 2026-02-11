@@ -2,8 +2,10 @@ use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
+use tokio_tungstenite::tungstenite;
 
 use super::types::BinanceTradeEvent;
+use crate::event::{AppEvent, WsConnectionStatus};
 use crate::model::tick::Tick;
 
 /// Exponential backoff for reconnection.
@@ -49,9 +51,11 @@ impl BinanceWsClient {
     }
 
     /// Connect and run the WebSocket loop with automatic reconnection.
+    /// Sends WsStatus events through `status_tx` and ticks through `tick_tx`.
     pub async fn connect_and_run(
         &self,
         tick_tx: mpsc::Sender<Tick>,
+        status_tx: mpsc::Sender<AppEvent>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let mut backoff = ExponentialBackoff::new(
@@ -59,22 +63,40 @@ impl BinanceWsClient {
             Duration::from_secs(60),
             2.0,
         );
+        let mut attempt: u32 = 0;
 
         loop {
-            match self.connect_once(&tick_tx, &mut shutdown).await {
+            attempt += 1;
+            match self.connect_once(&tick_tx, &status_tx, &mut shutdown).await {
                 Ok(()) => {
-                    tracing::info!("WebSocket closed cleanly (shutdown)");
+                    // Clean shutdown requested
+                    let _ = status_tx
+                        .send(AppEvent::WsStatus(WsConnectionStatus::Disconnected))
+                        .await;
                     break;
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "WebSocket disconnected");
+                    let _ = status_tx
+                        .send(AppEvent::WsStatus(WsConnectionStatus::Disconnected))
+                        .await;
+                    let _ = status_tx
+                        .send(AppEvent::LogMessage(format!("WS error: {}", e)))
+                        .await;
+
                     let delay = backoff.next_delay();
-                    tracing::info!(delay_ms = delay.as_millis() as u64, "Reconnecting...");
+                    let _ = status_tx
+                        .send(AppEvent::WsStatus(WsConnectionStatus::Reconnecting {
+                            attempt,
+                            delay_ms: delay.as_millis() as u64,
+                        }))
+                        .await;
 
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => continue,
                         _ = shutdown.changed() => {
-                            tracing::info!("Shutdown during reconnect backoff");
+                            let _ = status_tx
+                                .send(AppEvent::LogMessage("Shutdown during reconnect".to_string()))
+                                .await;
                             break;
                         }
                     }
@@ -87,15 +109,24 @@ impl BinanceWsClient {
     async fn connect_once(
         &self,
         tick_tx: &mpsc::Sender<Tick>,
+        status_tx: &mpsc::Sender<AppEvent>,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<()> {
-        tracing::info!(url = %self.url, "Connecting to WebSocket");
+        let _ = status_tx
+            .send(AppEvent::LogMessage(format!("Connecting to {}", self.url)))
+            .await;
 
         let (ws_stream, _resp) = tokio_tungstenite::connect_async(&self.url)
             .await
             .context("WebSocket connect failed")?;
 
-        tracing::info!("WebSocket connected");
+        // Send Connected AFTER successful connection
+        let _ = status_tx
+            .send(AppEvent::WsStatus(WsConnectionStatus::Connected))
+            .await;
+        let _ = status_tx
+            .send(AppEvent::LogMessage("WebSocket connected".to_string()))
+            .await;
 
         let (_write, mut read) = ws_stream.split();
 
@@ -118,16 +149,14 @@ impl BinanceWsClient {
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::debug!(error = %e, raw = %text, "Failed to parse WS message");
+                                    tracing::debug!(error = %e, "Failed to parse WS message");
                                 }
                             }
                         }
                         Some(Ok(tungstenite::Message::Ping(_))) => {
                             // tokio-tungstenite handles pong automatically
                         }
-                        Some(Ok(_)) => {
-                            // Binary, Pong, Close, Frame - ignore
-                        }
+                        Some(Ok(_)) => {}
                         Some(Err(e)) => {
                             return Err(anyhow::anyhow!("WebSocket read error: {}", e));
                         }
@@ -137,12 +166,9 @@ impl BinanceWsClient {
                     }
                 }
                 _ = shutdown.changed() => {
-                    tracing::info!("Shutdown signal received, closing WebSocket");
                     return Ok(());
                 }
             }
         }
     }
 }
-
-use tokio_tungstenite::tungstenite;

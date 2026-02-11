@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, watch};
 use crate::binance::rest::BinanceRestClient;
 use crate::binance::ws::BinanceWsClient;
 use crate::config::Config;
-use crate::event::{AppEvent, WsConnectionStatus};
+use crate::event::AppEvent;
 use crate::model::signal::Signal;
 use crate::order_manager::OrderManager;
 use crate::strategy::ma_crossover::MaCrossover;
@@ -40,8 +40,13 @@ async fn main() -> Result<()> {
     let log_file = std::fs::File::create("sandbox-quant.log")?;
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| config.logging.level.parse().unwrap_or_else(|_| "info".parse().unwrap())),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                config
+                    .logging
+                    .level
+                    .parse()
+                    .unwrap_or_else(|_| "info".parse().unwrap())
+            }),
         )
         .with_writer(log_file)
         .with_ansi(false)
@@ -68,29 +73,47 @@ async fn main() -> Result<()> {
         config.binance.recv_window,
     ));
 
-    // Verify connectivity
+    // Verify connectivity and log to TUI
+    let ping_app_tx = app_tx.clone();
     match rest_client.ping().await {
-        Ok(()) => tracing::info!("Binance testnet ping OK"),
+        Ok(()) => {
+            tracing::info!("Binance testnet ping OK");
+            let _ = ping_app_tx
+                .send(AppEvent::LogMessage(
+                    "Binance testnet ping OK".to_string(),
+                ))
+                .await;
+        }
         Err(e) => {
             tracing::error!(error = %e, "Failed to ping Binance testnet");
-            eprintln!("Warning: Could not reach Binance testnet: {}", e);
+            let _ = ping_app_tx
+                .send(AppEvent::LogMessage(format!(
+                    "[ERR] Ping failed: {}",
+                    e
+                )))
+                .await;
         }
     }
 
     // Spawn WebSocket task
     let ws_stream = format!("{}@trade", config.binance.symbol.to_lowercase());
     let ws_client = BinanceWsClient::new(&config.binance.ws_base_url, &ws_stream);
-    let ws_tick_tx = tick_tx.clone();
+    let ws_tick_tx = tick_tx;
+    // ^ Move tick_tx into WS task. This way, when WS task drops ws_tick_tx,
+    //   the strategy task's tick_rx.recv() returns None → clean shutdown.
     let ws_app_tx = app_tx.clone();
     let ws_shutdown = shutdown_rx.clone();
     tokio::spawn(async move {
-        let _ = ws_app_tx
-            .send(AppEvent::WsStatus(WsConnectionStatus::Connected))
-            .await;
-        if let Err(e) = ws_client.connect_and_run(ws_tick_tx, ws_shutdown).await {
+        if let Err(e) = ws_client
+            .connect_and_run(ws_tick_tx, ws_app_tx.clone(), ws_shutdown)
+            .await
+        {
             tracing::error!(error = %e, "WebSocket task failed");
             let _ = ws_app_tx
-                .send(AppEvent::WsStatus(WsConnectionStatus::Disconnected))
+                .send(AppEvent::LogMessage(format!(
+                    "[ERR] WS task failed: {}",
+                    e
+                )))
                 .await;
         }
     });
@@ -99,7 +122,7 @@ async fn main() -> Result<()> {
     let strat_app_tx = app_tx.clone();
     let strat_rest = rest_client.clone();
     let strat_config = config.clone();
-    let strat_shutdown = shutdown_rx.clone();
+    let mut strat_shutdown = shutdown_rx.clone();
     tokio::spawn(async move {
         let mut strategy = MaCrossover::new(
             strat_config.strategy.fast_period,
@@ -109,29 +132,57 @@ async fn main() -> Result<()> {
         );
         let mut order_mgr = OrderManager::new(strat_rest, &strat_config.binance.symbol);
 
-        let mut paused = false;
-        let mut shutdown_clone = strat_shutdown;
+        let _ = strat_app_tx
+            .send(AppEvent::LogMessage(format!(
+                "Strategy: MA({}/{}) qty={} cooldown={}",
+                strat_config.strategy.fast_period,
+                strat_config.strategy.slow_period,
+                strat_config.strategy.order_qty,
+                strat_config.strategy.min_ticks_between_signals,
+            )))
+            .await;
 
         loop {
             tokio::select! {
-                Some(tick) = tick_rx.recv() => {
+                result = tick_rx.recv() => {
+                    let tick = match result {
+                        Some(t) => t,
+                        None => {
+                            tracing::info!("Tick channel closed, strategy task exiting");
+                            break;
+                        }
+                    };
+
                     // Forward tick to UI
-                    let _ = strat_app_tx.send(AppEvent::MarketTick(tick.clone())).await;
+                    let _ = strat_app_tx
+                        .send(AppEvent::MarketTick(tick.clone()))
+                        .await;
 
-                    if paused {
-                        continue;
-                    }
-
-                    // Run strategy
+                    // Always run strategy to keep SMA state updated, but skip orders if paused
                     let signal = strategy.on_tick(&tick);
 
+                    // Send SMA state to UI on every tick
+                    let _ = strat_app_tx
+                        .send(AppEvent::StrategyState {
+                            fast_sma: strategy.fast_sma_value(),
+                            slow_sma: strategy.slow_sma_value(),
+                        })
+                        .await;
+
+                    // Update unrealized PnL
+                    order_mgr.update_unrealized_pnl(tick.price);
+
                     if signal != Signal::Hold {
-                        let _ = strat_app_tx.send(AppEvent::StrategySignal(signal.clone())).await;
+                        let _ = strat_app_tx
+                            .send(AppEvent::StrategySignal(signal.clone()))
+                            .await;
 
                         // Submit order
                         match order_mgr.submit_order(signal).await {
                             Ok(Some(update)) => {
-                                let _ = strat_app_tx.send(AppEvent::OrderUpdate(update)).await;
+                                let _ = strat_app_tx
+                                    .send(AppEvent::OrderUpdate(update))
+                                    .await;
                             }
                             Ok(None) => {}
                             Err(e) => {
@@ -143,13 +194,11 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                _ = shutdown_clone.changed() => {
+                _ = strat_shutdown.changed() => {
                     tracing::info!("Strategy task shutting down");
                     break;
                 }
             }
-
-            let _ = paused;
         }
     });
 
@@ -164,6 +213,10 @@ async fn main() -> Result<()> {
     // TUI main loop
     let mut terminal = ratatui::init();
     let mut app_state = AppState::new(&config.binance.symbol, config.ui.price_history_len);
+    app_state.push_log(format!(
+        "sandbox-quant started | {} | testnet",
+        config.binance.symbol
+    ));
 
     loop {
         // Draw
@@ -180,9 +233,11 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Char('p') | KeyCode::Char('P') => {
                         app_state.paused = true;
+                        app_state.push_log("Strategy PAUSED".to_string());
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         app_state.paused = false;
+                        app_state.push_log("Strategy RESUMED".to_string());
                     }
                     _ => {}
                 }
@@ -190,8 +245,8 @@ async fn main() -> Result<()> {
         }
 
         // Drain events from channel
-        while let Ok(event) = app_rx.try_recv() {
-            app_state.apply(event);
+        while let Ok(evt) = app_rx.try_recv() {
+            app_state.apply(evt);
         }
 
         // Check shutdown
