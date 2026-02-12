@@ -101,8 +101,8 @@ async fn main() -> Result<()> {
     }
 
     // Spawn WebSocket task
-    let ws_stream = format!("{}@trade", config.binance.symbol.to_lowercase());
-    let ws_client = BinanceWsClient::new(&config.binance.ws_base_url, &ws_stream);
+    let ws_streams = vec![format!("{}@trade", config.binance.symbol.to_lowercase())];
+    let ws_client = BinanceWsClient::new(&config.binance.ws_base_url, ws_streams);
     let ws_tick_tx = tick_tx;
     // ^ Move tick_tx into WS task. This way, when WS task drops ws_tick_tx,
     //   the strategy task's tick_rx.recv() returns None → clean shutdown.
