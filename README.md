@@ -1,15 +1,30 @@
 # sandbox-quant
 
-Minimal Rust-native trading prototype targeting **Binance Spot Testnet**.
+<p align="center">
+  <b>Rust-native Binance Spot Testnet trading prototype</b><br/>
+  Moving Average Crossover strategy + real-time stream + terminal dashboard
+</p>
 
-Implements a Moving Average Crossover strategy with real-time market data,
-order placement, and a terminal-based dashboard.
+<p align="center">
+  <img src="https://img.shields.io/badge/rust-1.75%2B-0f172a?style=for-the-badge&logo=rust" alt="Rust 1.75+" />
+  <img src="https://img.shields.io/badge/exchange-binance%20spot%20testnet-1f2937?style=for-the-badge" alt="Binance Spot Testnet" />
+  <img src="https://img.shields.io/badge/ui-ratatui-0b3b2e?style=for-the-badge" alt="ratatui" />
+</p>
 
-> **WARNING: This is for TESTNET ONLY. Do not use with real API keys or mainnet.**
+> [!WARNING]
+> Testnet only. Do not use real mainnet API keys.
+
+## What This Project Does
+
+- Streams market ticks from Binance Spot Testnet WebSocket
+- Generates MA crossover signals (fast/slow SMA)
+- Places and tracks orders through REST
+- Renders position, pnl, and event flow in terminal UI
+- Logs structured JSON to `sandbox-quant.log`
 
 ## Architecture
 
-```
+```text
 WS Task ──tick──> Strategy Task ──signal──> Order Manager
     │                                           │
     │         (all send AppEvent)               │
@@ -18,155 +33,108 @@ WS Task ──tick──> Strategy Task ──signal──> Order Manager
                     TUI Main Loop (ratatui)
 ```
 
-- Fully async (tokio + tokio-tungstenite + reqwest)
-- Channel-based coordination between tasks
-- Graceful shutdown via Ctrl+C
+## Quick Start
 
-### NautilusTrader Note
-
-NautilusTrader's Binance Adapter is Python-only and cannot be used directly
-from Rust. This project implements a Rust-native alternative that directly
-integrates with Binance REST and WebSocket APIs, following the same trading
-concepts (strategy, order management, event handling).
-
-## Prerequisites
-
-- Rust 1.75+ (`rustup update stable`)
-- Binance Spot Testnet API keys ([testnet.binance.vision](https://testnet.binance.vision/))
-- macOS or Linux
-
-## Setup
-
-1. Clone and enter the project:
+1. Clone and enter the repo
    ```bash
    cd sandbox-quant
    ```
-
-2. Copy the environment template and add your testnet keys:
+2. Create env file
    ```bash
    cp .env.example .env
    ```
-
-3. Edit `.env` with your Binance **Testnet** credentials:
-   ```
+3. Fill testnet keys in `.env`
+   ```bash
    BINANCE_API_KEY=your_testnet_api_key_here
    BINANCE_API_SECRET=your_testnet_api_secret_here
    ```
-
-4. Build:
+4. Build and run
    ```bash
    cargo build --release
-   ```
-
-5. Run:
-   ```bash
    cargo run --release
    ```
 
-## Environment Variables
+## Runtime Configuration
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `BINANCE_API_KEY` | Yes | Binance Spot Testnet API key |
-| `BINANCE_API_SECRET` | Yes | Binance Spot Testnet API secret |
-| `RUST_LOG` | No | Override log level (e.g., `debug`, `sandbox_quant=trace`) |
-
-## Configuration
-
-Edit `config/default.toml` to change:
+Edit `config/default.toml`:
 
 ```toml
 [binance]
-rest_base_url = "https://testnet.binance.vision"  # Testnet REST endpoint
-ws_base_url = "wss://testnet.binance.vision/ws"   # Testnet WebSocket endpoint
-symbol = "BTCUSDT"                                  # Trading pair
-recv_window = 5000                                  # Request timestamp tolerance (ms)
+rest_base_url = "https://testnet.binance.vision"
+ws_base_url = "wss://testnet.binance.vision/ws"
+symbol = "BTCUSDT"
+recv_window = 5000
+kline_interval = "1m"
 
 [strategy]
-fast_period = 10       # Fast SMA period (in ticks)
-slow_period = 30       # Slow SMA period (in ticks)
-order_qty = 0.001      # Order quantity in BTC
-min_ticks_between_signals = 50  # Cooldown between signals
+fast_period = 10
+slow_period = 30
+order_amount_usdt = 10.0
+min_ticks_between_signals = 50
 
 [ui]
-refresh_rate_ms = 100  # TUI refresh interval
-price_history_len = 120  # Price points shown in chart
+refresh_rate_ms = 100
+price_history_len = 120
 ```
 
-### Symbol Configuration
+## CLI Verification Screenshot
 
-Change `symbol` in `config/default.toml`. The WebSocket stream is derived
-automatically from the symbol (lowercased + `@trade`).
+Below is a captured CLI screenshot from a real `cargo run` execution on **2026-02-13 (PST)**.
 
-Common testnet pairs: `BTCUSDT`, `ETHUSDT`, `BNBUSDT`.
+- Command used:
+  ```bash
+  (cd /tmp && cargo run --manifest-path /Users/yuksehyun/project/sandbox-quant/Cargo.toml)
+  ```
+- Why `/tmp`: run-path verification without local `config/default.toml` so the binary starts and exits predictably.
 
-## Terminal Dashboard
+![cargo run screenshot](docs/assets/cargo-run-cli.svg)
 
-```
- sandbox-quant | BTCUSDT | CONNECTED | RUNNING | ticks: 1234
-┌─ Price (BTCUSDT) ──────────────────┐┌─ Position ──┐
-│  ●                                 ││ Side: LONG   │
-│    ●●                            F ││ Qty:  0.001  │
-│      ●●●                       S  ││ Entry: 42000 │
-│          ●●●●●                     ││ UnrPL: 0.05  │
-│                ●●●●                ││ RlzPL: 0.10  │
-│                    ●●●             ││ Trades: 3    │
-└────────────────────────────────────┘└──────────────┘
-┌─ Orders & Signals ─────────────────────────────────┐
-│ Signal: BUY 0.00100   Order: FILLED sq-abc @ 42000 │
-│ Fast SMA: 42155.30  Slow SMA: 42120.80             │
-└────────────────────────────────────────────────────┘
- [Q]uit  [P]ause  [R]esume
-```
+Full raw output is saved at `docs/assets/cargo-run-output.txt`.
 
-**Keybinds:**
-- `Q` - Quit (graceful shutdown)
-- `P` - Pause strategy (stops signal generation, data keeps flowing)
-- `R` - Resume strategy
+## Dashboard Keys
 
-## Logging
+- `Q`: Graceful shutdown
+- `P`: Pause strategy
+- `R`: Resume strategy
 
-Logs are written to `sandbox-quant.log` in structured JSON format to avoid
-interfering with the terminal UI. View logs:
+## Logs
 
 ```bash
 tail -f sandbox-quant.log | jq .
 ```
 
-## Project Structure
+## Project Layout
 
-```
+```text
 sandbox-quant/
 ├── Cargo.toml
 ├── .env.example
 ├── config/default.toml
+├── docs/assets/
+│   ├── cargo-run-cli.svg
+│   └── cargo-run-output.txt
 ├── src/
-│   ├── main.rs              # Entry point, task orchestration, TUI loop
-│   ├── config.rs            # Config loading (.env + TOML)
-│   ├── error.rs             # Error types
-│   ├── event.rs             # AppEvent enum
-│   ├── order_manager.rs     # Order lifecycle state machine
-│   ├── model/               # Data models (tick, order, position, signal)
-│   ├── binance/             # REST client, WebSocket client, API types
-│   ├── indicator/           # SMA indicator (ring buffer)
-│   ├── strategy/            # MA crossover strategy
-│   └── ui/                  # ratatui chart, dashboard, widgets
-└── TESTING.md               # Testing plan
+│   ├── main.rs
+│   ├── config.rs
+│   ├── error.rs
+│   ├── event.rs
+│   ├── order_manager.rs
+│   ├── binance/
+│   ├── indicator/
+│   ├── model/
+│   ├── strategy/
+│   └── ui/
+└── TESTING.md
 ```
 
 ## Testing
 
-Run unit tests:
 ```bash
 cargo test
-```
-
-Run integration tests (requires .env with testnet keys and network):
-```bash
 cargo test -- --ignored
 ```
 
-See [TESTING.md](TESTING.md) for the full testing plan.
+Reference: `TESTING.md`
 
 ## Automation (Hourly)
 
