@@ -64,6 +64,19 @@ They are marked `#[ignore]` and run explicitly.
 
 Run: `cargo test -- --ignored`
 
+## 2.1 Integration Tests (Paper Stocks/Options Venue Probe)
+
+Use the broker probe binary to validate credentials and paper endpoint reachability:
+
+- `cargo run --bin demo_broker_probe`
+
+Expected behavior:
+
+- Alpaca probe is `OK` with valid paper keys
+- Tradier probe is `OK` with valid sandbox token
+- Missing credentials show `SKIPPED` (not a hard failure)
+- HTTP/auth issues show `FAILED` with response summary
+
 ## 3. Failure Scenario Tests
 
 | Scenario | How to test |
