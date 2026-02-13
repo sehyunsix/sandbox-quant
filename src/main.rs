@@ -25,7 +25,7 @@ use crate::order_manager::OrderManager;
 use crate::strategy::ma_crossover::MaCrossover;
 use crate::ui::AppState;
 
-const ORDER_HISTORY_LIMIT: usize = 100;
+const ORDER_HISTORY_PAGE_SIZE: usize = 1000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
 
 fn switch_timeframe(
@@ -35,11 +35,25 @@ fn switch_timeframe(
     app_tx: &mpsc::Sender<AppEvent>,
 ) {
     let interval = interval.to_string();
+    let interval_ms = match parse_interval_ms(&interval) {
+        Ok(ms) => ms,
+        Err(e) => {
+            let tx = app_tx.clone();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(AppEvent::Error(format!(
+                        "Invalid timeframe interval '{}': {}",
+                        interval, e
+                    )))
+                    .await;
+            });
+            return;
+        }
+    };
     let rest = rest_client.clone();
     let symbol = config.binance.symbol.clone();
     let limit = config.ui.price_history_len;
     let tx = app_tx.clone();
-    let interval_ms = parse_interval_ms(&interval);
     let iv = interval.clone();
     tokio::spawn(async move {
         match rest.get_klines(&symbol, &iv, limit).await {
@@ -229,7 +243,7 @@ async fn main() -> Result<()> {
                     .await;
             }
         }
-        match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+        match order_mgr.refresh_order_history(ORDER_HISTORY_PAGE_SIZE).await {
             Ok(history) => {
                 let _ = strat_app_tx
                     .send(AppEvent::OrderHistoryUpdate(history))
@@ -320,7 +334,7 @@ async fn main() -> Result<()> {
                                 let _ = strat_app_tx
                                     .send(AppEvent::OrderUpdate(update.clone()))
                                     .await;
-                                match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                match order_mgr.refresh_order_history(ORDER_HISTORY_PAGE_SIZE).await {
                                     Ok(history) => {
                                         let _ = strat_app_tx
                                             .send(AppEvent::OrderHistoryUpdate(history))
@@ -358,7 +372,7 @@ async fn main() -> Result<()> {
                             let _ = strat_app_tx
                                 .send(AppEvent::OrderUpdate(update.clone()))
                                 .await;
-                            match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                            match order_mgr.refresh_order_history(ORDER_HISTORY_PAGE_SIZE).await {
                                 Ok(history) => {
                                     let _ = strat_app_tx
                                         .send(AppEvent::OrderHistoryUpdate(history))
@@ -384,7 +398,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 _ = order_history_sync.tick() => {
-                    match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                    match order_mgr.refresh_order_history(ORDER_HISTORY_PAGE_SIZE).await {
                         Ok(history) => {
                             let _ = strat_app_tx
                                 .send(AppEvent::OrderHistoryUpdate(history))
@@ -413,7 +427,7 @@ async fn main() -> Result<()> {
 
     // TUI main loop
     let mut terminal = ratatui::init();
-    let candle_interval_ms = config.binance.kline_interval_ms();
+    let candle_interval_ms = config.binance.kline_interval_ms()?;
     let mut app_state = AppState::new(
         &config.binance.symbol,
         config.ui.price_history_len,
@@ -491,6 +505,15 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Char('m') | KeyCode::Char('M') => {
                         switch_timeframe("1M", &rest_client, &config, &app_tx);
+                    }
+                    KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
+                        let max_scroll = app_state.order_history.len().saturating_sub(1);
+                        app_state.order_history_scroll =
+                            (app_state.order_history_scroll + 1).min(max_scroll);
+                    }
+                    KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => {
+                        app_state.order_history_scroll =
+                            app_state.order_history_scroll.saturating_sub(1);
                     }
                     _ => {}
                 }
