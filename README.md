@@ -87,7 +87,7 @@ Below is a captured CLI screenshot from a real `cargo run` execution on **2026-0
   ```
 - Why `/tmp`: run-path verification without local `config/default.toml` so the binary starts and exits predictably.
 
-![cargo run screenshot](docs/assets/cargo-run-cli.svg)
+![app screenshot](docs/img/app-screenshot.png)
 
 Full raw output is saved at `docs/assets/cargo-run-output.txt`.
 
@@ -111,8 +111,9 @@ sandbox-quant/
 ├── .env.example
 ├── config/default.toml
 ├── docs/assets/
-│   ├── cargo-run-cli.svg
 │   └── cargo-run-output.txt
+├── docs/img/
+│   └── app-screenshot.png
 ├── src/
 │   ├── main.rs
 │   ├── config.rs
