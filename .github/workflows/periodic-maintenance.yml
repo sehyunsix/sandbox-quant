@@ -1,0 +1,100 @@
+name: Periodic Maintenance
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: periodic-maintenance
+  cancel-in-progress: true
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply rustfmt
+        run: cargo fmt --all
+
+      - name: Run clippy
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        id: tests
+        continue-on-error: true
+        run: cargo test --workspace --all-targets --all-features
+
+      - name: Open or update health issue on failures
+        if: ${{ steps.clippy.outcome != 'success' || steps.tests.outcome != 'success' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const title = '[bot] Periodic health check failed';
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Automated maintenance health check failed.`,
+              ``,
+              `- Clippy: **${{ steps.clippy.outcome }}**`,
+              `- Tests: **${{ steps.tests.outcome }}**`,
+              ``,
+              `Run: ${runUrl}`,
+            ].join('\n');
+
+            const openIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              { owner, repo, state: 'open', per_page: 100 }
+            );
+            const existing = openIssues.find((issue) => issue.title === title);
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+              });
+            }
+
+      - name: Create pull request for formatting changes
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/auto-maintenance/${{ github.run_id }}
+          base: ${{ github.event.repository.default_branch }}
+          title: "chore: periodic rustfmt cleanup"
+          commit-message: "chore: periodic rustfmt cleanup"
+          body: |
+            Automated periodic maintenance run.
+
+            - Applied `cargo fmt --all`
+            - Ran `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+            - Ran `cargo test --workspace --all-targets --all-features`
+          labels: |
+            automated-maintenance
+          delete-branch: true
+          add-paths: |
+            **/*.rs
+            Cargo.toml
+            Cargo.lock

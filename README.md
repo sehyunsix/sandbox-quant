@@ -168,6 +168,21 @@ cargo test -- --ignored
 
 See [TESTING.md](TESTING.md) for the full testing plan.
 
+## Automation (Every 10 Minutes)
+
+This repository includes a scheduled GitHub Actions workflow:
+
+- `.github/workflows/periodic-maintenance.yml`
+
+What it does every 10 minutes:
+
+- Runs `cargo fmt --all` and opens a PR if formatting changes are found
+- Runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- Runs `cargo test --workspace --all-targets --all-features`
+- Opens (or updates) a health-check issue when clippy/tests fail
+
+You can also run it manually with `workflow_dispatch` from the Actions tab.
+
 ## Multi-Broker Demo Probe (Stocks/Options)
 
 To validate non-crypto paper/sandbox venues before full adapter work, run:
