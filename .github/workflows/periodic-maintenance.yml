@@ -2,7 +2,7 @@ name: Periodic Maintenance
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -27,6 +27,16 @@ jobs:
 
       - name: Apply rustfmt
         run: cargo fmt --all
+
+      - name: Bump package version (patch)
+        id: bump
+        run: |
+          current="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          IFS='.' read -r major minor patch <<< "$current"
+          next="${major}.${minor}.$((patch + 1))"
+          sed -i "0,/^version = \".*\"/s//version = \"${next}\"/" Cargo.toml
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          echo "next=${next}" >> "$GITHUB_OUTPUT"
 
       - name: Run clippy
         id: clippy
@@ -83,12 +93,13 @@ jobs:
         with:
           branch: chore/auto-maintenance/${{ github.run_id }}
           base: ${{ github.event.repository.default_branch }}
-          title: "chore: periodic rustfmt cleanup"
-          commit-message: "chore: periodic rustfmt cleanup"
+          title: "chore: periodic maintenance + version bump to ${{ steps.bump.outputs.next }}"
+          commit-message: "chore: periodic maintenance + version bump to ${{ steps.bump.outputs.next }}"
           body: |
             Automated periodic maintenance run.
 
             - Applied `cargo fmt --all`
+            - Bumped crate version `${{ steps.bump.outputs.current }}` -> `${{ steps.bump.outputs.next }}`
             - Ran `cargo clippy --workspace --all-targets --all-features -- -D warnings`
             - Ran `cargo test --workspace --all-targets --all-features`
           delete-branch: true
