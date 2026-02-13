@@ -6,10 +6,19 @@ use ratatui::{
 };
 
 use crate::model::candle::{Candle, CandleBuilder};
+use crate::model::order::OrderSide;
+
+#[derive(Debug, Clone)]
+pub struct FillMarker {
+    pub candle_index: usize,
+    pub price: f64,
+    pub side: OrderSide,
+}
 
 pub struct PriceChart<'a> {
     candles: &'a [Candle],
     current_candle: Option<&'a CandleBuilder>,
+    fill_markers: &'a [FillMarker],
     fast_sma: Option<f64>,
     slow_sma: Option<f64>,
     symbol: &'a str,
@@ -20,6 +29,7 @@ impl<'a> PriceChart<'a> {
         Self {
             candles,
             current_candle: None,
+            fill_markers: &[],
             fast_sma: None,
             slow_sma: None,
             symbol,
@@ -38,6 +48,11 @@ impl<'a> PriceChart<'a> {
 
     pub fn slow_sma(mut self, val: Option<f64>) -> Self {
         self.slow_sma = val;
+        self
+    }
+
+    pub fn fill_markers(mut self, val: &'a [FillMarker]) -> Self {
+        self.fill_markers = val;
         self
     }
 }
@@ -92,8 +107,9 @@ impl Widget for PriceChart<'_> {
         }
 
         // Take the last `chart_width` candles
+        let visible_start = all_candles.len().saturating_sub(chart_width);
         let visible: Vec<&Candle> = if all_candles.len() > chart_width {
-            all_candles[all_candles.len() - chart_width..].to_vec()
+            all_candles[visible_start..].to_vec()
         } else {
             all_candles.clone()
         };
@@ -185,6 +201,34 @@ impl Widget for PriceChart<'_> {
                     buf.set_string(x, y, "█", Style::default().fg(color));
                 }
             }
+        }
+
+        // Draw fill markers (BUY/SELL) on top of corresponding candles
+        for marker in self.fill_markers {
+            if marker.candle_index < visible_start
+                || marker.candle_index >= visible_start + visible.len()
+            {
+                continue;
+            }
+            if marker.price < min_price || marker.price > max_price {
+                continue;
+            }
+
+            let x = chart_x_start + (marker.candle_index - visible_start) as u16;
+            if x >= chart_x_end {
+                continue;
+            }
+            let y = inner.y + price_to_row(marker.price);
+            let (ch, color) = match marker.side {
+                OrderSide::Buy => ('B', Color::Green),
+                OrderSide::Sell => ('S', Color::Red),
+            };
+            buf.set_string(
+                x,
+                y,
+                ch.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            );
         }
 
         // Draw current price label on the right side
