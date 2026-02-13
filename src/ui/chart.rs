@@ -61,11 +61,7 @@ impl Widget for PriceChart<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Build visible candle list (finalized + in-progress)
         let in_progress: Option<Candle> = self.current_candle.map(|cb| cb.finish());
-        let all_candles: Vec<&Candle> = self
-            .candles
-            .iter()
-            .chain(in_progress.as_ref())
-            .collect();
+        let all_candles: Vec<&Candle> = self.candles.iter().chain(in_progress.as_ref()).collect();
 
         // Build title with current price
         let title = if let Some(c) = all_candles.last() {
@@ -99,7 +95,8 @@ impl Widget for PriceChart<'_> {
         let chart_x_start = inner.x + left_label_width;
         let chart_width = inner
             .width
-            .saturating_sub(left_label_width + right_label_width) as usize;
+            .saturating_sub(left_label_width + right_label_width)
+            as usize;
         let chart_height = inner.height as usize;
 
         if chart_width < 2 || chart_height < 2 {
@@ -115,10 +112,7 @@ impl Widget for PriceChart<'_> {
         };
 
         // Find data min/max from visible candle wicks
-        let data_min = visible
-            .iter()
-            .map(|c| c.low)
-            .fold(f64::INFINITY, f64::min);
+        let data_min = visible.iter().map(|c| c.low).fold(f64::INFINITY, f64::min);
         let data_max = visible
             .iter()
             .map(|c| c.high)
