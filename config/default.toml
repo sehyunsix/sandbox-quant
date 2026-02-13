@@ -1,9 +1,19 @@
+broker = "binance" # binance | alpaca
+
 [binance]
 product = "btc_spot"  # btc_spot | btc_future | eth_spot | eth_future
 rest_base_url = "https://demo-api.binance.com"
 ws_base_url = "wss://demo-stream.binance.com/ws"
 recv_window = 5000
 kline_interval = "1m"
+
+[alpaca]
+asset_class = "us_equity" # us_equity | us_option | us_future
+symbol = "AAPL"
+symbols = ["AAPL", "GLD", "SLV"] # equity ETF universe (Gold/Silver included)
+kline_interval = "1m"
+trading_base_url = "https://paper-api.alpaca.markets"
+data_base_url = "https://data.alpaca.markets"
 
 [strategy]
 fast_period = 10

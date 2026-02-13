@@ -96,6 +96,8 @@ Full raw output is saved at `docs/assets/cargo-run-output.txt`.
 - `Q`: Graceful shutdown
 - `P`: Pause strategy
 - `R`: Resume strategy
+- `N`: Next Alpaca symbol (`AAPL` -> `GLD` -> `SLV`)
+- `V`: Previous Alpaca symbol
 
 ## Logs
 

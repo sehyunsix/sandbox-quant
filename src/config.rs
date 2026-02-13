@@ -1,13 +1,25 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub broker: Broker,
     pub binance: BinanceConfig,
+    #[serde(default)]
+    pub alpaca: AlpacaConfig,
     pub strategy: StrategyConfig,
     pub ui: UiConfig,
     pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Broker {
+    #[default]
+    Binance,
+    Alpaca,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -24,6 +36,76 @@ pub struct BinanceConfig {
     pub api_secret: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AlpacaConfig {
+    #[serde(default)]
+    pub asset_class: AlpacaAssetClass,
+    #[serde(default = "default_alpaca_symbol")]
+    pub symbol: String,
+    #[serde(default = "default_alpaca_symbols")]
+    pub symbols: Vec<String>,
+    #[serde(default = "default_alpaca_kline_interval")]
+    pub kline_interval: String,
+    #[serde(default = "default_alpaca_trading_base_url")]
+    pub trading_base_url: String,
+    #[serde(default = "default_alpaca_data_base_url")]
+    pub data_base_url: String,
+    #[serde(skip)]
+    pub api_key: String,
+    #[serde(skip)]
+    pub api_secret: String,
+}
+
+impl Default for AlpacaConfig {
+    fn default() -> Self {
+        Self {
+            asset_class: AlpacaAssetClass::default(),
+            symbol: default_alpaca_symbol(),
+            symbols: default_alpaca_symbols(),
+            kline_interval: default_alpaca_kline_interval(),
+            trading_base_url: default_alpaca_trading_base_url(),
+            data_base_url: default_alpaca_data_base_url(),
+            api_key: String::new(),
+            api_secret: String::new(),
+        }
+    }
+}
+
+fn default_alpaca_symbol() -> String {
+    "AAPL".to_string()
+}
+fn default_alpaca_symbols() -> Vec<String> {
+    vec!["AAPL".to_string(), "GLD".to_string(), "SLV".to_string()]
+}
+fn default_alpaca_kline_interval() -> String {
+    "1m".to_string()
+}
+fn default_alpaca_trading_base_url() -> String {
+    "https://paper-api.alpaca.markets".to_string()
+}
+fn default_alpaca_data_base_url() -> String {
+    "https://data.alpaca.markets".to_string()
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AlpacaAssetClass {
+    #[default]
+    UsEquity,
+    UsOption,
+    UsFuture,
+}
+
+impl AlpacaAssetClass {
+    pub fn label(self) -> &'static str {
+        match self {
+            AlpacaAssetClass::UsEquity => "US EQUITY",
+            AlpacaAssetClass::UsOption => "US OPTION",
+            AlpacaAssetClass::UsFuture => "US FUTURE",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TradingProduct {
@@ -35,6 +117,13 @@ pub enum TradingProduct {
 }
 
 impl TradingProduct {
+    pub const ALL: [TradingProduct; 4] = [
+        TradingProduct::BtcSpot,
+        TradingProduct::BtcFuture,
+        TradingProduct::EthSpot,
+        TradingProduct::EthFuture,
+    ];
+
     pub fn symbol(self) -> &'static str {
         match self {
             TradingProduct::BtcSpot | TradingProduct::BtcFuture => "BTCUSDT",
@@ -57,6 +146,15 @@ impl TradingProduct {
             TradingProduct::EthFuture => "ETH/USDT FUTURE",
         }
     }
+
+    pub fn selector_label(self) -> &'static str {
+        match self {
+            TradingProduct::BtcSpot => "BTC SPOT",
+            TradingProduct::BtcFuture => "BTC FUTURE",
+            TradingProduct::EthSpot => "ETH SPOT",
+            TradingProduct::EthFuture => "ETH FUTURE",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,6 +163,50 @@ pub struct StrategyConfig {
     pub slow_period: usize,
     pub order_amount_usdt: f64,
     pub min_ticks_between_signals: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrategyPreset {
+    #[default]
+    ConfigMa,
+    FastMa,
+    SlowMa,
+}
+
+impl StrategyPreset {
+    pub const ALL: [StrategyPreset; 3] = [
+        StrategyPreset::ConfigMa,
+        StrategyPreset::FastMa,
+        StrategyPreset::SlowMa,
+    ];
+
+    pub fn selector_label(self) -> &'static str {
+        match self {
+            StrategyPreset::ConfigMa => "CONFIG MA",
+            StrategyPreset::FastMa => "FAST MA",
+            StrategyPreset::SlowMa => "SLOW MA",
+        }
+    }
+
+    pub fn display_label(self) -> &'static str {
+        match self {
+            StrategyPreset::ConfigMa => "MA(Config)",
+            StrategyPreset::FastMa => "MA(Fast 5/20)",
+            StrategyPreset::SlowMa => "MA(Slow 20/60)",
+        }
+    }
+
+    pub fn periods(self, config: &StrategyConfig) -> (usize, usize, u64) {
+        match self {
+            StrategyPreset::ConfigMa => (
+                config.fast_period,
+                config.slow_period,
+                config.min_ticks_between_signals,
+            ),
+            StrategyPreset::FastMa => (5, 20, 10),
+            StrategyPreset::SlowMa => (20, 60, 100),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -81,7 +223,10 @@ pub struct LoggingConfig {
 /// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.
 pub fn parse_interval_ms(s: &str) -> Result<u64> {
     if s.len() < 2 {
-        bail!("kline_interval must include a positive number and unit, got '{}'", s);
+        bail!(
+            "kline_interval must include a positive number and unit, got '{}'",
+            s
+        );
     }
 
     let (num_str, suffix) = s.split_at(s.len() - 1);
@@ -134,16 +279,70 @@ impl Config {
         let mut config: Config =
             toml::from_str(&config_str).context("failed to parse config/default.toml")?;
 
-        config.binance.api_key = std::env::var("BINANCE_API_KEY")
-            .context("BINANCE_API_KEY not set in .env or environment")?;
-        config.binance.api_secret = std::env::var("BINANCE_API_SECRET")
-            .context("BINANCE_API_SECRET not set in .env or environment")?;
+        // Load keys opportunistically; actual requirement is validated for the selected broker at runtime.
+        config.binance.api_key = std::env::var("BINANCE_API_KEY").unwrap_or_default();
+        config.binance.api_secret = std::env::var("BINANCE_API_SECRET").unwrap_or_default();
+        config.alpaca.api_key = std::env::var("APCA_API_KEY_ID").unwrap_or_default();
+        config.alpaca.api_secret = std::env::var("APCA_API_SECRET_KEY").unwrap_or_default();
+
         config
             .binance
             .kline_interval_ms()
             .context("invalid binance.kline_interval in config/default.toml")?;
+        config
+            .alpaca
+            .kline_interval_ms()
+            .context("invalid alpaca.kline_interval in config/default.toml")?;
 
         Ok(config)
+    }
+
+    pub fn validate_for_broker(&self, broker: Broker) -> Result<()> {
+        match broker {
+            Broker::Binance => {
+                if self.binance.api_key.is_empty() {
+                    bail!("BINANCE_API_KEY not set in .env or environment");
+                }
+                if self.binance.api_secret.is_empty() {
+                    bail!("BINANCE_API_SECRET not set in .env or environment");
+                }
+            }
+            Broker::Alpaca => {
+                if self.alpaca.api_key.is_empty() {
+                    bail!("APCA_API_KEY_ID not set in .env or environment");
+                }
+                if self.alpaca.api_secret.is_empty() {
+                    bail!("APCA_API_SECRET_KEY not set in .env or environment");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AlpacaConfig {
+    pub fn kline_interval_ms(&self) -> Result<u64> {
+        parse_interval_ms(&self.kline_interval)
+    }
+
+    pub fn tradable_symbols(&self) -> Vec<String> {
+        let mut symbols = Vec::new();
+        let push_unique = |target: &mut Vec<String>, raw: &str| {
+            let normalized = raw.trim().to_ascii_uppercase();
+            if !normalized.is_empty() && !target.iter().any(|s| s == &normalized) {
+                target.push(normalized);
+            }
+        };
+
+        push_unique(&mut symbols, &self.symbol);
+        for symbol in &self.symbols {
+            push_unique(&mut symbols, symbol);
+        }
+
+        if symbols.is_empty() {
+            return default_alpaca_symbols();
+        }
+        symbols
     }
 }
 
