@@ -1,0 +1,271 @@
+warning: unused variable: `status_tx`
+   --> src/binance/ws.rs:235:9
+    |
+235 |         status_tx: &mpsc::Sender<AppEvent>,
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_status_tx`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `server_time` and `cancel_order` are never used
+   --> src/binance/rest.rs:78:18
+    |
+ 24 | impl BinanceRestClient {
+    | ---------------------- methods in this implementation
+...
+ 78 |     pub async fn server_time(&self) -> Result<u64> {
+    |                  ^^^^^^^^^^^
+...
+227 |     pub async fn cancel_order(
+    |                  ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `event_type` and `symbol` are never read
+  --> src/binance/types.rs:16:9
+   |
+14 | pub struct BinanceTradeEvent {
+   |            ----------------- fields in this struct
+15 |     #[serde(rename = "e")]
+16 |     pub event_type: String,
+   |         ^^^^^^^^^^
+...
+20 |     pub symbol: String,
+   |         ^^^^^^
+   |
+   = note: `BinanceTradeEvent` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: multiple fields are never read
+  --> src/binance/types.rs:36:9
+   |
+34 | pub struct BinanceExecutionReport {
+   |            ---------------------- fields in this struct
+35 |     #[serde(rename = "e")]
+36 |     pub event_type: String,
+   |         ^^^^^^^^^^
+37 |     #[serde(rename = "E")]
+38 |     pub event_time: u64,
+   |         ^^^^^^^^^^
+39 |     #[serde(rename = "s")]
+40 |     pub symbol: String,
+   |         ^^^^^^
+...
+44 |     pub execution_type: String,
+   |         ^^^^^^^^^^^^^^
+...
+50 |     pub price: f64,
+   |         ^^^^^
+51 |     #[serde(rename = "q", deserialize_with = "string_to_f64")]
+52 |     pub qty: f64,
+   |         ^^^
+53 |     #[serde(rename = "n", deserialize_with = "string_to_f64")]
+54 |     pub commission: f64,
+   |         ^^^^^^^^^^
+55 |     #[serde(rename = "N")]
+56 |     pub commission_asset: Option<String>,
+   |         ^^^^^^^^^^^^^^^^
+   |
+   = note: `BinanceExecutionReport` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `symbol`, `price`, `orig_qty`, `type`, and `side` are never read
+  --> src/binance/types.rs:63:9
+   |
+62 | pub struct BinanceOrderResponse {
+   |            -------------------- fields in this struct
+63 |     pub symbol: String,
+   |         ^^^^^^
+...
+67 |     pub price: f64,
+   |         ^^^^^
+68 |     #[serde(deserialize_with = "string_to_f64")]
+69 |     pub orig_qty: f64,
+   |         ^^^^^^^^
+...
+73 |     pub r#type: String,
+   |         ^^^^^^
+74 |     pub side: String,
+   |         ^^^^
+   |
+   = note: `BinanceOrderResponse` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `symbol`, `order_id`, and `type` are never read
+   --> src/binance/types.rs:95:9
+    |
+ 94 | pub struct BinanceAllOrder {
+    |            --------------- fields in this struct
+ 95 |     pub symbol: String,
+    |         ^^^^^^
+ 96 |     pub order_id: u64,
+    |         ^^^^^^^^
+...
+107 |     pub r#type: String,
+    |         ^^^^^^
+    |
+    = note: `BinanceAllOrder` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `ServerTimeResponse` is never constructed
+   --> src/binance/types.rs:123:12
+    |
+123 | pub struct ServerTimeResponse {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: field `initial` is never read
+  --> src/binance/ws.rs:17:5
+   |
+15 | struct ExponentialBackoff {
+   |        ------------------ field in this struct
+16 |     current: Duration,
+17 |     initial: Duration,
+   |     ^^^^^^^
+
+warning: method `reset` is never used
+  --> src/binance/ws.rs:40:8
+   |
+22 | impl ExponentialBackoff {
+   | ----------------------- method in this implementation
+...
+40 |     fn reset(&mut self) {
+   |        ^^^^^
+
+warning: variants `Config`, `WebSocket`, and `Order` are never constructed
+  --> src/error.rs:6:5
+   |
+ 4 | pub enum AppError {
+   |          -------- variants in this enum
+ 5 |     #[error("config error: {0}")]
+ 6 |     Config(String),
+   |     ^^^^^^
+...
+15 |     WebSocket(String),
+   |     ^^^^^^^^^
+...
+21 |     Order(String),
+   |     ^^^^^
+   |
+   = note: `AppError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: methods `is_ready` and `period` are never used
+  --> src/indicator/sma.rs:50:12
+   |
+11 | impl Sma {
+   | -------- methods in this implementation
+...
+50 |     pub fn is_ready(&self) -> bool {
+   |            ^^^^^^^^
+...
+54 |     pub fn period(&self) -> usize {
+   |            ^^^^^^
+
+warning: variant `Limit` is never constructed
+  --> src/model/order.rs:30:5
+   |
+28 | pub enum OrderType {
+   |          --------- variant in this enum
+29 |     Market,
+30 |     Limit,
+   |     ^^^^^
+   |
+   = note: `OrderType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `as_binance_str` is never used
+  --> src/model/order.rs:34:12
+   |
+33 | impl OrderType {
+   | -------------- method in this implementation
+34 |     pub fn as_binance_str(&self) -> &'static str {
+   |            ^^^^^^^^^^^^^^
+
+warning: method `is_terminal` is never used
+  --> src/model/order.rs:66:12
+   |
+53 | impl OrderStatus {
+   | ---------------- method in this implementation
+...
+66 |     pub fn is_terminal(&self) -> bool {
+   |            ^^^^^^^^^^^
+
+warning: fields `commission` and `commission_asset` are never read
+  --> src/model/order.rs:92:9
+   |
+89 | pub struct Fill {
+   |            ---- fields in this struct
+...
+92 |     pub commission: f64,
+   |         ^^^^^^^^^^
+93 |     pub commission_asset: String,
+   |         ^^^^^^^^^^^^^^^^
+   |
+   = note: `Fill` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: multiple fields are never read
+   --> src/model/order.rs:98:9
+    |
+ 97 | pub struct Order {
+    |            ----- fields in this struct
+ 98 |     pub client_order_id: String,
+    |         ^^^^^^^^^^^^^^^
+ 99 |     pub server_order_id: Option<u64>,
+100 |     pub symbol: String,
+    |         ^^^^^^
+101 |     pub side: OrderSide,
+    |         ^^^^
+102 |     pub order_type: OrderType,
+    |         ^^^^^^^^^^
+103 |     pub quantity: f64,
+    |         ^^^^^^^^
+104 |     pub price: Option<f64>,
+    |         ^^^^^
+105 |     pub status: OrderStatus,
+106 |     pub created_at: chrono::DateTime<chrono::Utc>,
+    |         ^^^^^^^^^^
+    |
+    = note: `Order` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `symbol` is never read
+ --> src/model/position.rs:5:9
+  |
+4 | pub struct Position {
+  |            -------- field in this struct
+5 |     pub symbol: String,
+  |         ^^^^^^
+  |
+  = note: `Position` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `qty`, `is_buyer_maker`, and `trade_id` are never read
+ --> src/model/tick.rs:4:9
+  |
+2 | pub struct Tick {
+  |            ---- fields in this struct
+3 |     pub price: f64,
+4 |     pub qty: f64,
+  |         ^^^
+5 |     pub timestamp_ms: u64,
+6 |     pub is_buyer_maker: bool,
+  |         ^^^^^^^^^^^^^^
+7 |     pub trade_id: u64,
+  |         ^^^^^^^^
+  |
+  = note: `Tick` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `position` is never used
+  --> src/order_manager.rs:67:12
+   |
+54 | impl OrderManager {
+   | ----------------- method in this implementation
+...
+67 |     pub fn position(&self) -> &Position {
+   |            ^^^^^^^^
+
+warning: method `is_long` is never used
+  --> src/strategy/ma_crossover.rs:89:12
+   |
+25 | impl MaCrossover {
+   | ---------------- method in this implementation
+...
+89 |     pub fn is_long(&self) -> bool {
+   |            ^^^^^^^
+
+warning: `sandbox-quant` (bin "sandbox-quant") generated 20 warnings (run `cargo fix --bin "sandbox-quant" -p sandbox-quant` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.67s
+     Running `/Users/yuksehyun/project/sandbox-quant/target/debug/sandbox-quant`
+Failed to load config: failed to read config/default.toml: No such file or directory (os error 2)
+Make sure .env file exists with BINANCE_API_KEY and BINANCE_API_SECRET
