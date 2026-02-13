@@ -7,3 +7,4 @@ Auto-generated from `data/demo_market_registry.csv`.
 | Binance | Spot Testnet | Crypto | BTCUSDT spot | https://testnet.binance.vision | existing integration baseline |
 | Alpaca | Paper | Equity | AAPL paper trading | https://paper-api.alpaca.markets | stock demo venue |
 | Alpaca | Paper | Option | AAPL call paper order | https://paper-api.alpaca.markets | options demo venue |
+| Tradier | Sandbox | Equity | SPY paper trading | https://sandbox.tradier.com/v1 | stock demo venue |
