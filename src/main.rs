@@ -38,7 +38,7 @@ use crate::ui::AppState;
 
 const ORDER_HISTORY_PAGE_SIZE: usize = 1000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
-const STRATEGY_STATS_DB_PATH: &str = "data/strategy_stats.json";
+const STRATEGY_STATS_DB_PATH: &str = "data/strategy_stats.sqlite";
 const PRODUCT_SELECTOR_COUNT: usize = 4;
 const ALPACA_PRODUCT_SELECTOR_COUNT: usize = 3;
 const STRATEGY_SELECTOR_COUNT: usize = 3;
@@ -334,6 +334,7 @@ async fn run_alpaca(config: &Config) -> Result<()> {
         &config.alpaca.data_base_url,
         &config.alpaca.api_key,
         &config.alpaca.api_secret,
+        &config.alpaca.normalized_option_snapshot_feeds(),
     )?);
 
     let ping_app_tx = app_tx.clone();
@@ -586,18 +587,26 @@ async fn run_alpaca(config: &Config) -> Result<()> {
                         break;
                     }
                     KeyCode::Char('p') | KeyCode::Char('P') => {
-                        if !app_state.paused {
+                        if app_state.paused {
+                            app_state.paused = false;
+                            let _ = strategy_enabled_tx.send(true);
+                            app_state.push_log("Strategy ON".to_string());
+                        } else {
                             app_state.paused = true;
                             let _ = strategy_enabled_tx.send(false);
                             app_state.push_log("Strategy OFF".to_string());
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        if app_state.paused {
-                            app_state.paused = false;
-                            let _ = strategy_enabled_tx.send(true);
-                            app_state.push_log("Strategy ON".to_string());
-                        }
+                        switch_timeframe_alpaca(
+                            &app_state.timeframe,
+                            &app_state.symbol,
+                            current_asset_class,
+                            &alpaca_rest,
+                            config,
+                            &app_tx,
+                        );
+                        app_state.push_log("Refreshed chart data".to_string());
                     }
                     KeyCode::Char('1') => {
                         switch_timeframe_alpaca(
@@ -1197,7 +1206,10 @@ async fn main() -> Result<()> {
                             Ok(Some(ref update)) => {
                                 if let crate::order_manager::OrderUpdate::Filled { side, fills, .. } = update {
                                     let summary = stats_position.apply_fill(*side, fills);
-                                    if summary.winning_closes > 0 || summary.losing_closes > 0 {
+                                    if summary.winning_closes > 0
+                                        || summary.losing_closes > 0
+                                        || summary.realized_pnl_delta != 0.0
+                                    {
                                         let strategy_label =
                                             strategy_label_for_signal(false, active_preset);
                                         if let Ok(store) = &stats_store {
@@ -1205,6 +1217,7 @@ async fn main() -> Result<()> {
                                                 &strategy_label,
                                                 summary.winning_closes,
                                                 summary.losing_closes,
+                                                summary.realized_pnl_delta,
                                             ) {
                                                 let _ = strat_app_tx
                                                     .send(AppEvent::LogMessage(format!(
@@ -1260,13 +1273,17 @@ async fn main() -> Result<()> {
                         Ok(Some(ref update)) => {
                             if let crate::order_manager::OrderUpdate::Filled { side, fills, .. } = update {
                                 let summary = stats_position.apply_fill(*side, fills);
-                                if summary.winning_closes > 0 || summary.losing_closes > 0 {
+                                if summary.winning_closes > 0
+                                    || summary.losing_closes > 0
+                                    || summary.realized_pnl_delta != 0.0
+                                {
                                     let strategy_label = strategy_label_for_signal(true, active_preset);
                                     if let Ok(store) = &stats_store {
                                         if let Err(e) = store.increment(
                                             &strategy_label,
                                             summary.winning_closes,
                                             summary.losing_closes,
+                                            summary.realized_pnl_delta,
                                         ) {
                                             let _ = strat_app_tx
                                                 .send(AppEvent::LogMessage(format!(
@@ -1474,6 +1491,10 @@ async fn main() -> Result<()> {
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('A') => {
                             app_state.account_modal_open = false;
+                            app_state.account_history_open = false;
+                        }
+                        KeyCode::Char('h') | KeyCode::Char('H') => {
+                            app_state.account_history_open = !app_state.account_history_open;
                         }
                         _ => {}
                     }
@@ -1487,18 +1508,25 @@ async fn main() -> Result<()> {
                         break;
                     }
                     KeyCode::Char('p') | KeyCode::Char('P') => {
-                        if !app_state.paused {
+                        if app_state.paused {
+                            app_state.paused = false;
+                            let _ = strategy_enabled_tx.send(true);
+                            app_state.push_log("Strategy ON".to_string());
+                        } else {
                             app_state.paused = true;
                             let _ = strategy_enabled_tx.send(false);
                             app_state.push_log("Strategy OFF".to_string());
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        if app_state.paused {
-                            app_state.paused = false;
-                            let _ = strategy_enabled_tx.send(true);
-                            app_state.push_log("Strategy ON".to_string());
-                        }
+                        switch_timeframe(
+                            &app_state.timeframe,
+                            &app_state.symbol,
+                            &rest_client,
+                            &config,
+                            &app_tx,
+                        );
+                        app_state.push_log("Refreshed chart data".to_string());
                     }
                     KeyCode::Char('b') | KeyCode::Char('B') => {
                         enqueue_manual_order(
@@ -1552,6 +1580,7 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
                         app_state.account_modal_open = true;
+                        app_state.account_history_open = false;
                     }
                     KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
                         let max_scroll = app_state.order_history.len().saturating_sub(1);

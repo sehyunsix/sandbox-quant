@@ -14,6 +14,7 @@ symbols = ["AAPL", "GLD", "SLV"] # equity ETF universe (Gold/Silver included)
 kline_interval = "1m"
 trading_base_url = "https://paper-api.alpaca.markets"
 data_base_url = "https://data.alpaca.markets"
+option_snapshot_feeds = ["indicative", "opra"] # try feeds in order for option chain snapshots
 
 [strategy]
 fast_period = 10

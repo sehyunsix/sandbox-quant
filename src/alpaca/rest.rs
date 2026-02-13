@@ -26,12 +26,14 @@ pub struct OptionChainRow {
 pub struct OptionChainSnapshot {
     pub underlying: String,
     pub rows: Vec<OptionChainRow>,
+    pub status: Option<String>,
 }
 
 pub struct AlpacaRestClient {
     http: reqwest::Client,
     trading_base_url: String,
     data_base_url: String,
+    option_snapshot_feeds: Vec<String>,
     option_symbol_cache: Mutex<HashMap<String, String>>,
 }
 
@@ -56,6 +58,7 @@ impl AlpacaRestClient {
         data_base_url: &str,
         api_key: &str,
         api_secret: &str,
+        option_snapshot_feeds: &[String],
     ) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert("APCA-API-KEY-ID", HeaderValue::from_str(api_key)?);
@@ -68,8 +71,18 @@ impl AlpacaRestClient {
             http,
             trading_base_url: trading_base_url.to_string(),
             data_base_url: data_base_url.to_string(),
+            option_snapshot_feeds: option_snapshot_feeds.to_vec(),
             option_symbol_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn compact_error_body(body: &str) -> String {
+        let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        if normalized.len() > 180 {
+            format!("{}...", &normalized[..180])
+        } else {
+            normalized
+        }
     }
 
     fn looks_like_option_symbol(symbol: &str) -> bool {
@@ -325,8 +338,16 @@ impl AlpacaRestClient {
             .await
             .context("alpaca latest trade HTTP failed")?;
         if !response.status().is_success() {
-            // Non-success from Alpaca data API can happen due permissions/symbol/class mismatch.
-            // Treat as no tick instead of bubbling repeated warnings in the TUI.
+            // Non-success can happen due permission/symbol mismatches.
+            // Keep returning None but emit a concise warning for triage.
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::warn!(
+                status = %status,
+                symbol = %request_symbol,
+                detail = %Self::compact_error_body(&body),
+                "alpaca latest trade returned non-success"
+            );
             return Ok(None);
         }
         let root: Value = response
@@ -369,79 +390,94 @@ impl AlpacaRestClient {
             return Ok(None);
         }
 
-        // Prefer the dedicated chain endpoint by underlying symbol.
         let snapshots_url = format!(
             "{}/v1beta1/options/snapshots/{}",
             self.data_base_url, underlying
         );
-        let response = self
-            .http
-            .get(&snapshots_url)
-            .query(&[("feed", "indicative")])
-            .send()
-            .await
-            .context("alpaca option chain HTTP failed")?;
-        if !response.status().is_success() {
-            return Ok(Some(OptionChainSnapshot {
-                underlying,
-                rows: Vec::new(),
-            }));
-        }
-        let snapshots_root: Value = match response.json().await {
-            Ok(v) => v,
-            Err(_) => {
-                return Ok(Some(OptionChainSnapshot {
-                    underlying,
-                    rows: Vec::new(),
-                }));
+        let mut rows: Vec<OptionChainRow> = Vec::new();
+        let mut status_notes: Vec<String> = Vec::new();
+
+        for feed in &self.option_snapshot_feeds {
+            let response = self
+                .http
+                .get(&snapshots_url)
+                .query(&[("feed", feed.as_str())])
+                .send()
+                .await
+                .context("alpaca option chain HTTP failed")?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                status_notes.push(format!(
+                    "feed={} status={} {}",
+                    feed,
+                    status,
+                    Self::compact_error_body(&body)
+                ));
+                continue;
             }
-        };
 
-        let snapshots_obj = snapshots_root
-            .get("snapshots")
-            .and_then(Value::as_object)
-            .or_else(|| snapshots_root.as_object());
-        let Some(snapshots) = snapshots_obj else {
-            return Ok(Some(OptionChainSnapshot {
-                underlying,
-                rows: Vec::new(),
-            }));
-        };
-
-        let mut rows: Vec<OptionChainRow> = snapshots
-            .iter()
-            .filter(|(symbol, _)| Self::looks_like_option_symbol(symbol))
-            .map(|(contract_symbol, snapshot)| {
-                let latest_quote = snapshot
-                    .get("latestQuote")
-                    .or_else(|| snapshot.get("latest_quote"));
-                let greeks = snapshot.get("greeks");
-                let model = snapshot.get("model");
-
-                let bid = latest_quote
-                    .and_then(|q| q.get("bp").or_else(|| q.get("bid_price")))
-                    .and_then(Value::as_f64);
-                let ask = latest_quote
-                    .and_then(|q| q.get("ap").or_else(|| q.get("ask_price")))
-                    .and_then(Value::as_f64);
-                let delta = greeks.and_then(|g| g.get("delta")).and_then(Value::as_f64);
-                let theta = greeks.and_then(|g| g.get("theta")).and_then(Value::as_f64);
-                let theoretical_price = model
-                    .and_then(|m| m.get("theoretical_price").or_else(|| m.get("theo")))
-                    .and_then(Value::as_f64);
-
-                OptionChainRow {
-                    symbol: contract_symbol.to_ascii_uppercase(),
-                    strike: Self::strike_from_symbol(contract_symbol),
-                    option_type: Self::option_type_from_symbol(contract_symbol),
-                    theoretical_price,
-                    bid,
-                    ask,
-                    delta,
-                    theta,
+            let snapshots_root: Value = match response.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    status_notes.push(format!("feed={} invalid JSON: {}", feed, e));
+                    continue;
                 }
-            })
-            .collect();
+            };
+
+            let snapshots_obj = snapshots_root
+                .get("snapshots")
+                .and_then(Value::as_object)
+                .or_else(|| snapshots_root.as_object());
+            let Some(snapshots) = snapshots_obj else {
+                status_notes.push(format!("feed={} snapshot payload missing", feed));
+                continue;
+            };
+
+            rows = snapshots
+                .iter()
+                .filter(|(contract_symbol, _)| Self::looks_like_option_symbol(contract_symbol))
+                .map(|(contract_symbol, snapshot)| {
+                    let latest_quote = snapshot
+                        .get("latestQuote")
+                        .or_else(|| snapshot.get("latest_quote"));
+                    let greeks = snapshot.get("greeks");
+                    let model = snapshot.get("model");
+
+                    let bid = latest_quote
+                        .and_then(|q| q.get("bp").or_else(|| q.get("bid_price")))
+                        .and_then(Value::as_f64);
+                    let ask = latest_quote
+                        .and_then(|q| q.get("ap").or_else(|| q.get("ask_price")))
+                        .and_then(Value::as_f64);
+                    let delta = greeks.and_then(|g| g.get("delta")).and_then(Value::as_f64);
+                    let theta = greeks.and_then(|g| g.get("theta")).and_then(Value::as_f64);
+                    let theoretical_price = model
+                        .and_then(|m| m.get("theoretical_price").or_else(|| m.get("theo")))
+                        .and_then(Value::as_f64);
+
+                    OptionChainRow {
+                        symbol: contract_symbol.to_ascii_uppercase(),
+                        strike: Self::strike_from_symbol(contract_symbol),
+                        option_type: Self::option_type_from_symbol(contract_symbol),
+                        theoretical_price,
+                        bid,
+                        ask,
+                        delta,
+                        theta,
+                    }
+                })
+                .collect();
+
+            if rows.is_empty() {
+                status_notes.push(format!("feed={} returned empty snapshot", feed));
+                continue;
+            }
+            if feed != "opra" {
+                status_notes.push(format!("snapshot feed={}", feed));
+            }
+            break;
+        }
 
         if rows.is_empty() {
             // Fallback: at least render contract strikes/types even when snapshots are unavailable.
@@ -482,6 +518,9 @@ impl AlpacaRestClient {
                     })
                     .collect();
             }
+            if !rows.is_empty() {
+                status_notes.push("quotes unavailable; showing contract list only".to_string());
+            }
         }
 
         rows.sort_by(|a, b| {
@@ -496,7 +535,16 @@ impl AlpacaRestClient {
             rows.truncate(capped);
         }
 
-        Ok(Some(OptionChainSnapshot { underlying, rows }))
+        let status = if status_notes.is_empty() {
+            None
+        } else {
+            Some(status_notes.join(" | "))
+        };
+        Ok(Some(OptionChainSnapshot {
+            underlying,
+            rows,
+            status,
+        }))
     }
 
     pub async fn get_position_qty(&self, symbol: &str) -> Result<f64> {

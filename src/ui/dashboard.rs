@@ -5,8 +5,9 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
+    symbols,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Widget, Wrap},
 };
 
 use crate::alpaca::rest::OptionChainSnapshot;
@@ -15,6 +16,7 @@ use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_manager::OrderUpdate;
 use crate::strategy_stats::StrategyStats;
+use crate::ui::AccountTotalPoint;
 
 pub struct PositionPanel<'a> {
     position: &'a Position,
@@ -240,7 +242,11 @@ mod tests {
     #[test]
     fn strategy_win_rate_text_formats_percent() {
         assert_eq!(
-            PositionPanel::strategy_win_rate_text(Some(StrategyStats { wins: 2, losses: 1 })),
+            PositionPanel::strategy_win_rate_text(Some(StrategyStats {
+                wins: 2,
+                losses: 1,
+                realized_pnl: 0.0,
+            })),
             "66.7%"
         );
     }
@@ -352,78 +358,55 @@ pub struct StatusBar<'a> {
 
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 {
+            return;
+        }
         let now_str = Local::now().format("%H:%M:%S").to_string();
         let last_update_str = self
             .last_market_update_ms
             .and_then(|ts| Local.timestamp_millis_opt(ts as i64).single())
             .map(|dt| dt.format("%H:%M:%S").to_string())
             .unwrap_or_else(|| "---".to_string());
+        let right = format!("last:{} now:{}", last_update_str, now_str);
+        let right_w = right.chars().count() as u16;
+        let right_x = area
+            .x
+            .saturating_add(area.width.saturating_sub(right_w.min(area.width)));
+        buf.set_string(
+            right_x,
+            area.y,
+            right,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
 
-        let conn_status = if self.ws_connected {
-            Span::styled("CONNECTED", Style::default().fg(Color::Green))
+        let status = if self.ws_connected {
+            "CONNECTED"
         } else {
-            Span::styled(
-                "DISCONNECTED",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )
+            "DISCONNECTED"
         };
-
-        let pause_status = if self.paused {
-            Span::styled(
-                " STRAT OFF ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled(" STRAT ON ", Style::default().fg(Color::Green))
-        };
-
-        let line = Line::from(vec![
-            Span::styled(
-                " sandbox-quant ",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("| ", Style::default().fg(Color::DarkGray)),
-            Span::styled(self.symbol, Style::default().fg(Color::Cyan)),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                self.product_label,
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(self.strategy_label, Style::default().fg(Color::Cyan)),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                self.timeframe.to_uppercase(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            conn_status,
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            pause_status,
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("ticks: {}", self.tick_count),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("now: {}", now_str),
+        let strat = if self.paused { "OFF" } else { "ON" };
+        let left = format!(
+            " sandbox-quant | {} | {} | {} | {} | {} | strat:{} | ticks:{} ",
+            self.symbol,
+            self.product_label,
+            self.strategy_label,
+            self.timeframe.to_uppercase(),
+            status,
+            strat,
+            self.tick_count
+        );
+        let left_max = area.width.saturating_sub(right_w.saturating_add(1));
+        if left_max > 0 {
+            buf.set_stringn(
+                area.x,
+                area.y,
+                left,
+                left_max as usize,
                 Style::default().fg(Color::White),
-            ),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("last: {}", last_update_str),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]);
-
-        buf.set_line(area.x, area.y, &line, area.width);
+            );
+        }
     }
 }
 
@@ -532,9 +515,9 @@ impl Widget for KeybindBar {
             Span::styled(" [Q]", Style::default().fg(Color::Yellow)),
             Span::styled("uit ", Style::default().fg(Color::DarkGray)),
             Span::styled("[P]", Style::default().fg(Color::Yellow)),
-            Span::styled("ause ", Style::default().fg(Color::DarkGray)),
+            Span::styled("ause/Resume ", Style::default().fg(Color::DarkGray)),
             Span::styled("[R]", Style::default().fg(Color::Yellow)),
-            Span::styled("esume ", Style::default().fg(Color::DarkGray)),
+            Span::styled("efresh ", Style::default().fg(Color::DarkGray)),
             Span::styled("[B]", Style::default().fg(Color::Green)),
             Span::styled("uy ", Style::default().fg(Color::DarkGray)),
             Span::styled("[S]", Style::default().fg(Color::Red)),
@@ -559,6 +542,8 @@ impl Widget for KeybindBar {
             Span::styled(" strategy ", Style::default().fg(Color::DarkGray)),
             Span::styled("[A]", Style::default().fg(Color::Magenta)),
             Span::styled("ccount ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[H]", Style::default().fg(Color::Magenta)),
+            Span::styled("istory ", Style::default().fg(Color::DarkGray)),
             Span::styled("[N]", Style::default().fg(Color::Magenta)),
             Span::styled("extSym ", Style::default().fg(Color::DarkGray)),
             Span::styled("[V]", Style::default().fg(Color::Magenta)),
@@ -597,7 +582,7 @@ impl AccountPanel<'_> {
 impl Widget for AccountPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
-            .title(" Account (A/Esc close) ")
+            .title(" Account (A/Esc close, H history) ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Magenta));
         let inner = block.inner(area);
@@ -714,8 +699,10 @@ impl Widget for AccountPanel<'_> {
                     Span::styled("  - ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
                         format!(
-                            "{:<14} {:>5.1}% ({}/{})",
+                            "{:<14} pnl {:+8.2} tr {:>3} wr {:>5.1}% ({}/{})",
                             name,
+                            stats.realized_pnl,
+                            stats.total(),
                             stats.win_rate_percent(),
                             stats.wins,
                             stats.losses
@@ -730,6 +717,92 @@ impl Widget for AccountPanel<'_> {
             .block(Block::default())
             .wrap(Wrap { trim: true })
             .render(inner, buf);
+    }
+}
+
+pub struct AccountHistoryPanel<'a> {
+    pub points: &'a [AccountTotalPoint],
+}
+
+impl Widget for AccountHistoryPanel<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .title(" Account Total History (H close) ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta));
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        if self.points.len() < 2 {
+            Paragraph::new(Line::from(Span::styled(
+                "No order-history based account curve yet",
+                Style::default().fg(Color::DarkGray),
+            )))
+            .render(inner, buf);
+            return;
+        }
+
+        let points: Vec<(f64, f64)> = self
+            .points
+            .iter()
+            .map(|p| (p.timestamp_ms as f64 / 1000.0, p.total))
+            .collect();
+
+        let x_min = points.first().map(|p| p.0).unwrap_or(0.0);
+        let x_max = points.last().map(|p| p.0).unwrap_or(x_min + 1.0);
+        let (mut y_min, mut y_max) = points
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(mn, mx), (_, y)| {
+                (mn.min(*y), mx.max(*y))
+            });
+        if !y_min.is_finite() || !y_max.is_finite() {
+            y_min = 0.0;
+            y_max = 1.0;
+        }
+        if (y_max - y_min).abs() < f64::EPSILON {
+            y_min -= 1.0;
+            y_max += 1.0;
+        } else {
+            let pad = (y_max - y_min) * 0.1;
+            y_min -= pad;
+            y_max += pad;
+        }
+
+        let start_label = Local
+            .timestamp_opt(x_min as i64, 0)
+            .single()
+            .map(|dt| dt.format("%H:%M").to_string())
+            .unwrap_or_else(|| "--:--".to_string());
+        let end_label = Local
+            .timestamp_opt(x_max as i64, 0)
+            .single()
+            .map(|dt| dt.format("%H:%M").to_string())
+            .unwrap_or_else(|| "--:--".to_string());
+
+        let dataset = Dataset::default()
+            .name("account total")
+            .graph_type(GraphType::Line)
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(Color::Cyan))
+            .data(&points);
+
+        let chart = Chart::new(vec![dataset])
+            .x_axis(
+                Axis::default()
+                    .title("time")
+                    .bounds([x_min, x_max])
+                    .labels(vec![Line::from(start_label), Line::from(end_label)]),
+            )
+            .y_axis(
+                Axis::default()
+                    .title("total")
+                    .bounds([y_min, y_max])
+                    .labels(vec![
+                        Line::from(format!("{:.2}", y_min)),
+                        Line::from(format!("{:.2}", y_max)),
+                    ]),
+            );
+        chart.render(inner, buf);
     }
 }
 
@@ -793,10 +866,22 @@ impl Widget for OptionPanel<'_> {
                     Span::styled(format!(" {}", rest), Style::default().fg(Color::White)),
                 ]));
             }
+            if chain.rows.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "No option rows returned",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
             lines.push(Line::from(Span::styled(
                 format!("Underly: {}", chain.underlying),
                 Style::default().fg(Color::DarkGray),
             )));
+            if let Some(status) = &chain.status {
+                lines.push(Line::from(Span::styled(
+                    format!("Status: {}", status),
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
         } else {
             lines.push(Line::from(Span::styled(
                 "No option chain snapshot",
@@ -853,7 +938,7 @@ pub struct StrategySelectorPanel<'a> {
 impl Widget for StrategySelectorPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
-            .title(" Select Strategy (Up/Down + Enter, Esc cancel) ")
+            .title(" Select Strategy (Pnl/Trades/W/L/WinRate, Enter apply) ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Magenta));
         let inner = block.inner(area);

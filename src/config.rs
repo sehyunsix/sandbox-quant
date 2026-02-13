@@ -50,6 +50,8 @@ pub struct AlpacaConfig {
     pub trading_base_url: String,
     #[serde(default = "default_alpaca_data_base_url")]
     pub data_base_url: String,
+    #[serde(default = "default_alpaca_option_snapshot_feeds")]
+    pub option_snapshot_feeds: Vec<String>,
     #[serde(skip)]
     pub api_key: String,
     #[serde(skip)]
@@ -65,6 +67,7 @@ impl Default for AlpacaConfig {
             kline_interval: default_alpaca_kline_interval(),
             trading_base_url: default_alpaca_trading_base_url(),
             data_base_url: default_alpaca_data_base_url(),
+            option_snapshot_feeds: default_alpaca_option_snapshot_feeds(),
             api_key: String::new(),
             api_secret: String::new(),
         }
@@ -85,6 +88,9 @@ fn default_alpaca_trading_base_url() -> String {
 }
 fn default_alpaca_data_base_url() -> String {
     "https://data.alpaca.markets".to_string()
+}
+fn default_alpaca_option_snapshot_feeds() -> Vec<String> {
+    vec!["indicative".to_string(), "opra".to_string()]
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
@@ -343,6 +349,20 @@ impl AlpacaConfig {
             return default_alpaca_symbols();
         }
         symbols
+    }
+
+    pub fn normalized_option_snapshot_feeds(&self) -> Vec<String> {
+        let mut feeds = Vec::new();
+        for raw in &self.option_snapshot_feeds {
+            let normalized = raw.trim().to_ascii_lowercase();
+            if !normalized.is_empty() && !feeds.iter().any(|s| s == &normalized) {
+                feeds.push(normalized);
+            }
+        }
+        if feeds.is_empty() {
+            return default_alpaca_option_snapshot_feeds();
+        }
+        feeds
     }
 }
 
