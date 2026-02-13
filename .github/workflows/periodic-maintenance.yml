@@ -91,8 +91,6 @@ jobs:
             - Applied `cargo fmt --all`
             - Ran `cargo clippy --workspace --all-targets --all-features -- -D warnings`
             - Ran `cargo test --workspace --all-targets --all-features`
-          labels: |
-            automated-maintenance
           delete-branch: true
           add-paths: |
             **/*.rs
