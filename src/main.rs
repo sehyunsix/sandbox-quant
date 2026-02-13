@@ -24,6 +24,9 @@ use crate::order_manager::OrderManager;
 use crate::strategy::ma_crossover::MaCrossover;
 use crate::ui::AppState;
 
+const ORDER_HISTORY_LIMIT: usize = 100;
+const ORDER_HISTORY_SYNC_SECS: u64 = 5;
+
 fn switch_timeframe(
     interval: &str,
     rest_client: &Arc<BinanceRestClient>,
@@ -207,6 +210,8 @@ async fn main() -> Result<()> {
             &strat_config.binance.symbol,
             strat_config.strategy.order_amount_usdt,
         );
+        let mut order_history_sync =
+            tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
 
         // Fetch initial balances
         match order_mgr.refresh_balances().await {
@@ -228,6 +233,22 @@ async fn main() -> Result<()> {
                 let _ = strat_app_tx
                     .send(AppEvent::LogMessage(format!(
                         "[WARN] Balance fetch failed: {}",
+                        e
+                    )))
+                    .await;
+            }
+        }
+        match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+            Ok(history) => {
+                let _ = strat_app_tx
+                    .send(AppEvent::OrderHistoryUpdate(history))
+                    .await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch initial order history");
+                let _ = strat_app_tx
+                    .send(AppEvent::LogMessage(format!(
+                        "[WARN] Order history fetch failed: {}",
                         e
                     )))
                     .await;
@@ -307,6 +328,16 @@ async fn main() -> Result<()> {
                                 let _ = strat_app_tx
                                     .send(AppEvent::OrderUpdate(update.clone()))
                                     .await;
+                                match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                    Ok(history) => {
+                                        let _ = strat_app_tx
+                                            .send(AppEvent::OrderHistoryUpdate(history))
+                                            .await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "Failed to refresh order history");
+                                    }
+                                }
                                 // Send updated balances to UI after fill
                                 if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
                                     let _ = strat_app_tx
@@ -335,6 +366,16 @@ async fn main() -> Result<()> {
                             let _ = strat_app_tx
                                 .send(AppEvent::OrderUpdate(update.clone()))
                                 .await;
+                            match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                Ok(history) => {
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::OrderHistoryUpdate(history))
+                                        .await;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Failed to refresh order history");
+                                }
+                            }
                             if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
                                 let _ = strat_app_tx
                                     .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
@@ -347,6 +388,18 @@ async fn main() -> Result<()> {
                             let _ = strat_app_tx
                                 .send(AppEvent::Error(e.to_string()))
                                 .await;
+                        }
+                    }
+                }
+                _ = order_history_sync.tick() => {
+                    match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                        Ok(history) => {
+                            let _ = strat_app_tx
+                                .send(AppEvent::OrderHistoryUpdate(history))
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Periodic order history sync failed");
                         }
                     }
                 }

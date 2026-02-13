@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use chrono::TimeZone;
 
 use crate::binance::rest::BinanceRestClient;
 use crate::binance::types::BinanceOrderResponse;
@@ -35,6 +36,13 @@ pub struct OrderManager {
     order_amount_usdt: f64,
     balances: HashMap<String, f64>,
     last_price: f64,
+}
+
+fn display_qty_for_history(status: &str, orig_qty: f64, executed_qty: f64) -> f64 {
+    match status {
+        "FILLED" | "PARTIALLY_FILLED" => executed_qty,
+        _ => orig_qty,
+    }
 }
 
 impl OrderManager {
@@ -80,6 +88,46 @@ impl OrderManager {
         }
         tracing::info!(balances = ?self.balances, "Balances refreshed");
         Ok(self.balances.clone())
+    }
+
+    /// Fetch order history from exchange and format rows for UI display.
+    pub async fn refresh_order_history(&self, limit: usize) -> Result<Vec<String>> {
+        let mut orders = self.rest_client.get_all_orders(&self.symbol, limit).await?;
+        orders.sort_by_key(|o| o.update_time.max(o.time));
+
+        let history = orders
+            .into_iter()
+            .map(|o| {
+                let ts = o.update_time.max(o.time) as i64;
+                let time_str = chrono::Utc
+                    .timestamp_millis_opt(ts)
+                    .single()
+                    .map(|dt| {
+                        dt.with_timezone(&chrono::Local)
+                            .format("%H:%M:%S")
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| "--:--:--".to_string());
+
+                let avg_price = if o.executed_qty > 0.0 {
+                    o.cummulative_quote_qty / o.executed_qty
+                } else {
+                    o.price
+                };
+
+                format!(
+                    "{} {:<10} {:<4} {:.5} @ {:.2}  {}",
+                    time_str,
+                    o.status,
+                    o.side,
+                    display_qty_for_history(&o.status, o.orig_qty, o.executed_qty),
+                    avg_price,
+                    o.client_order_id
+                )
+            })
+            .collect();
+
+        Ok(history)
     }
 
     pub async fn submit_order(&mut self, signal: Signal) -> Result<Option<OrderUpdate>> {
@@ -281,6 +329,7 @@ impl OrderManager {
 
 #[cfg(test)]
 mod tests {
+    use super::display_qty_for_history;
     use crate::model::order::OrderStatus;
 
     #[test]
@@ -330,5 +379,20 @@ mod tests {
             OrderStatus::from_binance_str("PARTIALLY_FILLED"),
             OrderStatus::PartiallyFilled
         );
+    }
+
+    #[test]
+    fn order_history_uses_executed_qty_for_filled_states() {
+        assert!((display_qty_for_history("FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON);
+        assert!(
+            (display_qty_for_history("PARTIALLY_FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn order_history_uses_orig_qty_for_non_filled_states() {
+        assert!((display_qty_for_history("NEW", 1.0, 0.4) - 1.0).abs() < f64::EPSILON);
+        assert!((display_qty_for_history("CANCELED", 1.0, 0.4) - 1.0).abs() < f64::EPSILON);
+        assert!((display_qty_for_history("REJECTED", 1.0, 0.0) - 1.0).abs() < f64::EPSILON);
     }
 }

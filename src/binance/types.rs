@@ -60,6 +60,28 @@ pub struct BinanceFill {
     pub commission_asset: String,
 }
 
+/// Binance all orders response item (GET /api/v3/allOrders).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceAllOrder {
+    pub symbol: String,
+    pub order_id: u64,
+    pub client_order_id: String,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub price: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub orig_qty: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub executed_qty: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub cummulative_quote_qty: f64,
+    pub status: String,
+    pub r#type: String,
+    pub side: String,
+    pub time: u64,
+    pub update_time: u64,
+}
+
 /// Binance API error response.
 #[derive(Debug, Deserialize)]
 pub struct BinanceApiErrorResponse {
@@ -138,5 +160,33 @@ mod tests {
         assert_eq!(resp.status, "FILLED");
         assert_eq!(resp.fills.len(), 1);
         assert!((resp.fills[0].price - 42000.50).abs() < 0.01);
+    }
+
+    #[test]
+    fn deserialize_all_order_item() {
+        let json = r#"{
+            "symbol": "BTCUSDT",
+            "orderId": 28,
+            "clientOrderId": "sq-abc12345",
+            "price": "0.00000000",
+            "origQty": "0.00100000",
+            "executedQty": "0.00100000",
+            "cummulativeQuoteQty": "42.50000000",
+            "status": "FILLED",
+            "timeInForce": "GTC",
+            "type": "MARKET",
+            "side": "BUY",
+            "time": 1700000000000,
+            "updateTime": 1700000001000,
+            "isWorking": true,
+            "workingTime": 1700000001000,
+            "origQuoteOrderQty": "0.00000000",
+            "selfTradePreventionMode": "NONE"
+        }"#;
+        let order: BinanceAllOrder = serde_json::from_str(json).unwrap();
+        assert_eq!(order.symbol, "BTCUSDT");
+        assert_eq!(order.order_id, 28);
+        assert_eq!(order.status, "FILLED");
+        assert!((order.executed_qty - 0.001).abs() < f64::EPSILON);
     }
 }
