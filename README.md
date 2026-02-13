@@ -134,6 +134,7 @@ cargo test
 cargo test -- --ignored
 ```
 
+<<<<<<< HEAD
 Reference: `TESTING.md`
 
 ## Automation (Hourly)
@@ -165,6 +166,7 @@ What it does every hour:
 - Adds the next not-yet-registered exchange/product candidate from `data/demo_market_backlog.csv`
 - Updates `data/demo_market_registry.csv` and `docs/hourly-market-catalog.md`
 - Opens a PR from a fresh branch `chore/hourly-market-catalog/<run_id>`
+Reference: `TESTING.md`
 
 ## Multi-Broker Demo Probe (Stocks/Options)
 
