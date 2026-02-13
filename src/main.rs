@@ -28,7 +28,7 @@ use crate::config::{
     parse_interval_ms, AlpacaAssetClass, Broker, Config, StrategyPreset, TradingProduct,
 };
 use crate::event::AppEvent;
-use crate::model::order::Fill;
+use crate::model::order::{Fill, OrderSide};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_manager::OrderManager;
@@ -736,13 +736,33 @@ async fn run_alpaca(config: &Config) -> Result<()> {
                                         }
                                     };
                                     match rest.place_market_order_qty(&resolved, "buy", 1.0).await {
-                                        Ok(msg) => {
+                                        Ok(ack) => {
+                                            let avg = ack.filled_avg_price.unwrap_or(0.0);
                                             let _ = tx
                                                 .send(AppEvent::LogMessage(format!(
-                                                    "Alpaca {}",
-                                                    msg
+                                                    "Alpaca BUY {} id={} qty={} avg={}",
+                                                    ack.status,
+                                                    ack.id,
+                                                    ack.qty
+                                                        .map(|q| format!("{:.4}", q))
+                                                        .unwrap_or_else(|| "-".to_string()),
+                                                    ack.filled_avg_price
+                                                        .map(|p| format!("{:.4}", p))
+                                                        .unwrap_or_else(|| "-".to_string())
                                                 )))
                                                 .await;
+                                            if avg > 0.0 {
+                                                let _ = tx
+                                                    .send(AppEvent::OrderUpdate(
+                                                        crate::order_manager::OrderUpdate::Filled {
+                                                            client_order_id: format!("alpaca-{}", ack.id),
+                                                            side: OrderSide::Buy,
+                                                            fills: Vec::new(),
+                                                            avg_price: avg,
+                                                        },
+                                                    ))
+                                                    .await;
+                                            }
                                         }
                                         Err(e) => {
                                             let _ = tx
@@ -761,13 +781,33 @@ async fn run_alpaca(config: &Config) -> Result<()> {
                                         .place_market_order_notional(&symbol, "buy", order_notional)
                                         .await
                                     {
-                                        Ok(msg) => {
+                                        Ok(ack) => {
+                                            let avg = ack.filled_avg_price.unwrap_or(0.0);
                                             let _ = tx
                                                 .send(AppEvent::LogMessage(format!(
-                                                    "Alpaca {}",
-                                                    msg
+                                                    "Alpaca BUY {} id={} qty={} avg={}",
+                                                    ack.status,
+                                                    ack.id,
+                                                    ack.qty
+                                                        .map(|q| format!("{:.4}", q))
+                                                        .unwrap_or_else(|| "-".to_string()),
+                                                    ack.filled_avg_price
+                                                        .map(|p| format!("{:.4}", p))
+                                                        .unwrap_or_else(|| "-".to_string())
                                                 )))
                                                 .await;
+                                            if avg > 0.0 {
+                                                let _ = tx
+                                                    .send(AppEvent::OrderUpdate(
+                                                        crate::order_manager::OrderUpdate::Filled {
+                                                            client_order_id: format!("alpaca-{}", ack.id),
+                                                            side: OrderSide::Buy,
+                                                            fills: Vec::new(),
+                                                            avg_price: avg,
+                                                        },
+                                                    ))
+                                                    .await;
+                                            }
                                         }
                                         Err(e) => {
                                             let _ = tx
@@ -817,13 +857,33 @@ async fn run_alpaca(config: &Config) -> Result<()> {
                                                 .place_market_order_qty(&resolved, "sell", qty)
                                                 .await
                                             {
-                                                Ok(msg) => {
+                                                Ok(ack) => {
+                                                    let avg = ack.filled_avg_price.unwrap_or(0.0);
                                                     let _ = tx
                                                         .send(AppEvent::LogMessage(format!(
-                                                            "Alpaca {}",
-                                                            msg
+                                                            "Alpaca SELL {} id={} qty={} avg={}",
+                                                            ack.status,
+                                                            ack.id,
+                                                            ack.qty
+                                                                .map(|q| format!("{:.4}", q))
+                                                                .unwrap_or_else(|| "-".to_string()),
+                                                            ack.filled_avg_price
+                                                                .map(|p| format!("{:.4}", p))
+                                                                .unwrap_or_else(|| "-".to_string())
                                                         )))
                                                         .await;
+                                                    if avg > 0.0 {
+                                                        let _ = tx
+                                                            .send(AppEvent::OrderUpdate(
+                                                                crate::order_manager::OrderUpdate::Filled {
+                                                                    client_order_id: format!("alpaca-{}", ack.id),
+                                                                    side: OrderSide::Sell,
+                                                                    fills: Vec::new(),
+                                                                    avg_price: avg,
+                                                                },
+                                                            ))
+                                                            .await;
+                                                    }
                                                 }
                                                 Err(e) => {
                                                     let _ = tx

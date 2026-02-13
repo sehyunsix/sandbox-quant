@@ -37,6 +37,14 @@ pub struct AlpacaRestClient {
     option_symbol_cache: Mutex<HashMap<String, String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AlpacaOrderAck {
+    pub id: String,
+    pub status: String,
+    pub qty: Option<f64>,
+    pub filled_avg_price: Option<f64>,
+}
+
 #[derive(Debug, Deserialize)]
 struct AlpacaOrderResponse {
     id: String,
@@ -575,7 +583,7 @@ impl AlpacaRestClient {
         symbol: &str,
         side: &str,
         notional: f64,
-    ) -> Result<String> {
+    ) -> Result<AlpacaOrderAck> {
         let url = format!("{}/v2/orders", self.trading_base_url);
         let body = serde_json::json!({
             "symbol": symbol,
@@ -600,14 +608,12 @@ impl AlpacaRestClient {
             .json()
             .await
             .context("alpaca order response parse failed")?;
-        Ok(format!(
-            "{} {} id={} qty={} avg={}",
-            side.to_uppercase(),
-            order.status,
-            order.id,
-            order.qty.unwrap_or_else(|| "-".to_string()),
-            order.filled_avg_price.unwrap_or_else(|| "-".to_string())
-        ))
+        Ok(AlpacaOrderAck {
+            id: order.id,
+            status: order.status,
+            qty: order.qty.and_then(|v| v.parse::<f64>().ok()),
+            filled_avg_price: order.filled_avg_price.and_then(|v| v.parse::<f64>().ok()),
+        })
     }
 
     pub async fn place_market_order_qty(
@@ -615,7 +621,7 @@ impl AlpacaRestClient {
         symbol: &str,
         side: &str,
         qty: f64,
-    ) -> Result<String> {
+    ) -> Result<AlpacaOrderAck> {
         let url = format!("{}/v2/orders", self.trading_base_url);
         let body = serde_json::json!({
             "symbol": symbol,
@@ -640,14 +646,12 @@ impl AlpacaRestClient {
             .json()
             .await
             .context("alpaca order response parse failed")?;
-        Ok(format!(
-            "{} {} id={} qty={} avg={}",
-            side.to_uppercase(),
-            order.status,
-            order.id,
-            order.qty.unwrap_or_else(|| "-".to_string()),
-            order.filled_avg_price.unwrap_or_else(|| "-".to_string())
-        ))
+        Ok(AlpacaOrderAck {
+            id: order.id,
+            status: order.status,
+            qty: order.qty.and_then(|v| v.parse::<f64>().ok()),
+            filled_avg_price: order.filled_avg_price.and_then(|v| v.parse::<f64>().ok()),
+        })
     }
 }
 
