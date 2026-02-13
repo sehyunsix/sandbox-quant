@@ -191,6 +191,7 @@ This repository also includes an hourly scheduler for expanding demo venue cover
 
 What it does every hour:
 
+- Runs `scripts/validate_market_catalog.sh` to fail early on malformed catalog data
 - Runs `scripts/hourly_market_update.sh`
 - Adds the next not-yet-registered exchange/product candidate from `data/demo_market_backlog.csv`
 - Updates `data/demo_market_registry.csv` and `docs/hourly-market-catalog.md`
