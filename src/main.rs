@@ -119,18 +119,13 @@ async fn main() -> Result<()> {
         Ok(()) => {
             tracing::info!("Binance demo ping OK");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage(
-                    "Binance demo ping OK".to_string(),
-                ))
+                .send(AppEvent::LogMessage("Binance demo ping OK".to_string()))
                 .await;
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to ping Binance demo");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "[ERR] Ping failed: {}",
-                    e
-                )))
+                .send(AppEvent::LogMessage(format!("[ERR] Ping failed: {}", e)))
                 .await;
         }
     }
@@ -181,10 +176,7 @@ async fn main() -> Result<()> {
         {
             tracing::error!(error = %e, "WebSocket task failed");
             let _ = ws_app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "[ERR] WS task failed: {}",
-                    e
-                )))
+                .send(AppEvent::LogMessage(format!("[ERR] WS task failed: {}", e)))
                 .await;
         }
     });
@@ -219,9 +211,7 @@ async fn main() -> Result<()> {
                         usdt, btc
                     )))
                     .await;
-                let _ = strat_app_tx
-                    .send(AppEvent::BalanceUpdate(balances))
-                    .await;
+                let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to fetch initial balances");

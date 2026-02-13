@@ -208,7 +208,12 @@ impl BinanceRestClient {
                 let high = kline.get(2)?.as_str()?.parse::<f64>().ok()?;
                 let low = kline.get(3)?.as_str()?.parse::<f64>().ok()?;
                 let close = kline.get(4)?.as_str()?.parse::<f64>().ok()?;
-                Some(Candle { open, high, low, close })
+                Some(Candle {
+                    open,
+                    high,
+                    low,
+                    close,
+                })
             })
             .collect();
 
@@ -222,10 +227,7 @@ impl BinanceRestClient {
     ) -> Result<BinanceOrderResponse> {
         self.check_rate_limit();
 
-        let query = format!(
-            "symbol={}&origClientOrderId={}",
-            symbol, client_order_id
-        );
+        let query = format!("symbol={}&origClientOrderId={}", symbol, client_order_id);
         let signed = self.sign(&query);
         let url = format!("{}/api/v3/order?{}", self.base_url, signed);
 
