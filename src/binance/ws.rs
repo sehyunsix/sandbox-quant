@@ -44,19 +44,20 @@ impl ExponentialBackoff {
 
 pub struct BinanceWsClient {
     url: String,
-    streams: Vec<String>,
 }
 
 impl BinanceWsClient {
     /// Create a new WebSocket client.
     ///
     /// `ws_base_url` — e.g. `wss://stream.testnet.binance.vision/ws`
-    /// `streams`     — e.g. `["btcusdt@trade", "btcusdt@miniTicker"]`
-    pub fn new(ws_base_url: &str, streams: Vec<String>) -> Self {
+    pub fn new(ws_base_url: &str) -> Self {
         Self {
             url: ws_base_url.to_string(),
-            streams,
         }
+    }
+
+    pub fn trade_stream(symbol: &str) -> String {
+        format!("{}@trade", symbol.to_lowercase())
     }
 
     /// Connect and run the WebSocket loop with automatic reconnection.
@@ -65,18 +66,20 @@ impl BinanceWsClient {
         &self,
         tick_tx: mpsc::Sender<Tick>,
         status_tx: mpsc::Sender<AppEvent>,
+        mut symbol_rx: watch::Receiver<String>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            2.0,
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 2.0);
         let mut attempt: u32 = 0;
 
         loop {
             attempt += 1;
-            match self.connect_once(&tick_tx, &status_tx, &mut shutdown).await {
+            let symbol = symbol_rx.borrow().clone();
+            match self
+                .connect_once(&tick_tx, &status_tx, &symbol, &mut symbol_rx, &mut shutdown)
+                .await
+            {
                 Ok(()) => {
                     // Clean shutdown requested
                     let _ = status_tx
@@ -85,6 +88,15 @@ impl BinanceWsClient {
                     break;
                 }
                 Err(e) => {
+                    if e.to_string() == "__WS_SYMBOL_CHANGED__" {
+                        let _ = status_tx
+                            .send(AppEvent::LogMessage(
+                                "Switching market stream...".to_string(),
+                            ))
+                            .await;
+                        continue;
+                    }
+
                     let _ = status_tx
                         .send(AppEvent::WsStatus(WsConnectionStatus::Disconnected))
                         .await;
@@ -123,28 +135,31 @@ impl BinanceWsClient {
         &self,
         tick_tx: &mpsc::Sender<Tick>,
         status_tx: &mpsc::Sender<AppEvent>,
+        symbol: &str,
+        symbol_rx: &mut watch::Receiver<String>,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<()> {
         let _ = status_tx
             .send(AppEvent::LogMessage(format!("Connecting to {}", self.url)))
             .await;
 
-        let (ws_stream, resp) = tokio_tungstenite::connect_async(&self.url).await.map_err(
-            |e| {
+        let (ws_stream, resp) = tokio_tungstenite::connect_async(&self.url)
+            .await
+            .map_err(|e| {
                 let detail = format_ws_error(&e);
                 let _ = status_tx.try_send(AppEvent::LogMessage(detail.clone()));
                 anyhow::anyhow!("WebSocket connect failed: {}", detail)
-            },
-        )?;
+            })?;
 
         tracing::debug!(status = %resp.status(), "WebSocket HTTP upgrade response");
 
         let (mut write, mut read) = ws_stream.split();
 
         // Send SUBSCRIBE message per Binance WebSocket API spec
+        let streams = vec![Self::trade_stream(symbol)];
         let subscribe_msg = serde_json::json!({
             "method": "SUBSCRIBE",
-            "params": self.streams,
+            "params": streams,
             "id": 1
         });
         write
@@ -158,7 +173,7 @@ impl BinanceWsClient {
         let _ = status_tx
             .send(AppEvent::LogMessage(format!(
                 "Subscribed to: {}",
-                self.streams.join(", ")
+                streams.join(", ")
             )))
             .await;
 
@@ -175,7 +190,7 @@ impl BinanceWsClient {
                 msg = read.next() => {
                     match msg {
                         Some(Ok(tungstenite::Message::Text(text))) => {
-                            self.handle_text_message(&text, tick_tx, status_tx).await;
+                            self.handle_text_message(&text, tick_tx).await;
                         }
                         Some(Ok(tungstenite::Message::Ping(_))) => {
                             // tokio-tungstenite handles pong automatically
@@ -215,7 +230,7 @@ impl BinanceWsClient {
                     // Send UNSUBSCRIBE before closing
                     let unsub_msg = serde_json::json!({
                         "method": "UNSUBSCRIBE",
-                        "params": self.streams,
+                        "params": streams,
                         "id": 2
                     });
                     let _ = write
@@ -223,6 +238,18 @@ impl BinanceWsClient {
                         .await;
                     let _ = write.send(tungstenite::Message::Close(None)).await;
                     return Ok(());
+                }
+                _ = symbol_rx.changed() => {
+                    let unsub_msg = serde_json::json!({
+                        "method": "UNSUBSCRIBE",
+                        "params": streams,
+                        "id": 3
+                    });
+                    let _ = write
+                        .send(tungstenite::Message::Text(unsub_msg.to_string()))
+                        .await;
+                    let _ = write.send(tungstenite::Message::Close(None)).await;
+                    return Err(anyhow::anyhow!("__WS_SYMBOL_CHANGED__"));
                 }
             }
         }
@@ -232,7 +259,6 @@ impl BinanceWsClient {
         &self,
         text: &str,
         tick_tx: &mpsc::Sender<Tick>,
-        status_tx: &mpsc::Sender<AppEvent>,
     ) {
         let value: Value = match serde_json::from_str(text) {
             Ok(v) => v,
@@ -250,25 +276,23 @@ impl BinanceWsClient {
 
         if let Some(event_type) = value.get("e").and_then(|v| v.as_str()) {
             match event_type {
-                "trade" => {
-                    match serde_json::from_value::<BinanceTradeEvent>(value) {
-                        Ok(event) => {
-                            let tick = Tick {
-                                price: event.price,
-                                qty: event.qty,
-                                timestamp_ms: event.event_time,
-                                is_buyer_maker: event.is_buyer_maker,
-                                trade_id: event.trade_id,
-                            };
-                            if tick_tx.try_send(tick).is_err() {
-                                tracing::warn!("Tick channel full, dropping tick");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to parse BinanceTradeEvent");
+                "trade" => match serde_json::from_value::<BinanceTradeEvent>(value) {
+                    Ok(event) => {
+                        let tick = Tick {
+                            price: event.price,
+                            qty: event.qty,
+                            timestamp_ms: event.event_time,
+                            is_buyer_maker: event.is_buyer_maker,
+                            trade_id: event.trade_id,
+                        };
+                        if tick_tx.try_send(tick).is_err() {
+                            tracing::warn!("Tick channel full, dropping tick");
                         }
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to parse BinanceTradeEvent");
+                    }
+                },
                 "executionReport" => {
                     match serde_json::from_value::<BinanceExecutionReport>(value) {
                         Ok(report) => {
@@ -302,11 +326,7 @@ fn format_ws_error(err: &WsError) -> String {
         WsError::ConnectionClosed => "Connection closed normally".to_string(),
         WsError::AlreadyClosed => "Attempted operation on already-closed connection".to_string(),
         WsError::Io(io_err) => {
-            format!(
-                "IO error [kind={}]: {}",
-                io_err.kind(),
-                io_err
-            )
+            format!("IO error [kind={}]: {}", io_err.kind(), io_err)
         }
         WsError::Tls(tls_err) => format!("TLS error: {}", tls_err),
         WsError::Capacity(cap_err) => format!("Capacity error: {}", cap_err),
@@ -334,7 +354,10 @@ fn format_ws_error(err: &WsError) -> String {
                 UrlError::TlsFeatureNotEnabled => "TLS feature not compiled in",
                 UrlError::NoHostName => "no host name in URL",
                 UrlError::UnableToConnect(addr) => {
-                    return format!("URL error: unable to connect to {} (DNS/network failure?)", addr);
+                    return format!(
+                        "URL error: unable to connect to {} (DNS/network failure?)",
+                        addr
+                    );
                 }
                 UrlError::UnsupportedUrlScheme => "only ws:// or wss:// are supported",
                 UrlError::EmptyHostName => "empty host name in URL",
@@ -386,4 +409,21 @@ fn format_close_code(code: &CloseCode) -> String {
         CloseCode::Bad(n) => (*n, "Bad"),
     };
     format!("{} ({})", num, label)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BinanceWsClient;
+
+    #[test]
+    fn trade_stream_builds_lowercase_trade_topic() {
+        assert_eq!(
+            BinanceWsClient::trade_stream("BTCUSDT"),
+            "btcusdt@trade".to_string()
+        );
+        assert_eq!(
+            BinanceWsClient::trade_stream("ethusdt"),
+            "ethusdt@trade".to_string()
+        );
+    }
 }

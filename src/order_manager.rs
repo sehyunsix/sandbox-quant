@@ -34,6 +34,7 @@ pub struct HistoricalFill {
     pub side: OrderSide,
     pub qty: f64,
     pub avg_price: f64,
+    pub commission_quote: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +57,34 @@ fn display_qty_for_history(status: &str, orig_qty: f64, executed_qty: f64) -> f6
     match status {
         "FILLED" | "PARTIALLY_FILLED" => executed_qty,
         _ => orig_qty,
+    }
+}
+
+fn split_symbol_assets(symbol: &str) -> Option<(&str, &str)> {
+    for quote in ["USDT", "USDC", "BUSD", "FDUSD", "BTC", "ETH", "BNB"] {
+        if let Some(base) = symbol.strip_suffix(quote) {
+            if !base.is_empty() {
+                return Some((base, quote));
+            }
+        }
+    }
+    None
+}
+
+fn commission_to_quote(symbol: &str, price: f64, commission: f64, commission_asset: &str) -> f64 {
+    if commission <= 0.0 {
+        return 0.0;
+    }
+    let Some((base_asset, quote_asset)) = split_symbol_assets(symbol) else {
+        return 0.0;
+    };
+    let fee_asset = commission_asset.to_ascii_uppercase();
+    if fee_asset == quote_asset {
+        commission
+    } else if fee_asset == base_asset {
+        commission * price
+    } else {
+        0.0
     }
 }
 
@@ -107,6 +136,20 @@ impl OrderManager {
             .rest_client
             .get_all_orders(&self.symbol, page_size)
             .await?;
+        let trades = self
+            .rest_client
+            .get_my_trades(&self.symbol, page_size)
+            .await?;
+        let mut commission_by_order_id: HashMap<u64, f64> = HashMap::new();
+        for trade in trades {
+            let fee_quote = commission_to_quote(
+                &self.symbol,
+                trade.price,
+                trade.commission,
+                &trade.commission_asset,
+            );
+            *commission_by_order_id.entry(trade.order_id).or_insert(0.0) += fee_quote;
+        }
         orders.sort_by_key(|o| o.update_time.max(o.time));
 
         let mut history = Vec::with_capacity(orders.len());
@@ -131,6 +174,10 @@ impl OrderManager {
                         side,
                         qty: o.executed_qty,
                         avg_price,
+                        commission_quote: commission_by_order_id
+                            .get(&o.order_id)
+                            .copied()
+                            .unwrap_or(0.0),
                     });
                 }
             }
@@ -211,24 +258,39 @@ impl OrderManager {
         // Check balance before placing order
         match side {
             OrderSide::Buy => {
-                let usdt_free = self.balances.get("USDT").copied().unwrap_or(0.0);
+                let Some((_base_asset, quote_asset)) = split_symbol_assets(&self.symbol) else {
+                    return Ok(Some(OrderUpdate::Rejected {
+                        client_order_id,
+                        reason: format!("Unsupported symbol for balance check: {}", self.symbol),
+                    }));
+                };
+                let quote_free = self.balances.get(quote_asset).copied().unwrap_or(0.0);
                 let order_value = qty * self.last_price;
-                if usdt_free < order_value {
+                if quote_free < order_value {
                     return Ok(Some(OrderUpdate::Rejected {
                         client_order_id,
                         reason: format!(
-                            "Insufficient USDT: need {:.2}, have {:.2}",
-                            order_value, usdt_free
+                            "Insufficient {}: need {:.2}, have {:.2}",
+                            quote_asset, order_value, quote_free
                         ),
                     }));
                 }
             }
             OrderSide::Sell => {
-                let btc_free = self.balances.get("BTC").copied().unwrap_or(0.0);
-                if btc_free < qty {
+                let Some((base_asset, _quote_asset)) = split_symbol_assets(&self.symbol) else {
                     return Ok(Some(OrderUpdate::Rejected {
                         client_order_id,
-                        reason: format!("Insufficient BTC: need {:.5}, have {:.5}", qty, btc_free),
+                        reason: format!("Unsupported symbol for balance check: {}", self.symbol),
+                    }));
+                };
+                let base_free = self.balances.get(base_asset).copied().unwrap_or(0.0);
+                if base_free < qty {
+                    return Ok(Some(OrderUpdate::Rejected {
+                        client_order_id,
+                        reason: format!(
+                            "Insufficient {}: need {:.5}, have {:.5}",
+                            base_asset, qty, base_free
+                        ),
                     }));
                 }
             }
@@ -282,7 +344,7 @@ impl OrderManager {
                     error = %e,
                     "Order rejected by exchange"
                 );
-                if let Some(order) = self.active_orders.get_mut(&client_order_id) {
+                if let Some(mut order) = self.active_orders.remove(&client_order_id) {
                     order.status = OrderStatus::Rejected;
                     order.updated_at = chrono::Utc::now();
                 }
@@ -319,9 +381,12 @@ impl OrderManager {
             order.fills = fills.clone();
             order.updated_at = chrono::Utc::now();
         }
+        if status.is_terminal() {
+            self.active_orders.remove(client_order_id);
+        }
 
         if status == OrderStatus::Filled || status == OrderStatus::PartiallyFilled {
-            self.position.apply_fill(side, &fills);
+            let _ = self.position.apply_fill(side, &fills);
 
             let avg_price = if fills.is_empty() {
                 0.0
@@ -412,9 +477,7 @@ mod tests {
     #[test]
     fn order_history_uses_executed_qty_for_filled_states() {
         assert!((display_qty_for_history("FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON);
-        assert!(
-            (display_qty_for_history("PARTIALLY_FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON
-        );
+        assert!((display_qty_for_history("PARTIALLY_FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON);
     }
 
     #[test]
