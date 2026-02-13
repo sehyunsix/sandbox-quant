@@ -28,6 +28,7 @@ pub enum AppEvent {
         interval: String,
     },
     BalanceUpdate(HashMap<String, f64>),
+    OrderHistoryUpdate(Vec<String>),
     LogMessage(String),
     Error(String),
 }
