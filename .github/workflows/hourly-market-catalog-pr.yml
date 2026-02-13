@@ -21,6 +21,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate market catalog data
+        run: scripts/validate_market_catalog.sh
+
       - name: Apply hourly update
         id: catalog
         run: scripts/hourly_market_update.sh
