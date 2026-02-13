@@ -1,12 +1,13 @@
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
+use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite;
 use tungstenite::error::{Error as WsError, ProtocolError, UrlError};
 use tungstenite::protocol::frame::coding::CloseCode;
 
-use super::types::BinanceTradeEvent;
+use super::types::{BinanceExecutionReport, BinanceTradeEvent};
 use crate::event::{AppEvent, WsConnectionStatus};
 use crate::model::tick::Tick;
 
@@ -233,36 +234,64 @@ impl BinanceWsClient {
         tick_tx: &mpsc::Sender<Tick>,
         status_tx: &mpsc::Sender<AppEvent>,
     ) {
-        // Skip subscription confirmation responses like {"result":null,"id":1}
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
-            if val.get("result").is_some() && val.get("id").is_some() {
-                tracing::debug!(id = %val["id"], "Subscription response received");
+        let value: Value = match serde_json::from_str(text) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!(error = %e, raw = %text, "Failed to parse WS message to JSON Value");
                 return;
             }
+        };
+
+        // Skip subscription confirmation responses like {"result":null,"id":1}
+        if value.get("result").is_some() && value.get("id").is_some() {
+            tracing::debug!(id = %value["id"], "Subscription response received");
+            return;
         }
 
-        match serde_json::from_str::<BinanceTradeEvent>(text) {
-            Ok(event) => {
-                let tick = Tick {
-                    price: event.price,
-                    qty: event.qty,
-                    timestamp_ms: event.event_time,
-                    is_buyer_maker: event.is_buyer_maker,
-                    trade_id: event.trade_id,
-                };
-                if tick_tx.try_send(tick).is_err() {
-                    tracing::warn!("Tick channel full, dropping tick");
+        if let Some(event_type) = value.get("e").and_then(|v| v.as_str()) {
+            match event_type {
+                "trade" => {
+                    match serde_json::from_value::<BinanceTradeEvent>(value) {
+                        Ok(event) => {
+                            let tick = Tick {
+                                price: event.price,
+                                qty: event.qty,
+                                timestamp_ms: event.event_time,
+                                is_buyer_maker: event.is_buyer_maker,
+                                trade_id: event.trade_id,
+                            };
+                            if tick_tx.try_send(tick).is_err() {
+                                tracing::warn!("Tick channel full, dropping tick");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to parse BinanceTradeEvent");
+                        }
+                    }
+                }
+                "executionReport" => {
+                    match serde_json::from_value::<BinanceExecutionReport>(value) {
+                        Ok(report) => {
+                            if report.order_status == "FILLED" {
+                                tracing::info!(
+                                    trace_id = %report.client_order_id,
+                                    order_id = report.order_id,
+                                    status = %report.order_status,
+                                    "Execution report 'FILLED' received via WebSocket"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to parse BinanceExecutionReport");
+                        }
+                    }
+                }
+                _ => {
+                    tracing::trace!(event_type, "Unhandled WS event type");
                 }
             }
-            Err(e) => {
-                tracing::debug!(error = %e, raw = %text, "Failed to parse WS message");
-                let _ = status_tx
-                    .send(AppEvent::LogMessage(format!(
-                        "WS parse skip: {}",
-                        &text[..text.len().min(80)]
-                    )))
-                    .await;
-            }
+        } else {
+            tracing::trace!(raw = %text, "WS message without event type 'e'");
         }
     }
 }

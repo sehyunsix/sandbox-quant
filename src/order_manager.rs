@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use chrono::TimeZone;
 
 use crate::binance::rest::BinanceRestClient;
 use crate::binance::types::BinanceOrderResponse;
@@ -27,6 +28,19 @@ pub enum OrderUpdate {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct HistoricalFill {
+    pub timestamp_ms: u64,
+    pub side: OrderSide,
+    pub avg_price: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderHistorySnapshot {
+    pub rows: Vec<String>,
+    pub fills: Vec<HistoricalFill>,
+}
+
 pub struct OrderManager {
     rest_client: Arc<BinanceRestClient>,
     active_orders: HashMap<String, Order>,
@@ -38,11 +52,7 @@ pub struct OrderManager {
 }
 
 impl OrderManager {
-    pub fn new(
-        rest_client: Arc<BinanceRestClient>,
-        symbol: &str,
-        order_amount_usdt: f64,
-    ) -> Self {
+    pub fn new(rest_client: Arc<BinanceRestClient>, symbol: &str, order_amount_usdt: f64) -> Self {
         Self {
             rest_client,
             active_orders: HashMap::new(),
@@ -82,16 +92,74 @@ impl OrderManager {
         Ok(self.balances.clone())
     }
 
+    /// Fetch order history from exchange and build UI rows + fill marker metadata.
+    pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
+        let mut orders = self.rest_client.get_all_orders(&self.symbol, limit).await?;
+        orders.sort_by_key(|o| o.update_time.max(o.time));
+
+        let mut history = Vec::with_capacity(orders.len());
+        let mut fills = Vec::new();
+        for o in orders {
+            let ts = o.update_time.max(o.time);
+            let avg_price = if o.executed_qty > 0.0 {
+                o.cummulative_quote_qty / o.executed_qty
+            } else {
+                o.price
+            };
+            let side = match o.side.as_str() {
+                "BUY" => Some(OrderSide::Buy),
+                "SELL" => Some(OrderSide::Sell),
+                _ => None,
+            };
+
+            if o.status == "FILLED" && o.executed_qty > 0.0 {
+                if let Some(side) = side {
+                    fills.push(HistoricalFill {
+                        timestamp_ms: ts,
+                        side,
+                        avg_price,
+                    });
+                }
+            }
+
+            let time_str = chrono::Utc
+                .timestamp_millis_opt(ts as i64)
+                .single()
+                .map(|dt| {
+                    dt.with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string()
+                })
+                .unwrap_or_else(|| "--:--:--".to_string());
+
+            history.push(format!(
+                "{} {:<10} {:<4} {:.5} @ {:.2}  {}",
+                time_str,
+                o.status,
+                o.side,
+                o.executed_qty.max(o.orig_qty),
+                avg_price,
+                o.client_order_id
+            ));
+        }
+
+        Ok(OrderHistorySnapshot {
+            rows: history,
+            fills,
+        })
+    }
+
     pub async fn submit_order(&mut self, signal: Signal) -> Result<Option<OrderUpdate>> {
-        let side = match &signal {
-            Signal::Buy => OrderSide::Buy,
-            Signal::Sell => OrderSide::Sell,
+        let (side, trace_id) = match signal {
+            Signal::Buy { trace_id } => (OrderSide::Buy, trace_id),
+            Signal::Sell { trace_id } => (OrderSide::Sell, trace_id),
             Signal::Hold => return Ok(None),
         };
+        let client_order_id = trace_id.to_string();
 
         if self.last_price <= 0.0 {
             return Ok(Some(OrderUpdate::Rejected {
-                client_order_id: "n/a".to_string(),
+                client_order_id,
                 reason: "No price data yet".to_string(),
             }));
         }
@@ -108,7 +176,7 @@ impl OrderManager {
                 // Sell what we have
                 if self.position.is_flat() {
                     return Ok(Some(OrderUpdate::Rejected {
-                        client_order_id: "n/a".to_string(),
+                        client_order_id,
                         reason: "No position to sell".to_string(),
                     }));
                 }
@@ -119,7 +187,7 @@ impl OrderManager {
 
         if qty <= 0.0 {
             return Ok(Some(OrderUpdate::Rejected {
-                client_order_id: "n/a".to_string(),
+                client_order_id,
                 reason: format!(
                     "Calculated qty too small ({}USDT / {:.2} = {:.8} BTC)",
                     self.order_amount_usdt, self.last_price, qty
@@ -134,7 +202,7 @@ impl OrderManager {
                 let order_value = qty * self.last_price;
                 if usdt_free < order_value {
                     return Ok(Some(OrderUpdate::Rejected {
-                        client_order_id: "n/a".to_string(),
+                        client_order_id,
                         reason: format!(
                             "Insufficient USDT: need {:.2}, have {:.2}",
                             order_value, usdt_free
@@ -146,17 +214,12 @@ impl OrderManager {
                 let btc_free = self.balances.get("BTC").copied().unwrap_or(0.0);
                 if btc_free < qty {
                     return Ok(Some(OrderUpdate::Rejected {
-                        client_order_id: "n/a".to_string(),
-                        reason: format!(
-                            "Insufficient BTC: need {:.5}, have {:.5}",
-                            qty, btc_free
-                        ),
+                        client_order_id,
+                        reason: format!("Insufficient BTC: need {:.5}, have {:.5}", qty, btc_free),
                     }));
                 }
             }
         }
-
-        let client_order_id = format!("sq-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 
         let order = Order {
             client_order_id: client_order_id.clone(),
@@ -172,10 +235,10 @@ impl OrderManager {
             fills: vec![],
         };
 
-        self.active_orders
-            .insert(client_order_id.clone(), order);
+        self.active_orders.insert(client_order_id.clone(), order);
 
         tracing::info!(
+            trace_id = %trace_id,
             side = %side,
             qty,
             usdt_amount = self.order_amount_usdt,
@@ -194,7 +257,7 @@ impl OrderManager {
                 // Refresh balances after fill
                 if matches!(update, OrderUpdate::Filled { .. }) {
                     if let Err(e) = self.refresh_balances().await {
-                        tracing::warn!(error = %e, "Failed to refresh balances after fill");
+                        tracing::warn!(trace_id = %trace_id, error = %e, "Failed to refresh balances after fill");
                     }
                 }
 
@@ -202,9 +265,9 @@ impl OrderManager {
             }
             Err(e) => {
                 tracing::error!(
-                    client_order_id,
+                    trace_id = %trace_id,
                     error = %e,
-                    "Order rejected"
+                    "Order rejected by exchange"
                 );
                 if let Some(order) = self.active_orders.get_mut(&client_order_id) {
                     order.status = OrderStatus::Rejected;
@@ -256,7 +319,7 @@ impl OrderManager {
             };
 
             tracing::info!(
-                client_order_id,
+                trace_id = client_order_id,
                 order_id = response.order_id,
                 side = %side,
                 avg_price,
@@ -271,6 +334,12 @@ impl OrderManager {
                 avg_price,
             }
         } else {
+            tracing::info!(
+                trace_id = client_order_id,
+                order_id = response.order_id,
+                status = response.status,
+                "Order submitted"
+            );
             OrderUpdate::Submitted {
                 client_order_id: client_order_id.to_string(),
                 server_order_id: response.order_id,
@@ -306,14 +375,8 @@ mod tests {
 
     #[test]
     fn from_binance_str_mapping() {
-        assert_eq!(
-            OrderStatus::from_binance_str("NEW"),
-            OrderStatus::Submitted
-        );
-        assert_eq!(
-            OrderStatus::from_binance_str("FILLED"),
-            OrderStatus::Filled
-        );
+        assert_eq!(OrderStatus::from_binance_str("NEW"), OrderStatus::Submitted);
+        assert_eq!(OrderStatus::from_binance_str("FILLED"), OrderStatus::Filled);
         assert_eq!(
             OrderStatus::from_binance_str("CANCELED"),
             OrderStatus::Cancelled

@@ -14,6 +14,7 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};
 use tokio::sync::{mpsc, watch};
+use uuid::Uuid;
 
 use crate::binance::rest::BinanceRestClient;
 use crate::binance::ws::BinanceWsClient;
@@ -23,6 +24,9 @@ use crate::model::signal::Signal;
 use crate::order_manager::OrderManager;
 use crate::strategy::ma_crossover::MaCrossover;
 use crate::ui::AppState;
+
+const ORDER_HISTORY_LIMIT: usize = 100;
+const ORDER_HISTORY_SYNC_SECS: u64 = 5;
 
 fn switch_timeframe(
     interval: &str,
@@ -119,18 +123,13 @@ async fn main() -> Result<()> {
         Ok(()) => {
             tracing::info!("Binance demo ping OK");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage(
-                    "Binance demo ping OK".to_string(),
-                ))
+                .send(AppEvent::LogMessage("Binance demo ping OK".to_string()))
                 .await;
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to ping Binance demo");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "[ERR] Ping failed: {}",
-                    e
-                )))
+                .send(AppEvent::LogMessage(format!("[ERR] Ping failed: {}", e)))
                 .await;
         }
     }
@@ -181,10 +180,7 @@ async fn main() -> Result<()> {
         {
             tracing::error!(error = %e, "WebSocket task failed");
             let _ = ws_app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "[ERR] WS task failed: {}",
-                    e
-                )))
+                .send(AppEvent::LogMessage(format!("[ERR] WS task failed: {}", e)))
                 .await;
         }
     });
@@ -207,6 +203,8 @@ async fn main() -> Result<()> {
             &strat_config.binance.symbol,
             strat_config.strategy.order_amount_usdt,
         );
+        let mut order_history_sync =
+            tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
 
         // Fetch initial balances
         match order_mgr.refresh_balances().await {
@@ -219,15 +217,29 @@ async fn main() -> Result<()> {
                         usdt, btc
                     )))
                     .await;
-                let _ = strat_app_tx
-                    .send(AppEvent::BalanceUpdate(balances))
-                    .await;
+                let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to fetch initial balances");
                 let _ = strat_app_tx
                     .send(AppEvent::LogMessage(format!(
                         "[WARN] Balance fetch failed: {}",
+                        e
+                    )))
+                    .await;
+            }
+        }
+        match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+            Ok(history) => {
+                let _ = strat_app_tx
+                    .send(AppEvent::OrderHistoryUpdate(history))
+                    .await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch initial order history");
+                let _ = strat_app_tx
+                    .send(AppEvent::LogMessage(format!(
+                        "[WARN] Order history fetch failed: {}",
                         e
                     )))
                     .await;
@@ -297,6 +309,7 @@ async fn main() -> Result<()> {
                     // Only submit strategy orders when enabled
                     let enabled = *strat_enabled_rx.borrow();
                     if signal != Signal::Hold && enabled {
+                        tracing::info!(signal = ?signal, "Strategy signal received");
                         let _ = strat_app_tx
                             .send(AppEvent::StrategySignal(signal.clone()))
                             .await;
@@ -307,6 +320,16 @@ async fn main() -> Result<()> {
                                 let _ = strat_app_tx
                                     .send(AppEvent::OrderUpdate(update.clone()))
                                     .await;
+                                match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                    Ok(history) => {
+                                        let _ = strat_app_tx
+                                            .send(AppEvent::OrderHistoryUpdate(history))
+                                            .await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "Failed to refresh order history");
+                                    }
+                                }
                                 // Send updated balances to UI after fill
                                 if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
                                     let _ = strat_app_tx
@@ -335,6 +358,16 @@ async fn main() -> Result<()> {
                             let _ = strat_app_tx
                                 .send(AppEvent::OrderUpdate(update.clone()))
                                 .await;
+                            match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                Ok(history) => {
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::OrderHistoryUpdate(history))
+                                        .await;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Failed to refresh order history");
+                                }
+                            }
                             if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
                                 let _ = strat_app_tx
                                     .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
@@ -347,6 +380,18 @@ async fn main() -> Result<()> {
                             let _ = strat_app_tx
                                 .send(AppEvent::Error(e.to_string()))
                                 .await;
+                        }
+                    }
+                }
+                _ = order_history_sync.tick() => {
+                    match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                        Ok(history) => {
+                            let _ = strat_app_tx
+                                .send(AppEvent::OrderHistoryUpdate(history))
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Periodic order history sync failed");
                         }
                     }
                 }
@@ -422,11 +467,15 @@ async fn main() -> Result<()> {
                             "Manual BUY ({:.2} USDT)",
                             config.strategy.order_amount_usdt
                         ));
-                        let _ = manual_order_tx.try_send(Signal::Buy);
+                        let _ = manual_order_tx.try_send(Signal::Buy {
+                            trace_id: Uuid::new_v4(),
+                        });
                     }
                     KeyCode::Char('s') | KeyCode::Char('S') => {
                         app_state.push_log("Manual SELL (position)".to_string());
-                        let _ = manual_order_tx.try_send(Signal::Sell);
+                        let _ = manual_order_tx.try_send(Signal::Sell {
+                            trace_id: Uuid::new_v4(),
+                        });
                     }
                     KeyCode::Char('1') => {
                         switch_timeframe("1m", &rest_client, &config, &app_tx);
