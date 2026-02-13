@@ -167,3 +167,23 @@ cargo test -- --ignored
 ```
 
 See [TESTING.md](TESTING.md) for the full testing plan.
+
+## Multi-Broker Demo Probe (Stocks/Options)
+
+To validate non-crypto paper/sandbox venues before full adapter work, run:
+
+```bash
+cargo run --bin demo_broker_probe
+```
+
+Environment variables:
+
+- `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`
+- `TRADIER_SANDBOX_TOKEN`
+
+Optional endpoint overrides:
+
+- `ALPACA_PAPER_BASE_URL` (default: `https://paper-api.alpaca.markets`)
+- `TRADIER_SANDBOX_BASE_URL` (default: `https://sandbox.tradier.com/v1`)
+
+See `docs/multi-broker-demo-integration.md` for scope and roadmap.
