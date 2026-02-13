@@ -32,6 +32,7 @@ pub enum OrderUpdate {
 pub struct HistoricalFill {
     pub timestamp_ms: u64,
     pub side: OrderSide,
+    pub qty: f64,
     pub avg_price: f64,
 }
 
@@ -49,6 +50,13 @@ pub struct OrderManager {
     order_amount_usdt: f64,
     balances: HashMap<String, f64>,
     last_price: f64,
+}
+
+fn display_qty_for_history(status: &str, orig_qty: f64, executed_qty: f64) -> f64 {
+    match status {
+        "FILLED" | "PARTIALLY_FILLED" => executed_qty,
+        _ => orig_qty,
+    }
 }
 
 impl OrderManager {
@@ -117,6 +125,7 @@ impl OrderManager {
                     fills.push(HistoricalFill {
                         timestamp_ms: ts,
                         side,
+                        qty: o.executed_qty,
                         avg_price,
                     });
                 }
@@ -137,7 +146,7 @@ impl OrderManager {
                 time_str,
                 o.status,
                 o.side,
-                o.executed_qty.max(o.orig_qty),
+                display_qty_for_history(&o.status, o.orig_qty, o.executed_qty),
                 avg_price,
                 o.client_order_id
             ));
@@ -350,6 +359,7 @@ impl OrderManager {
 
 #[cfg(test)]
 mod tests {
+    use super::display_qty_for_history;
     use crate::model::order::OrderStatus;
 
     #[test]
@@ -393,5 +403,20 @@ mod tests {
             OrderStatus::from_binance_str("PARTIALLY_FILLED"),
             OrderStatus::PartiallyFilled
         );
+    }
+
+    #[test]
+    fn order_history_uses_executed_qty_for_filled_states() {
+        assert!((display_qty_for_history("FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON);
+        assert!(
+            (display_qty_for_history("PARTIALLY_FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn order_history_uses_orig_qty_for_non_filled_states() {
+        assert!((display_qty_for_history("NEW", 1.0, 0.4) - 1.0).abs() < f64::EPSILON);
+        assert!((display_qty_for_history("CANCELED", 1.0, 0.4) - 1.0).abs() < f64::EPSILON);
+        assert!((display_qty_for_history("REJECTED", 1.0, 0.0) - 1.0).abs() < f64::EPSILON);
     }
 }
