@@ -261,11 +261,7 @@ impl BinanceWsClient {
         }
     }
 
-    async fn handle_text_message(
-        &self,
-        text: &str,
-        tick_tx: &mpsc::Sender<Tick>,
-    ) {
+    async fn handle_text_message(&self, text: &str, tick_tx: &mpsc::Sender<Tick>) {
         let value: Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(e) => {

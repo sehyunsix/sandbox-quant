@@ -33,6 +33,7 @@ pub enum AppEvent {
     },
     OptionChainUpdate(Option<OptionChainSnapshot>),
     BalanceUpdate(HashMap<String, f64>),
+    StrategyStatsUpdate(HashMap<String, StrategyStats>),
     OrderHistoryUpdate(OrderHistorySnapshot),
     LogMessage(String),
     Error(String),

@@ -1,7 +1,7 @@
 # sandbox-quant
 
 <p align="center">
-  <b>Rust-native Binance Spot Testnet trading prototype</b><br/>
+  <b>Rust-native Binance/Alpaca paper trading prototype</b><br/>
   Moving Average Crossover strategy + real-time stream + terminal dashboard
 </p>
 
@@ -16,9 +16,9 @@
 
 ## What This Project Does
 
-- Streams market ticks from Binance Spot Testnet WebSocket
+- Streams market ticks from Binance (WebSocket) or Alpaca (polling)
 - Generates MA crossover signals (fast/slow SMA)
-- Places and tracks orders through REST
+- Places and tracks paper orders through REST
 - Renders position, pnl, and event flow in terminal UI
 - Logs structured JSON to `sandbox-quant.log`
 
@@ -43,10 +43,12 @@ WS Task ──tick──> Strategy Task ──signal──> Order Manager
    ```bash
    cp .env.example .env
    ```
-3. Fill testnet keys in `.env`
+3. Fill API keys in `.env` (based on selected broker)
    ```bash
    BINANCE_API_KEY=your_testnet_api_key_here
    BINANCE_API_SECRET=your_testnet_api_secret_here
+   APCA_API_KEY_ID=your_alpaca_paper_key_here
+   APCA_API_SECRET_KEY=your_alpaca_paper_secret_here
    ```
 4. Build and run
    ```bash
@@ -59,12 +61,22 @@ WS Task ──tick──> Strategy Task ──signal──> Order Manager
 Edit `config/default.toml`:
 
 ```toml
+broker = "binance" # binance | alpaca
+
 [binance]
-rest_base_url = "https://testnet.binance.vision"
-ws_base_url = "wss://testnet.binance.vision/ws"
-symbol = "BTCUSDT"
+product = "btc_spot"  # btc_spot | btc_future | eth_spot | eth_future
+rest_base_url = "https://demo-api.binance.com"
+ws_base_url = "wss://demo-stream.binance.com/ws"
 recv_window = 5000
 kline_interval = "1m"
+
+[alpaca]
+asset_class = "us_equity" # us_equity | us_option | us_future
+symbol = "AAPL"
+symbols = ["AAPL", "GLD", "SLV"] # gold/silver ETF included
+kline_interval = "1m"
+trading_base_url = "https://paper-api.alpaca.markets"
+data_base_url = "https://data.alpaca.markets"
 
 [strategy]
 fast_period = 10
@@ -96,6 +108,9 @@ Full raw output is saved at `docs/assets/cargo-run-output.txt`.
 - `Q`: Graceful shutdown
 - `P`: Pause strategy
 - `R`: Resume strategy
+- `B`: Manual buy
+- `S`: Manual sell
+- `T`: Product selector
 - `N`: Next Alpaca symbol (`AAPL` -> `GLD` -> `SLV`)
 - `V`: Previous Alpaca symbol
 

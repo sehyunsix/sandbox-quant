@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-quant"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -24,6 +24,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 toml = "0.8"
 rustls = { version = "0.23", features = ["ring"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

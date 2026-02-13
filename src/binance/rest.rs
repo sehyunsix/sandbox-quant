@@ -212,12 +212,14 @@ impl BinanceRestClient {
                 let high = kline.get(2)?.as_str()?.parse::<f64>().ok()?;
                 let low = kline.get(3)?.as_str()?.parse::<f64>().ok()?;
                 let close = kline.get(4)?.as_str()?.parse::<f64>().ok()?;
+                let volume = kline.get(5)?.as_str()?.parse::<f64>().ok()?;
                 let close_time = kline.get(6)?.as_u64()?;
                 Some(Candle {
                     open,
                     high,
                     low,
                     close,
+                    volume,
                     open_time,
                     close_time,
                 })
@@ -305,7 +307,11 @@ impl BinanceRestClient {
 
     /// Fetch all available orders for a symbol by paging through `/api/v3/allOrders`.
     /// `page_size` controls each request size (1..=1000).
-    pub async fn get_all_orders(&self, symbol: &str, page_size: usize) -> Result<Vec<BinanceAllOrder>> {
+    pub async fn get_all_orders(
+        &self,
+        symbol: &str,
+        page_size: usize,
+    ) -> Result<Vec<BinanceAllOrder>> {
         let mut all_orders = Vec::new();
         let mut seen_order_ids = HashSet::new();
         // Start from the oldest cursor so we can reliably walk beyond 1000 orders.
@@ -345,12 +351,20 @@ impl BinanceRestClient {
         Ok(all_orders)
     }
 
-    /// Fetch recent trades for a symbol (up to `page_size`, max 1000).
-    pub async fn get_my_trades(&self, symbol: &str, page_size: usize) -> Result<Vec<BinanceMyTrade>> {
+    /// Fetch one page of account trades for a symbol.
+    async fn get_my_trades_page(
+        &self,
+        symbol: &str,
+        limit: usize,
+        from_id: Option<u64>,
+    ) -> Result<Vec<BinanceMyTrade>> {
         self.check_rate_limit();
 
-        let limit = page_size.clamp(1, 1000);
-        let query = format!("symbol={}&limit={}", symbol, limit);
+        let limit = limit.clamp(1, 1000);
+        let query = match from_id {
+            Some(id) => format!("symbol={}&limit={}&fromId={}", symbol, limit, id),
+            None => format!("symbol={}&limit={}", symbol, limit),
+        };
         let signed = self.sign(&query);
         let url = format!("{}/api/v3/myTrades?{}", self.base_url, signed);
 
@@ -375,6 +389,48 @@ impl BinanceRestClient {
         }
 
         Ok(resp.json().await?)
+    }
+
+    /// Fetch all available account trades for a symbol by paging through `/api/v3/myTrades`.
+    pub async fn get_my_trades(
+        &self,
+        symbol: &str,
+        page_size: usize,
+    ) -> Result<Vec<BinanceMyTrade>> {
+        let mut all_trades = Vec::new();
+        let mut seen_trade_ids = HashSet::new();
+        let mut from_id: Option<u64> = Some(0);
+        let page_size = page_size.clamp(1, 1000);
+
+        loop {
+            let page = self.get_my_trades_page(symbol, page_size, from_id).await?;
+
+            if page.is_empty() {
+                break;
+            }
+
+            let fetched = page.len();
+            let mut max_seen_in_page = 0_u64;
+            for trade in page {
+                max_seen_in_page = max_seen_in_page.max(trade.id);
+                if seen_trade_ids.insert(trade.id) {
+                    all_trades.push(trade);
+                }
+            }
+
+            if fetched < page_size {
+                break;
+            }
+
+            let current_cursor = from_id.unwrap_or(0);
+            let next_cursor = max_seen_in_page.saturating_add(1);
+            if next_cursor <= current_cursor {
+                break;
+            }
+            from_id = Some(next_cursor);
+        }
+
+        Ok(all_trades)
     }
 }
 

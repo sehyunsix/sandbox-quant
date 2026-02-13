@@ -738,24 +738,32 @@ async fn run_alpaca(config: &Config) -> Result<()> {
                                     match rest.place_market_order_qty(&resolved, "buy", 1.0).await {
                                         Ok(ack) => {
                                             let avg = ack.filled_avg_price.unwrap_or(0.0);
+                                            let qty = ack.qty.unwrap_or(0.0);
                                             let _ = tx
                                                 .send(AppEvent::LogMessage(format!(
                                                     "Alpaca BUY {} id={} qty={} avg={}",
                                                     ack.status,
                                                     ack.id,
-                                                    ack.qty
-                                                        .map(|q| format!("{:.4}", q))
-                                                        .unwrap_or_else(|| "-".to_string()),
-                                                    ack.filled_avg_price
-                                                        .map(|p| format!("{:.4}", p))
-                                                        .unwrap_or_else(|| "-".to_string())
+                                                    if qty > 0.0 {
+                                                        format!("{:.4}", qty)
+                                                    } else {
+                                                        "-".to_string()
+                                                    },
+                                                    if avg > 0.0 {
+                                                        format!("{:.4}", avg)
+                                                    } else {
+                                                        "-".to_string()
+                                                    }
                                                 )))
                                                 .await;
                                             if avg > 0.0 {
                                                 let _ = tx
                                                     .send(AppEvent::OrderUpdate(
                                                         crate::order_manager::OrderUpdate::Filled {
-                                                            client_order_id: format!("alpaca-{}", ack.id),
+                                                            client_order_id: format!(
+                                                                "alpaca-{}",
+                                                                ack.id
+                                                            ),
                                                             side: OrderSide::Buy,
                                                             fills: Vec::new(),
                                                             avg_price: avg,
@@ -783,24 +791,32 @@ async fn run_alpaca(config: &Config) -> Result<()> {
                                     {
                                         Ok(ack) => {
                                             let avg = ack.filled_avg_price.unwrap_or(0.0);
+                                            let qty = ack.qty.unwrap_or(0.0);
                                             let _ = tx
                                                 .send(AppEvent::LogMessage(format!(
                                                     "Alpaca BUY {} id={} qty={} avg={}",
                                                     ack.status,
                                                     ack.id,
-                                                    ack.qty
-                                                        .map(|q| format!("{:.4}", q))
-                                                        .unwrap_or_else(|| "-".to_string()),
-                                                    ack.filled_avg_price
-                                                        .map(|p| format!("{:.4}", p))
-                                                        .unwrap_or_else(|| "-".to_string())
+                                                    if qty > 0.0 {
+                                                        format!("{:.4}", qty)
+                                                    } else {
+                                                        "-".to_string()
+                                                    },
+                                                    if avg > 0.0 {
+                                                        format!("{:.4}", avg)
+                                                    } else {
+                                                        "-".to_string()
+                                                    }
                                                 )))
                                                 .await;
                                             if avg > 0.0 {
                                                 let _ = tx
                                                     .send(AppEvent::OrderUpdate(
                                                         crate::order_manager::OrderUpdate::Filled {
-                                                            client_order_id: format!("alpaca-{}", ack.id),
+                                                            client_order_id: format!(
+                                                                "alpaca-{}",
+                                                                ack.id
+                                                            ),
                                                             side: OrderSide::Buy,
                                                             fills: Vec::new(),
                                                             avg_price: avg,
@@ -859,24 +875,32 @@ async fn run_alpaca(config: &Config) -> Result<()> {
                                             {
                                                 Ok(ack) => {
                                                     let avg = ack.filled_avg_price.unwrap_or(0.0);
+                                                    let qty = ack.qty.unwrap_or(0.0);
                                                     let _ = tx
                                                         .send(AppEvent::LogMessage(format!(
                                                             "Alpaca SELL {} id={} qty={} avg={}",
                                                             ack.status,
                                                             ack.id,
-                                                            ack.qty
-                                                                .map(|q| format!("{:.4}", q))
-                                                                .unwrap_or_else(|| "-".to_string()),
-                                                            ack.filled_avg_price
-                                                                .map(|p| format!("{:.4}", p))
-                                                                .unwrap_or_else(|| "-".to_string())
+                                                            if qty > 0.0 {
+                                                                format!("{:.4}", qty)
+                                                            } else {
+                                                                "-".to_string()
+                                                            },
+                                                            if avg > 0.0 {
+                                                                format!("{:.4}", avg)
+                                                            } else {
+                                                                "-".to_string()
+                                                            }
                                                         )))
                                                         .await;
                                                     if avg > 0.0 {
                                                         let _ = tx
                                                             .send(AppEvent::OrderUpdate(
                                                                 crate::order_manager::OrderUpdate::Filled {
-                                                                    client_order_id: format!("alpaca-{}", ack.id),
+                                                                    client_order_id: format!(
+                                                                        "alpaca-{}",
+                                                                        ack.id
+                                                                    ),
                                                                     side: OrderSide::Sell,
                                                                     fills: Vec::new(),
                                                                     avg_price: avg,
@@ -1702,7 +1726,7 @@ mod tests {
             30,
         );
         app_state.paused = false;
-        app_state.current_candle = Some(CandleBuilder::new(100.0, 60_000, 60_000));
+        app_state.current_candle = Some(CandleBuilder::new(100.0, 0.1, 60_000, 60_000));
         app_state.fill_markers.push(FillMarker {
             candle_index: 0,
             price: 100.0,
