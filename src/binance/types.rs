@@ -74,6 +74,21 @@ pub struct ServerTimeResponse {
     pub server_time: u64,
 }
 
+/// Binance account info response (GET /api/v3/account).
+#[derive(Debug, Deserialize)]
+pub struct AccountInfo {
+    pub balances: Vec<AccountBalance>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountBalance {
+    pub asset: String,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub free: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub locked: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

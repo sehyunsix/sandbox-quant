@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -14,13 +16,19 @@ use crate::order_manager::OrderUpdate;
 pub struct PositionPanel<'a> {
     position: &'a Position,
     current_price: Option<f64>,
+    balances: &'a HashMap<String, f64>,
 }
 
 impl<'a> PositionPanel<'a> {
-    pub fn new(position: &'a Position, current_price: Option<f64>) -> Self {
+    pub fn new(
+        position: &'a Position,
+        current_price: Option<f64>,
+        balances: &'a HashMap<String, f64>,
+    ) -> Self {
         Self {
             position,
             current_price,
+            balances,
         }
     }
 }
@@ -53,7 +61,30 @@ impl Widget for PositionPanel<'_> {
             .map(|p| format!("{:.2}", p))
             .unwrap_or_else(|| "---".to_string());
 
+        let usdt_bal = self.balances.get("USDT").copied().unwrap_or(0.0);
+        let btc_bal = self.balances.get("BTC").copied().unwrap_or(0.0);
+
         let lines = vec![
+            Line::from(vec![
+                Span::styled("USDT: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:.2}", usdt_bal),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("BTC:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:.5}", btc_bal),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]),
+            Line::from(Span::styled(
+                "──────────────────────",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(vec![
                 Span::styled("Price:", Style::default().fg(Color::DarkGray)),
                 Span::styled(
@@ -144,8 +175,8 @@ impl<'a> OrderLogPanel<'a> {
 impl Widget for OrderLogPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let signal_str = match self.last_signal {
-            Some(Signal::Buy { qty }) => format!("BUY {:.5}", qty),
-            Some(Signal::Sell { qty }) => format!("SELL {:.5}", qty),
+            Some(Signal::Buy) => "BUY".to_string(),
+            Some(Signal::Sell) => "SELL".to_string(),
             Some(Signal::Hold) | None => "---".to_string(),
         };
 
@@ -211,6 +242,7 @@ pub struct StatusBar<'a> {
     pub ws_connected: bool,
     pub paused: bool,
     pub tick_count: u64,
+    pub timeframe: &'a str,
 }
 
 impl Widget for StatusBar<'_> {
@@ -228,13 +260,13 @@ impl Widget for StatusBar<'_> {
 
         let pause_status = if self.paused {
             Span::styled(
-                " PAUSED ",
+                " STRAT OFF ",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::Red)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
-            Span::styled(" RUNNING ", Style::default().fg(Color::Green))
+            Span::styled(" STRAT ON ", Style::default().fg(Color::Green))
         };
 
         let line = Line::from(vec![
@@ -247,6 +279,13 @@ impl Widget for StatusBar<'_> {
             Span::styled("| ", Style::default().fg(Color::DarkGray)),
             Span::styled(self.symbol, Style::default().fg(Color::Cyan)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                self.timeframe.to_uppercase(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             conn_status,
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             pause_status,
@@ -258,6 +297,52 @@ impl Widget for StatusBar<'_> {
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);
+    }
+}
+
+/// Scrolling order history panel that shows recent order events.
+pub struct OrderHistoryPanel<'a> {
+    messages: &'a [String],
+}
+
+impl<'a> OrderHistoryPanel<'a> {
+    pub fn new(messages: &'a [String]) -> Self {
+        Self { messages }
+    }
+}
+
+impl Widget for OrderHistoryPanel<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .title(" Order History ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let inner_height = block.inner(area).height as usize;
+
+        let visible: Vec<Line> = self
+            .messages
+            .iter()
+            .rev()
+            .take(inner_height)
+            .rev()
+            .map(|msg| {
+                let color = if msg.contains("REJECTED") {
+                    Color::Red
+                } else if msg.contains("FILLED") {
+                    Color::Green
+                } else if msg.contains("SUBMITTED") {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                };
+                Line::from(Span::styled(msg.as_str(), Style::default().fg(color)))
+            })
+            .collect();
+
+        Paragraph::new(visible)
+            .block(block)
+            .wrap(Wrap { trim: true })
+            .render(area, buf);
     }
 }
 
@@ -314,11 +399,26 @@ impl Widget for KeybindBar {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let line = Line::from(vec![
             Span::styled(" [Q]", Style::default().fg(Color::Yellow)),
-            Span::styled("uit  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("uit ", Style::default().fg(Color::DarkGray)),
             Span::styled("[P]", Style::default().fg(Color::Yellow)),
-            Span::styled("ause  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("ause ", Style::default().fg(Color::DarkGray)),
             Span::styled("[R]", Style::default().fg(Color::Yellow)),
-            Span::styled("esume  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("esume ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[B]", Style::default().fg(Color::Green)),
+            Span::styled("uy ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[S]", Style::default().fg(Color::Red)),
+            Span::styled("ell ", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[1]", Style::default().fg(Color::Cyan)),
+            Span::styled("min ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[H]", Style::default().fg(Color::Cyan)),
+            Span::styled("our ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[D]", Style::default().fg(Color::Cyan)),
+            Span::styled("ay ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[W]", Style::default().fg(Color::Cyan)),
+            Span::styled("eek ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[M]", Style::default().fg(Color::Cyan)),
+            Span::styled("onth ", Style::default().fg(Color::DarkGray)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);

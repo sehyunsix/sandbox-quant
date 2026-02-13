@@ -17,12 +17,45 @@ use tokio::sync::{mpsc, watch};
 
 use crate::binance::rest::BinanceRestClient;
 use crate::binance::ws::BinanceWsClient;
-use crate::config::Config;
+use crate::config::{parse_interval_ms, Config};
 use crate::event::AppEvent;
 use crate::model::signal::Signal;
 use crate::order_manager::OrderManager;
 use crate::strategy::ma_crossover::MaCrossover;
 use crate::ui::AppState;
+
+fn switch_timeframe(
+    interval: &str,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+) {
+    let interval = interval.to_string();
+    let rest = rest_client.clone();
+    let symbol = config.binance.symbol.clone();
+    let limit = config.ui.price_history_len;
+    let tx = app_tx.clone();
+    let interval_ms = parse_interval_ms(&interval);
+    let iv = interval.clone();
+    tokio::spawn(async move {
+        match rest.get_klines(&symbol, &iv, limit).await {
+            Ok(candles) => {
+                let _ = tx
+                    .send(AppEvent::HistoricalCandles {
+                        candles,
+                        interval_ms,
+                        interval,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = tx
+                    .send(AppEvent::Error(format!("Kline fetch failed: {}", e)))
+                    .await;
+            }
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -68,7 +101,9 @@ async fn main() -> Result<()> {
     // Channels
     let (app_tx, mut app_rx) = mpsc::channel::<AppEvent>(256);
     let (tick_tx, mut tick_rx) = mpsc::channel::<model::tick::Tick>(256);
+    let (manual_order_tx, mut manual_order_rx) = mpsc::channel::<Signal>(16);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (strategy_enabled_tx, strategy_enabled_rx) = watch::channel(true);
 
     // REST client
     let rest_client = Arc::new(BinanceRestClient::new(
@@ -82,15 +117,15 @@ async fn main() -> Result<()> {
     let ping_app_tx = app_tx.clone();
     match rest_client.ping().await {
         Ok(()) => {
-            tracing::info!("Binance testnet ping OK");
+            tracing::info!("Binance demo ping OK");
             let _ = ping_app_tx
                 .send(AppEvent::LogMessage(
-                    "Binance testnet ping OK".to_string(),
+                    "Binance demo ping OK".to_string(),
                 ))
                 .await;
         }
         Err(e) => {
-            tracing::error!(error = %e, "Failed to ping Binance testnet");
+            tracing::error!(error = %e, "Failed to ping Binance demo");
             let _ = ping_app_tx
                 .send(AppEvent::LogMessage(format!(
                     "[ERR] Ping failed: {}",
@@ -101,7 +136,7 @@ async fn main() -> Result<()> {
     }
 
     // Fetch historical klines to pre-fill chart
-    let historical_prices = match rest_client
+    let historical_candles = match rest_client
         .get_klines(
             &config.binance.symbol,
             &config.binance.kline_interval,
@@ -109,15 +144,15 @@ async fn main() -> Result<()> {
         )
         .await
     {
-        Ok(prices) => {
-            tracing::info!(count = prices.len(), "Fetched historical klines");
+        Ok(candles) => {
+            tracing::info!(count = candles.len(), "Fetched historical klines");
             let _ = app_tx
                 .send(AppEvent::LogMessage(format!(
                     "Loaded {} historical klines",
-                    prices.len()
+                    candles.len()
                 )))
                 .await;
-            prices
+            candles
         }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to fetch klines, starting with empty chart");
@@ -159,34 +194,64 @@ async fn main() -> Result<()> {
     let strat_rest = rest_client.clone();
     let strat_config = config.clone();
     let mut strat_shutdown = shutdown_rx.clone();
-    let strat_historical = historical_prices.clone();
+    let strat_historical_closes: Vec<f64> = historical_candles.iter().map(|c| c.close).collect();
+    let strat_enabled_rx = strategy_enabled_rx;
     tokio::spawn(async move {
         let mut strategy = MaCrossover::new(
             strat_config.strategy.fast_period,
             strat_config.strategy.slow_period,
-            strat_config.strategy.order_qty,
             strat_config.strategy.min_ticks_between_signals,
         );
-        let mut order_mgr = OrderManager::new(strat_rest, &strat_config.binance.symbol);
+        let mut order_mgr = OrderManager::new(
+            strat_rest,
+            &strat_config.binance.symbol,
+            strat_config.strategy.order_amount_usdt,
+        );
+
+        // Fetch initial balances
+        match order_mgr.refresh_balances().await {
+            Ok(balances) => {
+                let usdt = balances.get("USDT").copied().unwrap_or(0.0);
+                let btc = balances.get("BTC").copied().unwrap_or(0.0);
+                let _ = strat_app_tx
+                    .send(AppEvent::LogMessage(format!(
+                        "Balances: {:.2} USDT, {:.5} BTC",
+                        usdt, btc
+                    )))
+                    .await;
+                let _ = strat_app_tx
+                    .send(AppEvent::BalanceUpdate(balances))
+                    .await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch initial balances");
+                let _ = strat_app_tx
+                    .send(AppEvent::LogMessage(format!(
+                        "[WARN] Balance fetch failed: {}",
+                        e
+                    )))
+                    .await;
+            }
+        }
 
         let _ = strat_app_tx
             .send(AppEvent::LogMessage(format!(
-                "Strategy: MA({}/{}) qty={} cooldown={}",
+                "Strategy: MA({}/{}) usdt={} cooldown={}",
                 strat_config.strategy.fast_period,
                 strat_config.strategy.slow_period,
-                strat_config.strategy.order_qty,
+                strat_config.strategy.order_amount_usdt,
                 strat_config.strategy.min_ticks_between_signals,
             )))
             .await;
 
-        // Warm up SMA indicators with historical kline prices (no orders)
-        for price in &strat_historical {
+        // Warm up SMA indicators with historical kline close prices (no orders)
+        for price in &strat_historical_closes {
             let tick = model::tick::Tick::from_price(*price);
             strategy.on_tick(&tick);
         }
-        if !strat_historical.is_empty() {
+        if !strat_historical_closes.is_empty() {
             tracing::info!(
-                count = strat_historical.len(),
+                count = strat_historical_closes.len(),
                 fast_sma = ?strategy.fast_sma_value(),
                 slow_sma = ?strategy.slow_sma_value(),
                 "SMA indicators warmed up from historical klines"
@@ -229,17 +294,25 @@ async fn main() -> Result<()> {
                     // Update unrealized PnL
                     order_mgr.update_unrealized_pnl(tick.price);
 
-                    if signal != Signal::Hold {
+                    // Only submit strategy orders when enabled
+                    let enabled = *strat_enabled_rx.borrow();
+                    if signal != Signal::Hold && enabled {
                         let _ = strat_app_tx
                             .send(AppEvent::StrategySignal(signal.clone()))
                             .await;
 
                         // Submit order
                         match order_mgr.submit_order(signal).await {
-                            Ok(Some(update)) => {
+                            Ok(Some(ref update)) => {
                                 let _ = strat_app_tx
-                                    .send(AppEvent::OrderUpdate(update))
+                                    .send(AppEvent::OrderUpdate(update.clone()))
                                     .await;
+                                // Send updated balances to UI after fill
+                                if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
+                                        .await;
+                                }
                             }
                             Ok(None) => {}
                             Err(e) => {
@@ -248,6 +321,32 @@ async fn main() -> Result<()> {
                                     .send(AppEvent::Error(e.to_string()))
                                     .await;
                             }
+                        }
+                    }
+                }
+                Some(signal) = manual_order_rx.recv() => {
+                    tracing::info!(signal = ?signal, "Manual order received");
+                    let _ = strat_app_tx
+                        .send(AppEvent::StrategySignal(signal.clone()))
+                        .await;
+
+                    match order_mgr.submit_order(signal).await {
+                        Ok(Some(ref update)) => {
+                            let _ = strat_app_tx
+                                .send(AppEvent::OrderUpdate(update.clone()))
+                                .await;
+                            if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
+                                let _ = strat_app_tx
+                                    .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
+                                    .await;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::error!(error = %e, "Manual order submission failed");
+                            let _ = strat_app_tx
+                                .send(AppEvent::Error(e.to_string()))
+                                .await;
                         }
                     }
                 }
@@ -269,19 +368,25 @@ async fn main() -> Result<()> {
 
     // TUI main loop
     let mut terminal = ratatui::init();
-    let mut app_state = AppState::new(&config.binance.symbol, config.ui.price_history_len);
+    let candle_interval_ms = config.binance.kline_interval_ms();
+    let mut app_state = AppState::new(
+        &config.binance.symbol,
+        config.ui.price_history_len,
+        candle_interval_ms,
+        &config.binance.kline_interval,
+    );
 
-    // Pre-fill chart with historical prices
-    if !historical_prices.is_empty() {
-        app_state.prices = historical_prices;
-        if app_state.prices.len() > app_state.price_history_len {
-            let excess = app_state.prices.len() - app_state.price_history_len;
-            app_state.prices.drain(..excess);
+    // Pre-fill chart with historical candles
+    if !historical_candles.is_empty() {
+        app_state.candles = historical_candles;
+        if app_state.candles.len() > app_state.price_history_len {
+            let excess = app_state.candles.len() - app_state.price_history_len;
+            app_state.candles.drain(..excess);
         }
     }
 
     app_state.push_log(format!(
-        "sandbox-quant started | {} | testnet",
+        "sandbox-quant started | {} | demo",
         config.binance.symbol
     ));
 
@@ -299,12 +404,44 @@ async fn main() -> Result<()> {
                         break;
                     }
                     KeyCode::Char('p') | KeyCode::Char('P') => {
-                        app_state.paused = true;
-                        app_state.push_log("Strategy PAUSED".to_string());
+                        if !app_state.paused {
+                            app_state.paused = true;
+                            let _ = strategy_enabled_tx.send(false);
+                            app_state.push_log("Strategy OFF".to_string());
+                        }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        app_state.paused = false;
-                        app_state.push_log("Strategy RESUMED".to_string());
+                        if app_state.paused {
+                            app_state.paused = false;
+                            let _ = strategy_enabled_tx.send(true);
+                            app_state.push_log("Strategy ON".to_string());
+                        }
+                    }
+                    KeyCode::Char('b') | KeyCode::Char('B') => {
+                        app_state.push_log(format!(
+                            "Manual BUY ({:.2} USDT)",
+                            config.strategy.order_amount_usdt
+                        ));
+                        let _ = manual_order_tx.try_send(Signal::Buy);
+                    }
+                    KeyCode::Char('s') | KeyCode::Char('S') => {
+                        app_state.push_log("Manual SELL (position)".to_string());
+                        let _ = manual_order_tx.try_send(Signal::Sell);
+                    }
+                    KeyCode::Char('1') => {
+                        switch_timeframe("1m", &rest_client, &config, &app_tx);
+                    }
+                    KeyCode::Char('h') | KeyCode::Char('H') => {
+                        switch_timeframe("1h", &rest_client, &config, &app_tx);
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D') => {
+                        switch_timeframe("1d", &rest_client, &config, &app_tx);
+                    }
+                    KeyCode::Char('w') | KeyCode::Char('W') => {
+                        switch_timeframe("1w", &rest_client, &config, &app_tx);
+                    }
+                    KeyCode::Char('m') | KeyCode::Char('M') => {
+                        switch_timeframe("1M", &rest_client, &config, &app_tx);
                     }
                     _ => {}
                 }

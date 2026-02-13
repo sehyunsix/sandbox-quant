@@ -5,9 +5,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use crate::error::AppError;
+use crate::model::candle::Candle;
 use crate::model::order::OrderSide;
 
-use super::types::{BinanceOrderResponse, ServerTimeResponse};
+use super::types::{AccountInfo, BinanceOrderResponse, ServerTimeResponse};
 
 pub struct BinanceRestClient {
     http: reqwest::Client,
@@ -35,10 +36,14 @@ impl BinanceRestClient {
 
     fn sign(&self, query: &str) -> String {
         let timestamp = chrono::Utc::now().timestamp_millis();
-        let full_query = format!(
-            "{}&recvWindow={}&timestamp={}",
-            query, self.recv_window, timestamp
-        );
+        let full_query = if query.is_empty() {
+            format!("recvWindow={}&timestamp={}", self.recv_window, timestamp)
+        } else {
+            format!(
+                "{}&recvWindow={}&timestamp={}",
+                query, self.recv_window, timestamp
+            )
+        };
         let mut mac =
             Hmac::<Sha256>::new_from_slice(self.secret_key.as_bytes()).expect("HMAC key error");
         mac.update(full_query.as_bytes());
@@ -81,6 +86,35 @@ impl BinanceRestClient {
             .json()
             .await?;
         Ok(resp.server_time)
+    }
+
+    pub async fn get_account(&self) -> Result<AccountInfo> {
+        self.check_rate_limit();
+
+        let signed = self.sign("");
+        let url = format!("{}/api/v3/account?{}", self.base_url, signed);
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await
+            .context("get_account HTTP failed")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!("Account request failed: {}", body));
+        }
+
+        Ok(resp.json().await?)
     }
 
     pub async fn place_market_order(
@@ -140,14 +174,14 @@ impl BinanceRestClient {
         Ok(order)
     }
 
-    /// Fetch historical kline (candlestick) close prices.
-    /// Returns `Vec<f64>` of close prices, oldest first.
+    /// Fetch historical kline (candlestick) OHLC data.
+    /// Returns `Vec<Candle>` oldest first.
     pub async fn get_klines(
         &self,
         symbol: &str,
         interval: &str,
         limit: usize,
-    ) -> Result<Vec<f64>> {
+    ) -> Result<Vec<Candle>> {
         self.check_rate_limit();
 
         let url = format!(
@@ -167,15 +201,18 @@ impl BinanceRestClient {
             .await
             .context("get_klines JSON parse failed")?;
 
-        let prices: Vec<f64> = resp
+        let candles: Vec<Candle> = resp
             .iter()
             .filter_map(|kline| {
-                // Index 4 is the close price (as string)
-                kline.get(4)?.as_str()?.parse::<f64>().ok()
+                let open = kline.get(1)?.as_str()?.parse::<f64>().ok()?;
+                let high = kline.get(2)?.as_str()?.parse::<f64>().ok()?;
+                let low = kline.get(3)?.as_str()?.parse::<f64>().ok()?;
+                let close = kline.get(4)?.as_str()?.parse::<f64>().ok()?;
+                Some(Candle { open, high, low, close })
             })
             .collect();
 
-        Ok(prices)
+        Ok(candles)
     }
 
     pub async fn cancel_order(

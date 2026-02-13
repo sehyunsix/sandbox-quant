@@ -1,6 +1,6 @@
 [binance]
-rest_base_url = "https://testnet.binance.vision"
-ws_base_url = "wss://stream.testnet.binance.vision/ws"
+rest_base_url = "https://demo-api.binance.com"
+ws_base_url = "wss://demo-stream.binance.com/ws"
 symbol = "BTCUSDT"
 recv_window = 5000
 kline_interval = "1m"
@@ -8,7 +8,7 @@ kline_interval = "1m"
 [strategy]
 fast_period = 10
 slow_period = 30
-order_qty = 0.001
+order_amount_usdt = 10.0
 min_ticks_between_signals = 50
 
 [ui]

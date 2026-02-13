@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use crate::model::candle::Candle;
 use crate::model::signal::Signal;
 use crate::model::tick::Tick;
 use crate::order_manager::OrderUpdate;
@@ -19,6 +22,12 @@ pub enum AppEvent {
     },
     OrderUpdate(OrderUpdate),
     WsStatus(WsConnectionStatus),
+    HistoricalCandles {
+        candles: Vec<Candle>,
+        interval_ms: u64,
+        interval: String,
+    },
+    BalanceUpdate(HashMap<String, f64>),
     LogMessage(String),
     Error(String),
 }

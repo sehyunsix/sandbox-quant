@@ -27,7 +27,7 @@ pub struct BinanceConfig {
 pub struct StrategyConfig {
     pub fast_period: usize,
     pub slow_period: usize,
-    pub order_qty: f64,
+    pub order_amount_usdt: f64,
     pub min_ticks_between_signals: u64,
 }
 
@@ -40,6 +40,27 @@ pub struct UiConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoggingConfig {
     pub level: String,
+}
+
+/// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.
+pub fn parse_interval_ms(s: &str) -> u64 {
+    let (num_str, suffix) = s.split_at(s.len() - 1);
+    let n: u64 = num_str.parse().unwrap_or(1);
+    match suffix {
+        "s" => n * 1_000,
+        "m" => n * 60_000,
+        "h" => n * 3_600_000,
+        "d" => n * 86_400_000,
+        "w" => n * 7 * 86_400_000,
+        "M" => n * 30 * 86_400_000,
+        _ => n * 60_000,
+    }
+}
+
+impl BinanceConfig {
+    pub fn kline_interval_ms(&self) -> u64 {
+        parse_interval_ms(&self.kline_interval)
+    }
 }
 
 impl Config {
@@ -70,8 +91,8 @@ mod tests {
     fn parse_default_toml() {
         let toml_str = r#"
 [binance]
-rest_base_url = "https://testnet.binance.vision"
-ws_base_url = "wss://testnet.binance.vision/ws"
+rest_base_url = "https://demo-api.binance.com"
+ws_base_url = "wss://demo-stream.binance.com/ws"
 symbol = "BTCUSDT"
 recv_window = 5000
 kline_interval = "1m"
@@ -79,7 +100,7 @@ kline_interval = "1m"
 [strategy]
 fast_period = 10
 slow_period = 30
-order_qty = 0.001
+order_amount_usdt = 10.0
 min_ticks_between_signals = 50
 
 [ui]
@@ -93,7 +114,7 @@ level = "debug"
         assert_eq!(config.binance.symbol, "BTCUSDT");
         assert_eq!(config.strategy.fast_period, 10);
         assert_eq!(config.strategy.slow_period, 30);
-        assert!((config.strategy.order_qty - 0.001).abs() < f64::EPSILON);
+        assert!((config.strategy.order_amount_usdt - 10.0).abs() < f64::EPSILON);
         assert_eq!(config.ui.price_history_len, 120);
     }
 }
