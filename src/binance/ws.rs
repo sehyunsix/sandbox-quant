@@ -143,13 +143,19 @@ impl BinanceWsClient {
             .send(AppEvent::LogMessage(format!("Connecting to {}", self.url)))
             .await;
 
-        let (ws_stream, resp) = tokio_tungstenite::connect_async(&self.url)
-            .await
-            .map_err(|e| {
+        let (ws_stream, resp) = match tokio_tungstenite::connect_async(&self.url).await {
+            Ok(v) => v,
+            Err(e) => {
                 let detail = format_ws_error(&e);
-                let _ = status_tx.try_send(AppEvent::LogMessage(detail.clone()));
-                anyhow::anyhow!("WebSocket connect failed: {}", detail)
-            })?;
+                let _ = status_tx
+                    .send(AppEvent::LogMessage(format!(
+                        "WS connect error: {}",
+                        detail
+                    )))
+                    .await;
+                return Err(anyhow::anyhow!("WebSocket connect failed: {}", detail));
+            }
+        };
 
         tracing::debug!(status = %resp.status(), "WebSocket HTTP upgrade response");
 
