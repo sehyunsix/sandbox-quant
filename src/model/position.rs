@@ -1,5 +1,12 @@
 use super::order::{Fill, OrderSide};
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FillApplicationSummary {
+    pub winning_closes: u32,
+    pub losing_closes: u32,
+    pub realized_pnl_delta: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Position {
     pub symbol: String,
@@ -32,7 +39,8 @@ impl Position {
         self.side.is_none() || self.qty <= 0.0
     }
 
-    pub fn apply_fill(&mut self, side: OrderSide, fills: &[Fill]) {
+    pub fn apply_fill(&mut self, side: OrderSide, fills: &[Fill]) -> FillApplicationSummary {
+        let mut summary = FillApplicationSummary::default();
         for fill in fills {
             match (self.side, side) {
                 // Opening a new position
@@ -56,10 +64,13 @@ impl Position {
                         None => 0.0,
                     };
                     self.realized_pnl += pnl;
+                    summary.realized_pnl_delta += pnl;
                     if pnl > 0.0 {
                         self.winning_trade_count += 1;
+                        summary.winning_closes += 1;
                     } else if pnl < 0.0 {
                         self.losing_trade_count += 1;
+                        summary.losing_closes += 1;
                     }
                     self.qty -= close_qty;
                     if self.qty <= f64::EPSILON {
@@ -71,6 +82,7 @@ impl Position {
             }
         }
         self.trade_count += 1;
+        summary
     }
 
     pub fn update_unrealized_pnl(&mut self, current_price: f64) {

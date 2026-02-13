@@ -21,6 +21,8 @@ pub struct PriceChart<'a> {
     fill_markers: &'a [FillMarker],
     fast_sma: Option<f64>,
     slow_sma: Option<f64>,
+    fast_sma_period: Option<usize>,
+    slow_sma_period: Option<usize>,
     symbol: &'a str,
 }
 
@@ -32,6 +34,8 @@ impl<'a> PriceChart<'a> {
             fill_markers: &[],
             fast_sma: None,
             slow_sma: None,
+            fast_sma_period: None,
+            slow_sma_period: None,
             symbol,
         }
     }
@@ -53,6 +57,12 @@ impl<'a> PriceChart<'a> {
 
     pub fn fill_markers(mut self, val: &'a [FillMarker]) -> Self {
         self.fill_markers = val;
+        self
+    }
+
+    pub fn sma_periods(mut self, fast: usize, slow: usize) -> Self {
+        self.fast_sma_period = Some(fast);
+        self.slow_sma_period = Some(slow);
         self
     }
 }

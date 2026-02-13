@@ -303,14 +303,12 @@ impl AlpacaRestClient {
             let high = bar.get("h").and_then(Value::as_f64).unwrap_or(open);
             let low = bar.get("l").and_then(Value::as_f64).unwrap_or(open);
             let close = bar.get("c").and_then(Value::as_f64).unwrap_or(open);
-            let volume = bar.get("v").and_then(Value::as_f64).unwrap_or(0.0);
             let close_time = open_time.saturating_add(interval_to_ms(interval));
             candles.push(Candle {
                 open,
                 high,
                 low,
                 close,
-                volume,
                 open_time,
                 close_time,
             });

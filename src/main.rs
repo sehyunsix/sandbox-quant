@@ -1702,7 +1702,7 @@ mod tests {
             30,
         );
         app_state.paused = false;
-        app_state.current_candle = Some(CandleBuilder::new(100.0, 0.1, 60_000, 60_000));
+        app_state.current_candle = Some(CandleBuilder::new(100.0, 60_000, 60_000));
         app_state.fill_markers.push(FillMarker {
             candle_index: 0,
             price: 100.0,

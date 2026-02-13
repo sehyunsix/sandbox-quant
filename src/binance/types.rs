@@ -110,6 +110,20 @@ pub struct BinanceAllOrder {
     pub update_time: u64,
 }
 
+/// Binance my trades response item (GET /api/v3/myTrades).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceMyTrade {
+    pub order_id: u64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub price: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub qty: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub commission: f64,
+    pub commission_asset: String,
+}
+
 /// Binance API error response.
 #[derive(Debug, Deserialize)]
 pub struct BinanceApiErrorResponse {

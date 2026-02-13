@@ -296,15 +296,11 @@ impl AppState {
                     }
                     self.current_candle = Some(CandleBuilder::new(
                         tick.price,
-                        tick.qty,
                         tick.timestamp_ms,
                         self.candle_interval_ms,
                     ));
                 } else {
-                    self.current_candle
-                        .as_mut()
-                        .unwrap()
-                        .update(tick.price, tick.qty);
+                    self.current_candle.as_mut().unwrap().update(tick.price);
                 }
 
                 self.position.update_unrealized_pnl(tick.price);

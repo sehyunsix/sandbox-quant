@@ -9,7 +9,9 @@ use crate::error::AppError;
 use crate::model::candle::Candle;
 use crate::model::order::OrderSide;
 
-use super::types::{AccountInfo, BinanceAllOrder, BinanceOrderResponse, ServerTimeResponse};
+use super::types::{
+    AccountInfo, BinanceAllOrder, BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
+};
 
 pub struct BinanceRestClient {
     http: reqwest::Client,
@@ -341,6 +343,38 @@ impl BinanceRestClient {
         }
 
         Ok(all_orders)
+    }
+
+    /// Fetch recent trades for a symbol (up to `page_size`, max 1000).
+    pub async fn get_my_trades(&self, symbol: &str, page_size: usize) -> Result<Vec<BinanceMyTrade>> {
+        self.check_rate_limit();
+
+        let limit = page_size.clamp(1, 1000);
+        let query = format!("symbol={}&limit={}", symbol, limit);
+        let signed = self.sign(&query);
+        let url = format!("{}/api/v3/myTrades?{}", self.base_url, signed);
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await
+            .context("get_my_trades HTTP failed")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!("My trades request failed: {}", body));
+        }
+
+        Ok(resp.json().await?)
     }
 }
 
