@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
@@ -73,6 +74,26 @@ fn switch_timeframe(
             }
         }
     });
+}
+
+fn enqueue_manual_order(
+    app_state: &mut AppState,
+    manual_order_tx: &mpsc::Sender<Signal>,
+    signal: Signal,
+    success_msg: &str,
+    action: &str,
+) {
+    match manual_order_tx.try_send(signal) {
+        Ok(()) => app_state.push_log(success_msg.to_string()),
+        Err(TrySendError::Full(_)) => app_state.push_log(format!(
+            "[WARN] Manual {} dropped: order queue is full",
+            action
+        )),
+        Err(TrySendError::Closed(_)) => app_state.push_log(format!(
+            "[ERR] Manual {} failed: order queue is closed",
+            action
+        )),
+    }
 }
 
 #[tokio::main]
@@ -477,19 +498,26 @@ async fn main() -> Result<()> {
                         }
                     }
                     KeyCode::Char('b') | KeyCode::Char('B') => {
-                        app_state.push_log(format!(
-                            "Manual BUY ({:.2} USDT)",
-                            config.strategy.order_amount_usdt
-                        ));
-                        let _ = manual_order_tx.try_send(Signal::Buy {
-                            trace_id: Uuid::new_v4(),
-                        });
+                        enqueue_manual_order(
+                            &mut app_state,
+                            &manual_order_tx,
+                            Signal::Buy {
+                                trace_id: Uuid::new_v4(),
+                            },
+                            &format!("Manual BUY ({:.2} USDT)", config.strategy.order_amount_usdt),
+                            "BUY",
+                        );
                     }
                     KeyCode::Char('s') | KeyCode::Char('S') => {
-                        app_state.push_log("Manual SELL (position)".to_string());
-                        let _ = manual_order_tx.try_send(Signal::Sell {
-                            trace_id: Uuid::new_v4(),
-                        });
+                        enqueue_manual_order(
+                            &mut app_state,
+                            &manual_order_tx,
+                            Signal::Sell {
+                                trace_id: Uuid::new_v4(),
+                            },
+                            "Manual SELL (position)",
+                            "SELL",
+                        );
                     }
                     KeyCode::Char('1') => {
                         switch_timeframe("1m", &rest_client, &config, &app_tx);
