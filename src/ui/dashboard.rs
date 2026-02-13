@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
@@ -302,12 +302,16 @@ impl Widget for StatusBar<'_> {
 
 /// Scrolling order history panel that shows recent order events.
 pub struct OrderHistoryPanel<'a> {
-    messages: &'a [String],
+    open_messages: &'a [String],
+    filled_messages: &'a [String],
 }
 
 impl<'a> OrderHistoryPanel<'a> {
-    pub fn new(messages: &'a [String]) -> Self {
-        Self { messages }
+    pub fn new(open_messages: &'a [String], filled_messages: &'a [String]) -> Self {
+        Self {
+            open_messages,
+            filled_messages,
+        }
     }
 }
 
@@ -317,32 +321,47 @@ impl Widget for OrderHistoryPanel<'_> {
             .title(" Order History ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
-        let inner_height = block.inner(area).height as usize;
+        let inner = block.inner(area);
+        block.render(area, buf);
 
-        let visible: Vec<Line> = self
-            .messages
-            .iter()
-            .rev()
-            .take(inner_height)
-            .rev()
-            .map(|msg| {
-                let color = if msg.contains("REJECTED") {
-                    Color::Red
-                } else if msg.contains("FILLED") {
-                    Color::Green
-                } else if msg.contains("SUBMITTED") {
-                    Color::Cyan
-                } else {
-                    Color::DarkGray
-                };
-                Line::from(Span::styled(msg.as_str(), Style::default().fg(color)))
-            })
-            .collect();
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(inner);
 
-        Paragraph::new(visible)
-            .block(block)
-            .wrap(Wrap { trim: true })
-            .render(area, buf);
+        let render_list = |title: &str, messages: &[String], area: Rect, buf: &mut Buffer| {
+            let sub_block = Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray));
+            let inner_height = sub_block.inner(area).height as usize;
+            let visible: Vec<Line> = messages
+                .iter()
+                .rev()
+                .take(inner_height)
+                .rev()
+                .map(|msg| {
+                    let color = if msg.contains("REJECTED") {
+                        Color::Red
+                    } else if msg.contains("FILLED") {
+                        Color::Green
+                    } else if msg.contains("SUBMITTED") || msg.contains("PARTIALLY_FILLED") {
+                        Color::Cyan
+                    } else {
+                        Color::DarkGray
+                    };
+                    Line::from(Span::styled(msg.as_str(), Style::default().fg(color)))
+                })
+                .collect();
+
+            Paragraph::new(visible)
+                .block(sub_block)
+                .wrap(Wrap { trim: true })
+                .render(area, buf);
+        };
+
+        render_list(" Open ", self.open_messages, cols[0], buf);
+        render_list(" Filled ", self.filled_messages, cols[1], buf);
     }
 }
 
