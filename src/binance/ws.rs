@@ -66,11 +66,8 @@ impl BinanceWsClient {
         status_tx: mpsc::Sender<AppEvent>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            2.0,
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 2.0);
         let mut attempt: u32 = 0;
 
         loop {
@@ -128,13 +125,13 @@ impl BinanceWsClient {
             .send(AppEvent::LogMessage(format!("Connecting to {}", self.url)))
             .await;
 
-        let (ws_stream, resp) = tokio_tungstenite::connect_async(&self.url).await.map_err(
-            |e| {
+        let (ws_stream, resp) = tokio_tungstenite::connect_async(&self.url)
+            .await
+            .map_err(|e| {
                 let detail = format_ws_error(&e);
                 let _ = status_tx.try_send(AppEvent::LogMessage(detail.clone()));
                 anyhow::anyhow!("WebSocket connect failed: {}", detail)
-            },
-        )?;
+            })?;
 
         tracing::debug!(status = %resp.status(), "WebSocket HTTP upgrade response");
 
@@ -273,11 +270,7 @@ fn format_ws_error(err: &WsError) -> String {
         WsError::ConnectionClosed => "Connection closed normally".to_string(),
         WsError::AlreadyClosed => "Attempted operation on already-closed connection".to_string(),
         WsError::Io(io_err) => {
-            format!(
-                "IO error [kind={}]: {}",
-                io_err.kind(),
-                io_err
-            )
+            format!("IO error [kind={}]: {}", io_err.kind(), io_err)
         }
         WsError::Tls(tls_err) => format!("TLS error: {}", tls_err),
         WsError::Capacity(cap_err) => format!("Capacity error: {}", cap_err),
@@ -305,7 +298,10 @@ fn format_ws_error(err: &WsError) -> String {
                 UrlError::TlsFeatureNotEnabled => "TLS feature not compiled in",
                 UrlError::NoHostName => "no host name in URL",
                 UrlError::UnableToConnect(addr) => {
-                    return format!("URL error: unable to connect to {} (DNS/network failure?)", addr);
+                    return format!(
+                        "URL error: unable to connect to {} (DNS/network failure?)",
+                        addr
+                    );
                 }
                 UrlError::UnsupportedUrlScheme => "only ws:// or wss:// are supported",
                 UrlError::EmptyHostName => "empty host name in URL",
