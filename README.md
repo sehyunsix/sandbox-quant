@@ -168,15 +168,16 @@ cargo test -- --ignored
 
 See [TESTING.md](TESTING.md) for the full testing plan.
 
-## Automation (Every 10 Minutes)
+## Automation (Hourly)
 
 This repository includes a scheduled GitHub Actions workflow:
 
 - `.github/workflows/periodic-maintenance.yml`
 
-What it does every 10 minutes:
+What it does every hour:
 
 - Runs `cargo fmt --all` and opens a PR if formatting changes are found
+- Bumps crate patch version in `Cargo.toml` (e.g. `0.1.0` -> `0.1.1`)
 - Runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - Runs `cargo test --workspace --all-targets --all-features`
 - Opens (or updates) a health-check issue when clippy/tests fail
