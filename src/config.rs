@@ -16,6 +16,7 @@ pub struct BinanceConfig {
     pub ws_base_url: String,
     pub symbol: String,
     pub recv_window: u64,
+    pub kline_interval: String,
     #[serde(skip)]
     pub api_key: String,
     #[serde(skip)]
@@ -73,6 +74,7 @@ rest_base_url = "https://testnet.binance.vision"
 ws_base_url = "wss://testnet.binance.vision/ws"
 symbol = "BTCUSDT"
 recv_window = 5000
+kline_interval = "1m"
 
 [strategy]
 fast_period = 10

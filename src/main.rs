@@ -100,6 +100,37 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Fetch historical klines to pre-fill chart
+    let historical_prices = match rest_client
+        .get_klines(
+            &config.binance.symbol,
+            &config.binance.kline_interval,
+            config.ui.price_history_len,
+        )
+        .await
+    {
+        Ok(prices) => {
+            tracing::info!(count = prices.len(), "Fetched historical klines");
+            let _ = app_tx
+                .send(AppEvent::LogMessage(format!(
+                    "Loaded {} historical klines",
+                    prices.len()
+                )))
+                .await;
+            prices
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to fetch klines, starting with empty chart");
+            let _ = app_tx
+                .send(AppEvent::LogMessage(format!(
+                    "[WARN] Kline fetch failed: {}",
+                    e
+                )))
+                .await;
+            Vec::new()
+        }
+    };
+
     // Spawn WebSocket task
     let ws_streams = vec![format!("{}@trade", config.binance.symbol.to_lowercase())];
     let ws_client = BinanceWsClient::new(&config.binance.ws_base_url, ws_streams);
@@ -128,6 +159,7 @@ async fn main() -> Result<()> {
     let strat_rest = rest_client.clone();
     let strat_config = config.clone();
     let mut strat_shutdown = shutdown_rx.clone();
+    let strat_historical = historical_prices.clone();
     tokio::spawn(async move {
         let mut strategy = MaCrossover::new(
             strat_config.strategy.fast_period,
@@ -146,6 +178,26 @@ async fn main() -> Result<()> {
                 strat_config.strategy.min_ticks_between_signals,
             )))
             .await;
+
+        // Warm up SMA indicators with historical kline prices (no orders)
+        for price in &strat_historical {
+            let tick = model::tick::Tick::from_price(*price);
+            strategy.on_tick(&tick);
+        }
+        if !strat_historical.is_empty() {
+            tracing::info!(
+                count = strat_historical.len(),
+                fast_sma = ?strategy.fast_sma_value(),
+                slow_sma = ?strategy.slow_sma_value(),
+                "SMA indicators warmed up from historical klines"
+            );
+            let _ = strat_app_tx
+                .send(AppEvent::StrategyState {
+                    fast_sma: strategy.fast_sma_value(),
+                    slow_sma: strategy.slow_sma_value(),
+                })
+                .await;
+        }
 
         loop {
             tokio::select! {
@@ -218,6 +270,16 @@ async fn main() -> Result<()> {
     // TUI main loop
     let mut terminal = ratatui::init();
     let mut app_state = AppState::new(&config.binance.symbol, config.ui.price_history_len);
+
+    // Pre-fill chart with historical prices
+    if !historical_prices.is_empty() {
+        app_state.prices = historical_prices;
+        if app_state.prices.len() > app_state.price_history_len {
+            let excess = app_state.prices.len() - app_state.price_history_len;
+            app_state.prices.drain(..excess);
+        }
+    }
+
     app_state.push_log(format!(
         "sandbox-quant started | {} | testnet",
         config.binance.symbol

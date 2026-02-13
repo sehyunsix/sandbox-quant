@@ -140,6 +140,44 @@ impl BinanceRestClient {
         Ok(order)
     }
 
+    /// Fetch historical kline (candlestick) close prices.
+    /// Returns `Vec<f64>` of close prices, oldest first.
+    pub async fn get_klines(
+        &self,
+        symbol: &str,
+        interval: &str,
+        limit: usize,
+    ) -> Result<Vec<f64>> {
+        self.check_rate_limit();
+
+        let url = format!(
+            "{}/api/v3/klines?symbol={}&interval={}&limit={}",
+            self.base_url, symbol, interval, limit,
+        );
+
+        let resp: Vec<Vec<serde_json::Value>> = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("get_klines HTTP failed")?
+            .error_for_status()
+            .context("get_klines returned error status")?
+            .json()
+            .await
+            .context("get_klines JSON parse failed")?;
+
+        let prices: Vec<f64> = resp
+            .iter()
+            .filter_map(|kline| {
+                // Index 4 is the close price (as string)
+                kline.get(4)?.as_str()?.parse::<f64>().ok()
+            })
+            .collect();
+
+        Ok(prices)
+    }
+
     pub async fn cancel_order(
         &self,
         symbol: &str,
