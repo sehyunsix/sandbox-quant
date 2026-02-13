@@ -46,11 +46,7 @@ fn display_qty_for_history(status: &str, orig_qty: f64, executed_qty: f64) -> f6
 }
 
 impl OrderManager {
-    pub fn new(
-        rest_client: Arc<BinanceRestClient>,
-        symbol: &str,
-        order_amount_usdt: f64,
-    ) -> Self {
+    pub fn new(rest_client: Arc<BinanceRestClient>, symbol: &str, order_amount_usdt: f64) -> Self {
         Self {
             rest_client,
             active_orders: HashMap::new(),
@@ -195,10 +191,7 @@ impl OrderManager {
                 if btc_free < qty {
                     return Ok(Some(OrderUpdate::Rejected {
                         client_order_id: "n/a".to_string(),
-                        reason: format!(
-                            "Insufficient BTC: need {:.5}, have {:.5}",
-                            qty, btc_free
-                        ),
+                        reason: format!("Insufficient BTC: need {:.5}, have {:.5}", qty, btc_free),
                     }));
                 }
             }
@@ -220,8 +213,7 @@ impl OrderManager {
             fills: vec![],
         };
 
-        self.active_orders
-            .insert(client_order_id.clone(), order);
+        self.active_orders.insert(client_order_id.clone(), order);
 
         tracing::info!(
             side = %side,
@@ -355,14 +347,8 @@ mod tests {
 
     #[test]
     fn from_binance_str_mapping() {
-        assert_eq!(
-            OrderStatus::from_binance_str("NEW"),
-            OrderStatus::Submitted
-        );
-        assert_eq!(
-            OrderStatus::from_binance_str("FILLED"),
-            OrderStatus::Filled
-        );
+        assert_eq!(OrderStatus::from_binance_str("NEW"), OrderStatus::Submitted);
+        assert_eq!(OrderStatus::from_binance_str("FILLED"), OrderStatus::Filled);
         assert_eq!(
             OrderStatus::from_binance_str("CANCELED"),
             OrderStatus::Cancelled
@@ -384,9 +370,7 @@ mod tests {
     #[test]
     fn order_history_uses_executed_qty_for_filled_states() {
         assert!((display_qty_for_history("FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON);
-        assert!(
-            (display_qty_for_history("PARTIALLY_FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON
-        );
+        assert!((display_qty_for_history("PARTIALLY_FILLED", 1.0, 0.4) - 0.4).abs() < f64::EPSILON);
     }
 
     #[test]
