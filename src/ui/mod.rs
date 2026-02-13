@@ -28,7 +28,8 @@ pub struct AppState {
     pub position: Position,
     pub last_signal: Option<Signal>,
     pub last_order: Option<OrderUpdate>,
-    pub order_history: Vec<String>,
+    pub open_order_history: Vec<String>,
+    pub filled_order_history: Vec<String>,
     pub fast_sma: Option<f64>,
     pub slow_sma: Option<f64>,
     pub ws_connected: bool,
@@ -56,7 +57,8 @@ impl AppState {
             position: Position::new(symbol.to_string()),
             last_signal: None,
             last_order: None,
-            order_history: Vec::new(),
+            open_order_history: Vec::new(),
+            filled_order_history: Vec::new(),
             fast_sma: None,
             slow_sma: None,
             ws_connected: false,
@@ -222,11 +224,29 @@ impl AppState {
                 self.balances = balances;
             }
             AppEvent::OrderHistoryUpdate(history) => {
-                self.order_history = history;
-                if self.order_history.len() > MAX_LOG_MESSAGES {
-                    let excess = self.order_history.len() - MAX_LOG_MESSAGES;
-                    self.order_history.drain(..excess);
+                let mut open = Vec::new();
+                let mut filled = Vec::new();
+
+                for row in history {
+                    let status = row.split_whitespace().nth(1).unwrap_or_default();
+                    if status == "FILLED" {
+                        filled.push(row);
+                    } else {
+                        open.push(row);
+                    }
                 }
+
+                if open.len() > MAX_LOG_MESSAGES {
+                    let excess = open.len() - MAX_LOG_MESSAGES;
+                    open.drain(..excess);
+                }
+                if filled.len() > MAX_LOG_MESSAGES {
+                    let excess = filled.len() - MAX_LOG_MESSAGES;
+                    filled.drain(..excess);
+                }
+
+                self.open_order_history = open;
+                self.filled_order_history = filled;
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -298,7 +318,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     );
 
     // Order history panel
-    frame.render_widget(OrderHistoryPanel::new(&state.order_history), outer[3]);
+    frame.render_widget(
+        OrderHistoryPanel::new(&state.open_order_history, &state.filled_order_history),
+        outer[3],
+    );
 
     // System log panel
     frame.render_widget(LogPanel::new(&state.log_messages), outer[4]);
