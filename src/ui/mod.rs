@@ -3,8 +3,8 @@ pub mod dashboard;
 
 use std::collections::HashMap;
 
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::Frame;
 
 use crate::event::{AppEvent, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
@@ -12,12 +12,11 @@ use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_manager::OrderUpdate;
 
-use chart::PriceChart;
-use dashboard::{
-    KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar,
-};
+use chart::{FillMarker, PriceChart};
+use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
 
 const MAX_LOG_MESSAGES: usize = 200;
+const MAX_FILL_MARKERS: usize = 200;
 
 pub struct AppState {
     pub symbol: String,
@@ -37,10 +36,16 @@ pub struct AppState {
     pub tick_count: u64,
     pub log_messages: Vec<String>,
     pub balances: HashMap<String, f64>,
+    pub fill_markers: Vec<FillMarker>,
 }
 
 impl AppState {
-    pub fn new(symbol: &str, price_history_len: usize, candle_interval_ms: u64, timeframe: &str) -> Self {
+    pub fn new(
+        symbol: &str,
+        price_history_len: usize,
+        candle_interval_ms: u64,
+        timeframe: &str,
+    ) -> Self {
         Self {
             symbol: symbol.to_string(),
             candles: Vec::with_capacity(price_history_len),
@@ -59,6 +64,7 @@ impl AppState {
             tick_count: 0,
             log_messages: Vec::new(),
             balances: HashMap::new(),
+            fill_markers: Vec::new(),
         }
     }
 
@@ -92,6 +98,15 @@ impl AppState {
                         self.candles.push(cb.finish());
                         if self.candles.len() > self.price_history_len {
                             self.candles.remove(0);
+                            // Shift marker indices when oldest candle is trimmed.
+                            self.fill_markers.retain_mut(|m| {
+                                if m.candle_index == 0 {
+                                    false
+                                } else {
+                                    m.candle_index -= 1;
+                                    true
+                                }
+                            });
                         }
                     }
                     self.current_candle = Some(CandleBuilder::new(
@@ -122,7 +137,6 @@ impl AppState {
                 self.slow_sma = slow_sma;
             }
             AppEvent::OrderUpdate(ref update) => {
-                let now = chrono::Local::now().format("%H:%M:%S");
                 match update {
                     OrderUpdate::Filled {
                         client_order_id,
@@ -130,12 +144,20 @@ impl AppState {
                         fills,
                         avg_price,
                     } => {
-                        let total_qty: f64 = fills.iter().map(|f| f.qty).sum();
                         self.position.apply_fill(*side, fills);
-                        self.order_history.push(format!(
-                            "{} FILLED {} {:.5} @ {:.2}  {}",
-                            now, side, total_qty, avg_price, client_order_id
-                        ));
+                        let candle_index = if self.current_candle.is_some() {
+                            self.candles.len()
+                        } else {
+                            self.candles.len().saturating_sub(1)
+                        };
+                        self.fill_markers.push(FillMarker {
+                            candle_index,
+                            price: *avg_price,
+                            side: *side,
+                        });
+                        if self.fill_markers.len() > MAX_FILL_MARKERS {
+                            self.fill_markers.remove(0);
+                        }
                         self.push_log(format!(
                             "FILLED {} {} @ {:.2}",
                             side, client_order_id, avg_price
@@ -145,10 +167,6 @@ impl AppState {
                         client_order_id,
                         server_order_id,
                     } => {
-                        self.order_history.push(format!(
-                            "{} SUBMITTED  {}  (id: {})",
-                            now, client_order_id, server_order_id
-                        ));
                         self.push_log(format!(
                             "Submitted {} (id: {})",
                             client_order_id, server_order_id
@@ -158,40 +176,28 @@ impl AppState {
                         client_order_id,
                         reason,
                     } => {
-                        self.order_history.push(format!(
-                            "{} REJECTED  {}  {}",
-                            now, client_order_id, reason
-                        ));
-                        self.push_log(format!(
-                            "[ERR] Rejected {}: {}",
-                            client_order_id, reason
-                        ));
+                        self.push_log(format!("[ERR] Rejected {}: {}", client_order_id, reason));
                     }
-                }
-                if self.order_history.len() > MAX_LOG_MESSAGES {
-                    self.order_history.remove(0);
                 }
                 self.last_order = Some(update.clone());
             }
-            AppEvent::WsStatus(ref status) => {
-                match status {
-                    WsConnectionStatus::Connected => {
-                        self.ws_connected = true;
-                        self.push_log("WebSocket Connected".to_string());
-                    }
-                    WsConnectionStatus::Disconnected => {
-                        self.ws_connected = false;
-                        self.push_log("[WARN] WebSocket Disconnected".to_string());
-                    }
-                    WsConnectionStatus::Reconnecting { attempt, delay_ms } => {
-                        self.ws_connected = false;
-                        self.push_log(format!(
-                            "[WARN] Reconnecting (attempt {}, wait {}ms)",
-                            attempt, delay_ms
-                        ));
-                    }
+            AppEvent::WsStatus(ref status) => match status {
+                WsConnectionStatus::Connected => {
+                    self.ws_connected = true;
+                    self.push_log("WebSocket Connected".to_string());
                 }
-            }
+                WsConnectionStatus::Disconnected => {
+                    self.ws_connected = false;
+                    self.push_log("[WARN] WebSocket Disconnected".to_string());
+                }
+                WsConnectionStatus::Reconnecting { attempt, delay_ms } => {
+                    self.ws_connected = false;
+                    self.push_log(format!(
+                        "[WARN] Reconnecting (attempt {}, wait {}ms)",
+                        attempt, delay_ms
+                    ));
+                }
+            },
             AppEvent::HistoricalCandles {
                 candles,
                 interval_ms,
@@ -205,6 +211,7 @@ impl AppState {
                 self.candle_interval_ms = interval_ms;
                 self.timeframe = interval;
                 self.current_candle = None;
+                self.fill_markers.clear();
                 self.push_log(format!(
                     "Switched to {} ({} candles)",
                     self.timeframe,
@@ -213,6 +220,13 @@ impl AppState {
             }
             AppEvent::BalanceUpdate(balances) => {
                 self.balances = balances;
+            }
+            AppEvent::OrderHistoryUpdate(history) => {
+                self.order_history = history;
+                if self.order_history.len() > MAX_LOG_MESSAGES {
+                    let excess = self.order_history.len() - MAX_LOG_MESSAGES;
+                    self.order_history.drain(..excess);
+                }
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -228,12 +242,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // status bar
-            Constraint::Min(8),     // main area (chart + position)
-            Constraint::Length(5),  // order log
-            Constraint::Length(6),  // order history
-            Constraint::Length(8),  // system log
-            Constraint::Length(1),  // keybinds
+            Constraint::Length(1), // status bar
+            Constraint::Min(8),    // main area (chart + position)
+            Constraint::Length(5), // order log
+            Constraint::Length(6), // order history
+            Constraint::Length(8), // system log
+            Constraint::Length(1), // keybinds
         ])
         .split(frame.area());
 
@@ -260,6 +274,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     frame.render_widget(
         PriceChart::new(&state.candles, &state.symbol)
             .current_candle(state.current_candle.as_ref())
+            .fill_markers(&state.fill_markers)
             .fast_sma(state.fast_sma)
             .slow_sma(state.slow_sma),
         main_area[0],
