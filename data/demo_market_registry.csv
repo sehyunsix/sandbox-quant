@@ -1,2 +1,3 @@
 exchange,environment,asset_class,product,api_base_url,notes
 Binance,Spot Testnet,Crypto,BTCUSDT spot,https://testnet.binance.vision,existing integration baseline
+Alpaca,Paper,Equity,AAPL paper trading,https://paper-api.alpaca.markets,stock demo venue
