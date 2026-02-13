@@ -175,8 +175,8 @@ impl<'a> OrderLogPanel<'a> {
 impl Widget for OrderLogPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let signal_str = match self.last_signal {
-            Some(Signal::Buy) => "BUY".to_string(),
-            Some(Signal::Sell) => "SELL".to_string(),
+            Some(Signal::Buy { .. }) => "BUY".to_string(),
+            Some(Signal::Sell { .. }) => "SELL".to_string(),
             Some(Signal::Hold) | None => "---".to_string(),
         };
 
