@@ -167,3 +167,51 @@ cargo test -- --ignored
 ```
 
 See [TESTING.md](TESTING.md) for the full testing plan.
+
+## Automation (Every 10 Minutes)
+
+This repository includes a scheduled GitHub Actions workflow:
+
+- `.github/workflows/periodic-maintenance.yml`
+
+What it does every 10 minutes:
+
+- Runs `cargo fmt --all` and opens a PR if formatting changes are found
+- Runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- Runs `cargo test --workspace --all-targets --all-features`
+- Opens (or updates) a health-check issue when clippy/tests fail
+
+You can also run it manually with `workflow_dispatch` from the Actions tab.
+
+## Hourly Exchange/Product PR Automation
+
+This repository also includes an hourly scheduler for expanding demo venue coverage:
+
+- `.github/workflows/hourly-market-catalog-pr.yml`
+
+What it does every hour:
+
+- Runs `scripts/hourly_market_update.sh`
+- Adds the next not-yet-registered exchange/product candidate from `data/demo_market_backlog.csv`
+- Updates `data/demo_market_registry.csv` and `docs/hourly-market-catalog.md`
+- Opens a PR from a fresh branch `chore/hourly-market-catalog/<run_id>`
+
+## Multi-Broker Demo Probe (Stocks/Options)
+
+To validate non-crypto paper/sandbox venues before full adapter work, run:
+
+```bash
+cargo run --bin demo_broker_probe
+```
+
+Environment variables:
+
+- `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`
+- `TRADIER_SANDBOX_TOKEN`
+
+Optional endpoint overrides:
+
+- `ALPACA_PAPER_BASE_URL` (default: `https://paper-api.alpaca.markets`)
+- `TRADIER_SANDBOX_BASE_URL` (default: `https://sandbox.tradier.com/v1`)
+
+See `docs/multi-broker-demo-integration.md` for scope and roadmap.
