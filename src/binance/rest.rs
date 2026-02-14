@@ -53,7 +53,13 @@ impl BinanceRestClient {
     }
 
     fn check_rate_limit(&self) {
-        let mut start = self.window_start.lock().unwrap();
+        let mut start = match self.window_start.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!("rate-limit mutex poisoned; continuing with recovered state");
+                poisoned.into_inner()
+            }
+        };
         if start.elapsed().as_secs() >= 60 {
             *start = Instant::now();
             self.request_count.store(0, Ordering::Relaxed);
@@ -382,5 +388,25 @@ mod tests {
             signature,
             "c8db56825ae71d6d79447849e617115f4a920fa2acdcab2b053c4b2838bd6b71"
         );
+    }
+
+    #[test]
+    fn check_rate_limit_does_not_panic_on_poisoned_mutex() {
+        let client = BinanceRestClient::new(
+            "https://testnet.binance.vision",
+            "test_key",
+            "test_secret",
+            5000,
+        );
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = client.window_start.lock().unwrap();
+            panic!("poison window_start mutex");
+        }));
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.check_rate_limit();
+        }));
+        assert!(result.is_ok(), "check_rate_limit should recover from poison");
     }
 }
