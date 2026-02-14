@@ -73,7 +73,13 @@ impl BinanceWsClient {
             let symbol = symbol_rx.borrow().clone();
             let streams = vec![format!("{}@trade", symbol.to_lowercase())];
             match self
-                .connect_once(&streams, &tick_tx, &status_tx, &mut symbol_rx, &mut shutdown)
+                .connect_once(
+                    &streams,
+                    &tick_tx,
+                    &status_tx,
+                    &mut symbol_rx,
+                    &mut shutdown,
+                )
                 .await
             {
                 Ok(()) => {
