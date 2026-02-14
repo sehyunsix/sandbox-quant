@@ -42,8 +42,16 @@ pub struct OrderHistorySnapshot {
     pub rows: Vec<String>,
     pub stats: OrderHistoryStats,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
+    pub fills: Vec<OrderHistoryFill>,
     pub fetched_at_ms: u64,
     pub latest_event_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderHistoryFill {
+    pub timestamp_ms: u64,
+    pub side: OrderSide,
+    pub price: f64,
 }
 
 pub struct OrderManager {
@@ -368,6 +376,7 @@ impl OrderManager {
         let strategy_stats = compute_trade_stats_by_source(trades.clone(), &order_source_by_id);
 
         let mut history = Vec::new();
+        let mut fills = Vec::new();
         let mut used_trade_ids = std::collections::HashSet::new();
 
         if orders.is_empty() && !trades.is_empty() {
@@ -375,6 +384,15 @@ impl OrderManager {
             sorted.sort_by_key(|t| (t.time, t.id));
             history.extend(
                 sorted.iter().map(|t| {
+                    fills.push(OrderHistoryFill {
+                        timestamp_ms: t.time,
+                        side: if t.is_buyer {
+                            OrderSide::Buy
+                        } else {
+                            OrderSide::Sell
+                        },
+                        price: t.price,
+                    });
                     format_trade_history_row(
                         t,
                         order_source_by_id
@@ -388,6 +406,7 @@ impl OrderManager {
                 rows: history,
                 stats,
                 strategy_stats,
+                fills,
                 fetched_at_ms,
                 latest_event_ms,
             });
@@ -399,6 +418,15 @@ impl OrderManager {
                     for t in order_trades {
                         used_trade_ids.insert(t.id);
                         let side = if t.is_buyer { "BUY" } else { "SELL" };
+                        fills.push(OrderHistoryFill {
+                            timestamp_ms: t.time,
+                            side: if t.is_buyer {
+                                OrderSide::Buy
+                            } else {
+                                OrderSide::Sell
+                            },
+                            price: t.price,
+                        });
                         history.push(format_order_history_row(
                             t.time,
                             "FILLED",
@@ -436,6 +464,15 @@ impl OrderManager {
         for bucket in trades_by_order_id.values() {
             for t in bucket {
                 if !used_trade_ids.contains(&t.id) {
+                    fills.push(OrderHistoryFill {
+                        timestamp_ms: t.time,
+                        side: if t.is_buyer {
+                            OrderSide::Buy
+                        } else {
+                            OrderSide::Sell
+                        },
+                        price: t.price,
+                    });
                     history.push(format_trade_history_row(
                         t,
                         order_source_by_id
@@ -450,6 +487,7 @@ impl OrderManager {
             rows: history,
             stats,
             strategy_stats,
+            fills,
             fetched_at_ms,
             latest_event_ms,
         })

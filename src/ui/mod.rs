@@ -13,7 +13,7 @@ use crate::event::{AppEvent, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
-use crate::order_manager::{OrderHistoryStats, OrderUpdate};
+use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
 
 use chart::{FillMarker, PriceChart};
 use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
@@ -47,6 +47,7 @@ pub struct AppState {
     pub history_lose_count: u32,
     pub history_realized_pnl: f64,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
+    pub history_fills: Vec<OrderHistoryFill>,
     pub last_price_update_ms: Option<u64>,
     pub last_price_event_ms: Option<u64>,
     pub last_price_latency_ms: Option<u64>,
@@ -95,6 +96,7 @@ impl AppState {
             history_lose_count: 0,
             history_realized_pnl: 0.0,
             strategy_stats: HashMap::new(),
+            history_fills: Vec::new(),
             last_price_update_ms: None,
             last_price_event_ms: None,
             last_price_latency_ms: None,
@@ -126,6 +128,40 @@ impl AppState {
         self.log_messages.push(msg);
         if self.log_messages.len() > MAX_LOG_MESSAGES {
             self.log_messages.remove(0);
+        }
+    }
+
+    fn candle_index_for_timestamp(&self, timestamp_ms: u64) -> Option<usize> {
+        if let Some((idx, _)) = self
+            .candles
+            .iter()
+            .enumerate()
+            .find(|(_, c)| timestamp_ms >= c.open_time && timestamp_ms < c.close_time)
+        {
+            return Some(idx);
+        }
+        if let Some(cb) = &self.current_candle {
+            if cb.contains(timestamp_ms) {
+                return Some(self.candles.len());
+            }
+        }
+        None
+    }
+
+    fn rebuild_fill_markers_from_history(&mut self, fills: &[OrderHistoryFill]) {
+        self.fill_markers.clear();
+        for fill in fills {
+            if let Some(candle_index) = self.candle_index_for_timestamp(fill.timestamp_ms) {
+                self.fill_markers.push(FillMarker {
+                    candle_index,
+                    price: fill.price,
+                    side: fill.side,
+                });
+            }
+        }
+        if self.fill_markers.len() > MAX_FILL_MARKERS {
+            let excess = self.fill_markers.len() - MAX_FILL_MARKERS;
+            self.fill_markers.drain(..excess);
         }
     }
 
@@ -269,7 +305,8 @@ impl AppState {
                 self.candle_interval_ms = interval_ms;
                 self.timeframe = interval;
                 self.current_candle = None;
-                self.fill_markers.clear();
+                let fills = self.history_fills.clone();
+                self.rebuild_fill_markers_from_history(&fills);
                 self.push_log(format!(
                     "Switched to {} ({} candles)",
                     self.timeframe,
@@ -280,6 +317,8 @@ impl AppState {
                 self.balances = balances;
             }
             AppEvent::OrderHistoryUpdate(snapshot) => {
+                self.history_fills = snapshot.fills.clone();
+                self.rebuild_fill_markers_from_history(&snapshot.fills);
                 let mut open = Vec::new();
                 let mut filled = Vec::new();
 
@@ -372,7 +411,13 @@ pub fn render(frame: &mut Frame, state: &AppState) {
 
     // Position panel (with current price and balances)
     frame.render_widget(
-        PositionPanel::new(&state.position, current_price, &state.balances),
+        PositionPanel::new(
+            &state.position,
+            current_price,
+            &state.balances,
+            state.history_trade_count,
+            state.history_realized_pnl,
+        ),
         main_area[1],
     );
 
@@ -410,6 +455,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.symbol_items,
             state.symbol_selector_index,
             None,
+            None,
         );
     } else if state.strategy_selector_open {
         render_selector_popup(
@@ -418,6 +464,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.strategy_items,
             state.strategy_selector_index,
             Some(&state.strategy_stats),
+            Some(OrderHistoryStats {
+                trade_count: state.history_trade_count,
+                win_count: state.history_win_count,
+                lose_count: state.history_lose_count,
+                realized_pnl: state.history_realized_pnl,
+            }),
         );
     }
 }
@@ -428,6 +480,7 @@ fn render_selector_popup(
     items: &[String],
     selected: usize,
     stats: Option<&HashMap<String, OrderHistoryStats>>,
+    total_stats: Option<OrderHistoryStats>,
 ) {
     let area = frame.area();
     let available_width = area.width.saturating_sub(2).max(1);
@@ -442,7 +495,7 @@ fn render_selector_popup(
     };
     let available_height = area.height.saturating_sub(2).max(1);
     let desired_height = if stats.is_some() {
-        items.len() as u16 + 5
+        items.len() as u16 + 6
     } else {
         items.len() as u16 + 4
     };
@@ -505,6 +558,15 @@ fn render_selector_popup(
         })
         .collect();
     lines.append(&mut item_lines);
+    if let Some(t) = total_stats {
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "  TOTAL              W:{:<3} L:{:<3} T:{:<3} PnL:{:.4}",
+                t.win_count, t.lose_count, t.trade_count, t.realized_pnl
+            ),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )]));
+    }
 
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().fg(Color::White)),

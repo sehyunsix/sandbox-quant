@@ -4,6 +4,8 @@ pub struct Candle {
     pub high: f64,
     pub low: f64,
     pub close: f64,
+    pub open_time: u64,
+    pub close_time: u64,
 }
 
 impl Candle {
@@ -56,6 +58,8 @@ impl CandleBuilder {
             high: self.high,
             low: self.low,
             close: self.close,
+            open_time: self.open_time,
+            close_time: self.close_time,
         }
     }
 }
@@ -92,6 +96,8 @@ mod tests {
             high: 105.0,
             low: 90.0,
             close: 95.0,
+            open_time: 0,
+            close_time: 60_000,
         };
         assert!(!candle.is_bullish());
     }

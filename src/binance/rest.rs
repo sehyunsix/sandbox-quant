@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Instant;
 
 use crate::error::AppError;
@@ -19,6 +18,7 @@ pub struct BinanceRestClient {
     api_key: String,
     secret_key: String,
     recv_window: u64,
+    time_offset_ms: AtomicI64,
     // Simple rate limiter: request count in current minute window
     request_count: AtomicU64,
     window_start: std::sync::Mutex<Instant>,
@@ -32,13 +32,15 @@ impl BinanceRestClient {
             api_key: api_key.to_string(),
             secret_key: secret_key.to_string(),
             recv_window,
+            time_offset_ms: AtomicI64::new(0),
             request_count: AtomicU64::new(0),
             window_start: std::sync::Mutex::new(Instant::now()),
         }
     }
 
     fn sign(&self, query: &str) -> String {
-        let timestamp = chrono::Utc::now().timestamp_millis();
+        let offset = self.time_offset_ms.load(Ordering::Relaxed);
+        let timestamp = chrono::Utc::now().timestamp_millis() + offset;
         let full_query = if query.is_empty() {
             format!("recvWindow={}&timestamp={}", self.recv_window, timestamp)
         } else {
@@ -52,6 +54,19 @@ impl BinanceRestClient {
         mac.update(full_query.as_bytes());
         let signature = hex::encode(mac.finalize().into_bytes());
         format!("{}&signature={}", full_query, signature)
+    }
+
+    async fn sync_time_offset(&self) -> Result<()> {
+        let server_ms = self.server_time().await? as i64;
+        let local_ms = chrono::Utc::now().timestamp_millis();
+        let offset = server_ms - local_ms;
+        self.time_offset_ms.store(offset, Ordering::Relaxed);
+        tracing::warn!(offset_ms = offset, "Synchronized Binance server time offset");
+        Ok(())
+    }
+
+    fn parse_binance_api_error(body: &str) -> Option<super::types::BinanceApiErrorResponse> {
+        serde_json::from_str::<super::types::BinanceApiErrorResponse>(body).ok()
     }
 
     fn check_rate_limit(&self) {
@@ -213,15 +228,24 @@ impl BinanceRestClient {
         let candles: Vec<Candle> = resp
             .iter()
             .filter_map(|kline| {
+                let open_time = kline.get(0)?.as_u64()?;
                 let open = kline.get(1)?.as_str()?.parse::<f64>().ok()?;
                 let high = kline.get(2)?.as_str()?.parse::<f64>().ok()?;
                 let low = kline.get(3)?.as_str()?.parse::<f64>().ok()?;
                 let close = kline.get(4)?.as_str()?.parse::<f64>().ok()?;
+                // Binance kline close time is inclusive end ms; convert to half-open [open, close+1).
+                let close_time = kline
+                    .get(6)?
+                    .as_u64()
+                    .map(|v| v.saturating_add(1))
+                    .unwrap_or(open_time.saturating_add(60_000));
                 Some(Candle {
                     open,
                     high,
                     low,
                     close,
+                    open_time,
+                    close_time,
                 })
             })
             .collect();
@@ -279,20 +303,29 @@ impl BinanceRestClient {
             Some(order_id) => format!("symbol={}&limit={}&orderId={}", symbol, limit, order_id),
             None => format!("symbol={}&limit={}", symbol, limit),
         };
-        let signed = self.sign(&query);
-        let url = format!("{}/api/v3/allOrders?{}", self.base_url, signed);
+        for attempt in 0..=1 {
+            let signed = self.sign(&query);
+            let url = format!("{}/api/v3/allOrders?{}", self.base_url, signed);
 
-        let resp = self
-            .http
-            .get(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
-            .send()
-            .await
-            .context("get_all_orders HTTP failed")?;
+            let resp = self
+                .http
+                .get(&url)
+                .header("X-MBX-APIKEY", &self.api_key)
+                .send()
+                .await
+                .context("get_all_orders HTTP failed")?;
 
-        if !resp.status().is_success() {
+            if resp.status().is_success() {
+                return Ok(resp.json().await?);
+            }
+
             let body = resp.text().await.unwrap_or_default();
-            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                if err.code == -1021 && attempt == 0 {
+                    tracing::warn!("allOrders got -1021; syncing server time and retrying once");
+                    self.sync_time_offset().await?;
+                    continue;
+                }
                 return Err(AppError::BinanceApi {
                     code: err.code,
                     msg: err.msg,
@@ -302,52 +335,17 @@ impl BinanceRestClient {
             return Err(anyhow::anyhow!("All orders request failed: {}", body));
         }
 
-        Ok(resp.json().await?)
+        Err(anyhow::anyhow!("All orders request failed after retry"))
     }
 
-    /// Fetch all available orders for a symbol by paging through `/api/v3/allOrders`.
-    /// `page_size` controls each request size (1..=1000).
+    /// Fetch recent orders for a symbol from `/api/v3/allOrders`.
+    /// `limit` controls max rows returned (1..=1000).
     pub async fn get_all_orders(
         &self,
         symbol: &str,
-        page_size: usize,
+        limit: usize,
     ) -> Result<Vec<BinanceAllOrder>> {
-        let mut all_orders = Vec::new();
-        let mut seen_order_ids = HashSet::new();
-        let mut from_order_id: Option<u64> = Some(0);
-        let page_size = page_size.clamp(1, 1000);
-
-        loop {
-            let page = self
-                .get_all_orders_page(symbol, page_size, from_order_id)
-                .await?;
-
-            if page.is_empty() {
-                break;
-            }
-
-            let fetched = page.len();
-            let mut max_seen_in_page = 0_u64;
-            for order in page {
-                max_seen_in_page = max_seen_in_page.max(order.order_id);
-                if seen_order_ids.insert(order.order_id) {
-                    all_orders.push(order);
-                }
-            }
-
-            if fetched < page_size {
-                break;
-            }
-
-            let current_cursor = from_order_id.unwrap_or(0);
-            let next_cursor = max_seen_in_page.saturating_add(1);
-            if next_cursor <= current_cursor {
-                break;
-            }
-            from_order_id = Some(next_cursor);
-        }
-
-        Ok(all_orders)
+        self.get_all_orders_page(symbol, limit, None).await
     }
 
     /// Fetch recent personal trades for a symbol.
@@ -356,20 +354,29 @@ impl BinanceRestClient {
 
         let limit = limit.clamp(1, 1000);
         let query = format!("symbol={}&limit={}", symbol, limit);
-        let signed = self.sign(&query);
-        let url = format!("{}/api/v3/myTrades?{}", self.base_url, signed);
+        for attempt in 0..=1 {
+            let signed = self.sign(&query);
+            let url = format!("{}/api/v3/myTrades?{}", self.base_url, signed);
 
-        let resp = self
-            .http
-            .get(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
-            .send()
-            .await
-            .context("get_my_trades HTTP failed")?;
+            let resp = self
+                .http
+                .get(&url)
+                .header("X-MBX-APIKEY", &self.api_key)
+                .send()
+                .await
+                .context("get_my_trades HTTP failed")?;
 
-        if !resp.status().is_success() {
+            if resp.status().is_success() {
+                return Ok(resp.json().await?);
+            }
+
             let body = resp.text().await.unwrap_or_default();
-            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                if err.code == -1021 && attempt == 0 {
+                    tracing::warn!("myTrades got -1021; syncing server time and retrying once");
+                    self.sync_time_offset().await?;
+                    continue;
+                }
                 return Err(AppError::BinanceApi {
                     code: err.code,
                     msg: err.msg,
@@ -379,7 +386,7 @@ impl BinanceRestClient {
             return Err(anyhow::anyhow!("My trades request failed: {}", body));
         }
 
-        Ok(resp.json().await?)
+        Err(anyhow::anyhow!("My trades request failed after retry"))
     }
 }
 

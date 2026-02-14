@@ -18,6 +18,8 @@ pub struct PositionPanel<'a> {
     position: &'a Position,
     current_price: Option<f64>,
     balances: &'a HashMap<String, f64>,
+    history_trade_count: u32,
+    history_realized_pnl: f64,
 }
 
 impl<'a> PositionPanel<'a> {
@@ -25,11 +27,15 @@ impl<'a> PositionPanel<'a> {
         position: &'a Position,
         current_price: Option<f64>,
         balances: &'a HashMap<String, f64>,
+        history_trade_count: u32,
+        history_realized_pnl: f64,
     ) -> Self {
         Self {
             position,
             current_price,
             balances,
+            history_trade_count,
+            history_realized_pnl,
         }
     }
 }
@@ -64,6 +70,17 @@ impl Widget for PositionPanel<'_> {
 
         let usdt_bal = self.balances.get("USDT").copied().unwrap_or(0.0);
         let btc_bal = self.balances.get("BTC").copied().unwrap_or(0.0);
+
+        let display_realized_pnl = if self.position.trade_count == 0 && self.history_trade_count > 0 {
+            self.history_realized_pnl
+        } else {
+            self.position.realized_pnl
+        };
+        let display_trade_count = if self.position.trade_count == 0 && self.history_trade_count > 0 {
+            self.history_trade_count
+        } else {
+            self.position.trade_count
+        };
 
         let lines = vec![
             Line::from(vec![
@@ -126,14 +143,14 @@ impl Widget for PositionPanel<'_> {
             Line::from(vec![
                 Span::styled("RlzPL:", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    format!(" {:.4}", self.position.realized_pnl),
-                    Style::default().fg(pnl_color(self.position.realized_pnl)),
+                    format!(" {:.4}", display_realized_pnl),
+                    Style::default().fg(pnl_color(display_realized_pnl)),
                 ),
             ]),
             Line::from(vec![
                 Span::styled("Trades:", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    format!(" {}", self.position.trade_count),
+                    format!(" {}", display_trade_count),
                     Style::default().fg(Color::White),
                 ),
             ]),

@@ -26,7 +26,7 @@ use crate::order_manager::OrderManager;
 use crate::strategy::ma_crossover::MaCrossover;
 use crate::ui::AppState;
 
-const ORDER_HISTORY_LIMIT: usize = 100;
+const ORDER_HISTORY_LIMIT: usize = 1000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
