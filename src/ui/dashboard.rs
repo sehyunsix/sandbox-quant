@@ -138,6 +138,18 @@ impl Widget for PositionPanel<'_> {
                     Style::default().fg(Color::White),
                 ),
             ]),
+            Line::from(vec![
+                Span::styled("WinRate:", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(
+                        " {:.1}% ({}/{})",
+                        self.position.win_rate_percent(),
+                        self.position.winning_trade_count,
+                        self.position.winning_trade_count + self.position.losing_trade_count
+                    ),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
         ];
 
         let block = Block::default()
@@ -175,8 +187,8 @@ impl<'a> OrderLogPanel<'a> {
 impl Widget for OrderLogPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let signal_str = match self.last_signal {
-            Some(Signal::Buy) => "BUY".to_string(),
-            Some(Signal::Sell) => "SELL".to_string(),
+            Some(Signal::Buy { .. }) => "BUY".to_string(),
+            Some(Signal::Sell { .. }) => "SELL".to_string(),
             Some(Signal::Hold) | None => "---".to_string(),
         };
 
@@ -239,6 +251,7 @@ impl Widget for OrderLogPanel<'_> {
 
 pub struct StatusBar<'a> {
     pub symbol: &'a str,
+    pub product_label: &'a str,
     pub ws_connected: bool,
     pub paused: bool,
     pub tick_count: u64,
@@ -280,6 +293,13 @@ impl Widget for StatusBar<'_> {
             Span::styled(self.symbol, Style::default().fg(Color::Cyan)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(
+                self.product_label,
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
                 self.timeframe.to_uppercase(),
                 Style::default()
                     .fg(Color::Yellow)
@@ -303,11 +323,15 @@ impl Widget for StatusBar<'_> {
 /// Scrolling order history panel that shows recent order events.
 pub struct OrderHistoryPanel<'a> {
     messages: &'a [String],
+    scroll_offset: usize,
 }
 
 impl<'a> OrderHistoryPanel<'a> {
-    pub fn new(messages: &'a [String]) -> Self {
-        Self { messages }
+    pub fn new(messages: &'a [String], scroll_offset: usize) -> Self {
+        Self {
+            messages,
+            scroll_offset,
+        }
     }
 }
 
@@ -319,12 +343,12 @@ impl Widget for OrderHistoryPanel<'_> {
             .border_style(Style::default().fg(Color::DarkGray));
         let inner_height = block.inner(area).height as usize;
 
-        let visible: Vec<Line> = self
-            .messages
+        let len = self.messages.len();
+        let end = len.saturating_sub(self.scroll_offset);
+        let start = end.saturating_sub(inner_height);
+
+        let visible: Vec<Line> = self.messages[start..end]
             .iter()
-            .rev()
-            .take(inner_height)
-            .rev()
             .map(|msg| {
                 let color = if msg.contains("REJECTED") {
                     Color::Red
@@ -409,6 +433,8 @@ impl Widget for KeybindBar {
             Span::styled("[S]", Style::default().fg(Color::Red)),
             Span::styled("ell ", Style::default().fg(Color::DarkGray)),
             Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[0]", Style::default().fg(Color::Cyan)),
+            Span::styled("sec ", Style::default().fg(Color::DarkGray)),
             Span::styled("[1]", Style::default().fg(Color::Cyan)),
             Span::styled("min ", Style::default().fg(Color::DarkGray)),
             Span::styled("[H]", Style::default().fg(Color::Cyan)),
@@ -419,6 +445,19 @@ impl Widget for KeybindBar {
             Span::styled("eek ", Style::default().fg(Color::DarkGray)),
             Span::styled("[M]", Style::default().fg(Color::Cyan)),
             Span::styled("onth ", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[5]", Style::default().fg(Color::Magenta)),
+            Span::styled("BTC S ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[6]", Style::default().fg(Color::Magenta)),
+            Span::styled("BTC F ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[7]", Style::default().fg(Color::Magenta)),
+            Span::styled("ETH S ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[8]", Style::default().fg(Color::Magenta)),
+            Span::styled("ETH F ", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[J]", Style::default().fg(Color::Cyan)),
+            Span::styled("/[K]", Style::default().fg(Color::Cyan)),
+            Span::styled(" history ", Style::default().fg(Color::DarkGray)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);

@@ -13,12 +13,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::binance::rest::BinanceRestClient;
 use crate::binance::ws::BinanceWsClient;
-use crate::config::{parse_interval_ms, Config};
+use crate::config::{Config, TradingProduct, parse_interval_ms};
 use crate::event::AppEvent;
 use crate::model::signal::Signal;
 use crate::order_manager::OrderManager;
@@ -30,6 +31,7 @@ const ORDER_HISTORY_SYNC_SECS: u64 = 5;
 
 fn switch_timeframe(
     interval: &str,
+    symbol: &str,
     rest_client: &Arc<BinanceRestClient>,
     config: &Config,
     app_tx: &mpsc::Sender<AppEvent>,
@@ -51,7 +53,7 @@ fn switch_timeframe(
         }
     };
     let rest = rest_client.clone();
-    let symbol = config.binance.symbol.clone();
+    let symbol = symbol.to_string();
     let limit = config.ui.price_history_len;
     let tx = app_tx.clone();
     let iv = interval.clone();
@@ -73,6 +75,46 @@ fn switch_timeframe(
             }
         }
     });
+}
+
+fn select_product_in_tui(
+    app_state: &mut AppState,
+    strategy_enabled_tx: &watch::Sender<bool>,
+    product: TradingProduct,
+) {
+    app_state.symbol = product.symbol().to_string();
+    app_state.product_label = product.product_label().to_string();
+    app_state.candles.clear();
+    app_state.current_candle = None;
+    app_state.fill_markers.clear();
+    if !app_state.paused {
+        app_state.paused = true;
+        let _ = strategy_enabled_tx.send(false);
+    }
+    app_state.push_log(format!(
+        "Product switched to {} | Strategy paused (restart recommended for full apply)",
+        app_state.product_label
+    ));
+}
+
+fn enqueue_manual_order(
+    app_state: &mut AppState,
+    manual_order_tx: &mpsc::Sender<Signal>,
+    signal: Signal,
+    success_msg: &str,
+    action: &str,
+) {
+    match manual_order_tx.try_send(signal) {
+        Ok(()) => app_state.push_log(success_msg.to_string()),
+        Err(TrySendError::Full(_)) => app_state.push_log(format!(
+            "[WARN] Manual {} dropped: order queue is full",
+            action
+        )),
+        Err(TrySendError::Closed(_)) => app_state.push_log(format!(
+            "[ERR] Manual {} failed: order queue is closed",
+            action
+        )),
+    }
 }
 
 #[tokio::main]
@@ -110,7 +152,9 @@ async fn main() -> Result<()> {
         .init();
 
     tracing::info!(
-        symbol = %config.binance.symbol,
+        symbol = %config.binance.selected_symbol(),
+        market = %config.binance.market_label(),
+        product = %config.binance.product_label(),
         rest_url = %config.binance.rest_base_url,
         ws_url = %config.binance.ws_base_url,
         "Starting sandbox-quant"
@@ -151,7 +195,7 @@ async fn main() -> Result<()> {
     // Fetch historical klines to pre-fill chart
     let historical_candles = match rest_client
         .get_klines(
-            &config.binance.symbol,
+            config.binance.selected_symbol(),
             &config.binance.kline_interval,
             config.ui.price_history_len,
         )
@@ -180,7 +224,7 @@ async fn main() -> Result<()> {
     };
 
     // Spawn WebSocket task
-    let ws_streams = vec![format!("{}@trade", config.binance.symbol.to_lowercase())];
+    let ws_streams = vec![format!("{}@trade", config.binance.selected_symbol().to_lowercase())];
     let ws_client = BinanceWsClient::new(&config.binance.ws_base_url, ws_streams);
     let ws_tick_tx = tick_tx;
     // ^ Move tick_tx into WS task. This way, when WS task drops ws_tick_tx,
@@ -214,7 +258,7 @@ async fn main() -> Result<()> {
         );
         let mut order_mgr = OrderManager::new(
             strat_rest,
-            &strat_config.binance.symbol,
+            strat_config.binance.selected_symbol(),
             strat_config.strategy.order_amount_usdt,
         );
         let mut order_history_sync =
@@ -429,7 +473,8 @@ async fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     let candle_interval_ms = config.binance.kline_interval_ms()?;
     let mut app_state = AppState::new(
-        &config.binance.symbol,
+        config.binance.selected_symbol(),
+        config.binance.product_label(),
         config.ui.price_history_len,
         candle_interval_ms,
         &config.binance.kline_interval,
@@ -446,7 +491,7 @@ async fn main() -> Result<()> {
 
     app_state.push_log(format!(
         "sandbox-quant started | {} | demo",
-        config.binance.symbol
+        config.binance.product_label()
     ));
 
     loop {
@@ -477,34 +522,100 @@ async fn main() -> Result<()> {
                         }
                     }
                     KeyCode::Char('b') | KeyCode::Char('B') => {
-                        app_state.push_log(format!(
-                            "Manual BUY ({:.2} USDT)",
-                            config.strategy.order_amount_usdt
-                        ));
-                        let _ = manual_order_tx.try_send(Signal::Buy {
-                            trace_id: Uuid::new_v4(),
-                        });
+                        enqueue_manual_order(
+                            &mut app_state,
+                            &manual_order_tx,
+                            Signal::Buy {
+                                trace_id: Uuid::new_v4(),
+                            },
+                            &format!("Manual BUY ({:.2} USDT)", config.strategy.order_amount_usdt),
+                            "BUY",
+                        );
                     }
                     KeyCode::Char('s') | KeyCode::Char('S') => {
-                        app_state.push_log("Manual SELL (position)".to_string());
-                        let _ = manual_order_tx.try_send(Signal::Sell {
-                            trace_id: Uuid::new_v4(),
-                        });
+                        enqueue_manual_order(
+                            &mut app_state,
+                            &manual_order_tx,
+                            Signal::Sell {
+                                trace_id: Uuid::new_v4(),
+                            },
+                            "Manual SELL (position)",
+                            "SELL",
+                        );
                     }
                     KeyCode::Char('1') => {
-                        switch_timeframe("1m", &rest_client, &config, &app_tx);
+                        switch_timeframe("1m", &app_state.symbol, &rest_client, &config, &app_tx);
+                    }
+                    KeyCode::Char('0') => {
+                        switch_timeframe("1s", &app_state.symbol, &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('h') | KeyCode::Char('H') => {
-                        switch_timeframe("1h", &rest_client, &config, &app_tx);
+                        switch_timeframe("1h", &app_state.symbol, &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('d') | KeyCode::Char('D') => {
-                        switch_timeframe("1d", &rest_client, &config, &app_tx);
+                        switch_timeframe("1d", &app_state.symbol, &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('w') | KeyCode::Char('W') => {
-                        switch_timeframe("1w", &rest_client, &config, &app_tx);
+                        switch_timeframe("1w", &app_state.symbol, &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('m') | KeyCode::Char('M') => {
-                        switch_timeframe("1M", &rest_client, &config, &app_tx);
+                        switch_timeframe("1M", &app_state.symbol, &rest_client, &config, &app_tx);
+                    }
+                    KeyCode::Char('5') => {
+                        select_product_in_tui(
+                            &mut app_state,
+                            &strategy_enabled_tx,
+                            TradingProduct::BtcSpot,
+                        );
+                        switch_timeframe(
+                            &app_state.timeframe,
+                            &app_state.symbol,
+                            &rest_client,
+                            &config,
+                            &app_tx,
+                        );
+                    }
+                    KeyCode::Char('6') => {
+                        select_product_in_tui(
+                            &mut app_state,
+                            &strategy_enabled_tx,
+                            TradingProduct::BtcFuture,
+                        );
+                        switch_timeframe(
+                            &app_state.timeframe,
+                            &app_state.symbol,
+                            &rest_client,
+                            &config,
+                            &app_tx,
+                        );
+                    }
+                    KeyCode::Char('7') => {
+                        select_product_in_tui(
+                            &mut app_state,
+                            &strategy_enabled_tx,
+                            TradingProduct::EthSpot,
+                        );
+                        switch_timeframe(
+                            &app_state.timeframe,
+                            &app_state.symbol,
+                            &rest_client,
+                            &config,
+                            &app_tx,
+                        );
+                    }
+                    KeyCode::Char('8') => {
+                        select_product_in_tui(
+                            &mut app_state,
+                            &strategy_enabled_tx,
+                            TradingProduct::EthFuture,
+                        );
+                        switch_timeframe(
+                            &app_state.timeframe,
+                            &app_state.symbol,
+                            &rest_client,
+                            &config,
+                            &app_tx,
+                        );
                     }
                     KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
                         let max_scroll = app_state.order_history.len().saturating_sub(1);

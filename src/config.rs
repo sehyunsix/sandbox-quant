@@ -12,15 +12,51 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BinanceConfig {
+    #[serde(default)]
+    pub product: TradingProduct,
     pub rest_base_url: String,
     pub ws_base_url: String,
-    pub symbol: String,
     pub recv_window: u64,
     pub kline_interval: String,
     #[serde(skip)]
     pub api_key: String,
     #[serde(skip)]
     pub api_secret: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TradingProduct {
+    #[default]
+    BtcSpot,
+    BtcFuture,
+    EthSpot,
+    EthFuture,
+}
+
+impl TradingProduct {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            TradingProduct::BtcSpot | TradingProduct::BtcFuture => "BTCUSDT",
+            TradingProduct::EthSpot | TradingProduct::EthFuture => "ETHUSDT",
+        }
+    }
+
+    pub fn market_label(self) -> &'static str {
+        match self {
+            TradingProduct::BtcSpot | TradingProduct::EthSpot => "SPOT",
+            TradingProduct::BtcFuture | TradingProduct::EthFuture => "FUTURE",
+        }
+    }
+
+    pub fn product_label(self) -> &'static str {
+        match self {
+            TradingProduct::BtcSpot => "BTC/USDT SPOT",
+            TradingProduct::BtcFuture => "BTC/USDT FUTURE",
+            TradingProduct::EthSpot => "ETH/USDT SPOT",
+            TradingProduct::EthFuture => "ETH/USDT FUTURE",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,6 +106,18 @@ pub fn parse_interval_ms(s: &str) -> Result<u64> {
 }
 
 impl BinanceConfig {
+    pub fn selected_symbol(&self) -> &'static str {
+        self.product.symbol()
+    }
+
+    pub fn market_label(&self) -> &'static str {
+        self.product.market_label()
+    }
+
+    pub fn product_label(&self) -> &'static str {
+        self.product.product_label()
+    }
+
     pub fn kline_interval_ms(&self) -> Result<u64> {
         parse_interval_ms(&self.kline_interval)
     }
@@ -107,9 +155,9 @@ mod tests {
     fn parse_default_toml() {
         let toml_str = r#"
 [binance]
+product = "btc_spot"
 rest_base_url = "https://demo-api.binance.com"
 ws_base_url = "wss://demo-stream.binance.com/ws"
-symbol = "BTCUSDT"
 recv_window = 5000
 kline_interval = "1m"
 
@@ -127,7 +175,8 @@ price_history_len = 120
 level = "debug"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.binance.symbol, "BTCUSDT");
+        assert_eq!(config.binance.selected_symbol(), "BTCUSDT");
+        assert_eq!(config.binance.product_label(), "BTC/USDT SPOT");
         assert_eq!(config.strategy.fast_period, 10);
         assert_eq!(config.strategy.slow_period, 30);
         assert!((config.strategy.order_amount_usdt - 10.0).abs() < f64::EPSILON);
