@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::TimeZone;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -271,10 +272,18 @@ pub struct StatusBar<'a> {
     pub paused: bool,
     pub tick_count: u64,
     pub timeframe: &'a str,
+    pub last_price_update_ms: Option<u64>,
+    pub last_order_history_update_ms: Option<u64>,
 }
 
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let fmt_update = |ts_ms: Option<u64>| -> String {
+            ts_ms.and_then(|ts| chrono::Utc.timestamp_millis_opt(ts as i64).single())
+                .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
+                .unwrap_or_else(|| "--:--:--".to_string())
+        };
+
         let conn_status = if self.ws_connected {
             Span::styled("CONNECTED", Style::default().fg(Color::Green))
         } else {
@@ -319,6 +328,16 @@ impl Widget for StatusBar<'_> {
             Span::styled(
                 format!("ticks: {}", self.tick_count),
                 Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("px:{}", fmt_update(self.last_price_update_ms)),
+                Style::default().fg(Color::Blue),
+            ),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("oh:{}", fmt_update(self.last_order_history_update_ms)),
+                Style::default().fg(Color::Cyan),
             ),
         ]);
 

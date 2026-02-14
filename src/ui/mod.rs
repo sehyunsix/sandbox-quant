@@ -46,6 +46,8 @@ pub struct AppState {
     pub history_win_count: u32,
     pub history_lose_count: u32,
     pub history_realized_pnl: f64,
+    pub last_price_update_ms: Option<u64>,
+    pub last_order_history_update_ms: Option<u64>,
     pub symbol_selector_open: bool,
     pub symbol_selector_index: usize,
     pub symbol_items: Vec<String>,
@@ -87,6 +89,8 @@ impl AppState {
             history_win_count: 0,
             history_lose_count: 0,
             history_realized_pnl: 0.0,
+            last_price_update_ms: None,
+            last_order_history_update_ms: None,
             symbol_selector_open: false,
             symbol_selector_index: 0,
             symbol_items: Vec::new(),
@@ -119,6 +123,7 @@ impl AppState {
         match event {
             AppEvent::MarketTick(tick) => {
                 self.tick_count += 1;
+                self.last_price_update_ms = Some(chrono::Utc::now().timestamp_millis() as u64);
 
                 // Aggregate tick into candles
                 let should_new = match &self.current_candle {
@@ -289,6 +294,8 @@ impl AppState {
                 self.history_win_count = snapshot.stats.win_count;
                 self.history_lose_count = snapshot.stats.lose_count;
                 self.history_realized_pnl = snapshot.stats.realized_pnl;
+                self.last_order_history_update_ms =
+                    Some(chrono::Utc::now().timestamp_millis() as u64);
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -322,6 +329,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             paused: state.paused,
             tick_count: state.tick_count,
             timeframe: &state.timeframe,
+            last_price_update_ms: state.last_price_update_ms,
+            last_order_history_update_ms: state.last_order_history_update_ms,
         },
         outer[0],
     );
