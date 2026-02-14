@@ -10,3 +10,4 @@ Auto-generated from `data/demo_market_registry.csv`.
 | Tradier | Sandbox | Equity | SPY paper trading | https://sandbox.tradier.com/v1 | stock demo venue |
 | Tradier | Sandbox | Option | SPY put paper order | https://sandbox.tradier.com/v1 | options demo venue |
 | Tastytrade | Sandbox | Option | QQQ option chain demo | https://api.cert.tastyworks.com | cert sandbox venue |
+| Interactive Brokers | Paper | Equity | MSFT paper trading | https://localhost | requires IB Gateway paper account |
