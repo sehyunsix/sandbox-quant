@@ -82,6 +82,25 @@ pub struct BinanceAllOrder {
     pub update_time: u64,
 }
 
+/// Binance my trades response item (GET /api/v3/myTrades).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceMyTrade {
+    pub symbol: String,
+    pub id: u64,
+    pub order_id: u64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub price: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub qty: f64,
+    #[serde(deserialize_with = "string_to_f64")]
+    pub commission: f64,
+    pub commission_asset: String,
+    pub time: u64,
+    pub is_buyer: bool,
+    pub is_maker: bool,
+}
+
 /// Binance API error response.
 #[derive(Debug, Deserialize)]
 pub struct BinanceApiErrorResponse {
@@ -188,5 +207,28 @@ mod tests {
         assert_eq!(order.order_id, 28);
         assert_eq!(order.status, "FILLED");
         assert!((order.executed_qty - 0.001).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn deserialize_my_trade_item() {
+        let json = r#"{
+            "symbol": "BTCUSDT",
+            "id": 28457,
+            "orderId": 100234,
+            "price": "42000.50000000",
+            "qty": "0.00100000",
+            "commission": "0.00000100",
+            "commissionAsset": "BTC",
+            "time": 1700000001000,
+            "isBuyer": true,
+            "isMaker": false,
+            "isBestMatch": true
+        }"#;
+        let trade: BinanceMyTrade = serde_json::from_str(json).unwrap();
+        assert_eq!(trade.symbol, "BTCUSDT");
+        assert_eq!(trade.order_id, 100234);
+        assert!(trade.is_buyer);
+        assert!(!trade.is_maker);
+        assert!((trade.price - 42000.50).abs() < 0.01);
     }
 }

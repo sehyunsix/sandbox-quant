@@ -45,6 +45,37 @@ fn display_qty_for_history(status: &str, orig_qty: f64, executed_qty: f64) -> f6
     }
 }
 
+fn format_history_time(timestamp_ms: u64) -> String {
+    chrono::Utc
+        .timestamp_millis_opt(timestamp_ms as i64)
+        .single()
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|| "--:--:--".to_string())
+}
+
+fn format_order_history_row(
+    timestamp_ms: u64,
+    status: &str,
+    side: &str,
+    qty: f64,
+    avg_price: f64,
+    client_order_id: &str,
+) -> String {
+    format!(
+        "{} {:<10} {:<4} {:.5} @ {:.2}  {}",
+        format_history_time(timestamp_ms),
+        status,
+        side,
+        qty,
+        avg_price,
+        client_order_id
+    )
+}
+
 impl OrderManager {
     pub fn new(rest_client: Arc<BinanceRestClient>, symbol: &str, order_amount_usdt: f64) -> Self {
         Self {
@@ -89,39 +120,54 @@ impl OrderManager {
     /// Fetch order history from exchange and format rows for UI display.
     pub async fn refresh_order_history(&self, limit: usize) -> Result<Vec<String>> {
         let mut orders = self.rest_client.get_all_orders(&self.symbol, limit).await?;
+        let trades = self.rest_client.get_my_trades(&self.symbol, limit).await?;
         orders.sort_by_key(|o| o.update_time.max(o.time));
 
-        let history = orders
-            .into_iter()
-            .map(|o| {
-                let ts = o.update_time.max(o.time) as i64;
-                let time_str = chrono::Utc
-                    .timestamp_millis_opt(ts)
-                    .single()
-                    .map(|dt| {
-                        dt.with_timezone(&chrono::Local)
-                            .format("%H:%M:%S")
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| "--:--:--".to_string());
+        let mut trades_by_order_id: HashMap<u64, Vec<crate::binance::types::BinanceMyTrade>> =
+            HashMap::new();
+        for trade in trades {
+            trades_by_order_id
+                .entry(trade.order_id)
+                .or_default()
+                .push(trade);
+        }
+        for bucket in trades_by_order_id.values_mut() {
+            bucket.sort_by_key(|t| t.time);
+        }
 
-                let avg_price = if o.executed_qty > 0.0 {
-                    o.cummulative_quote_qty / o.executed_qty
-                } else {
-                    o.price
-                };
+        let mut history = Vec::new();
+        for o in orders {
+            if o.executed_qty > 0.0 {
+                if let Some(order_trades) = trades_by_order_id.get(&o.order_id) {
+                    for t in order_trades {
+                        let side = if t.is_buyer { "BUY" } else { "SELL" };
+                        history.push(format_order_history_row(
+                            t.time,
+                            "FILLED",
+                            side,
+                            t.qty,
+                            t.price,
+                            &format!("{}#T{}", o.client_order_id, t.id),
+                        ));
+                    }
+                    continue;
+                }
+            }
 
-                format!(
-                    "{} {:<10} {:<4} {:.5} @ {:.2}  {}",
-                    time_str,
-                    o.status,
-                    o.side,
-                    display_qty_for_history(&o.status, o.orig_qty, o.executed_qty),
-                    avg_price,
-                    o.client_order_id
-                )
-            })
-            .collect();
+            let avg_price = if o.executed_qty > 0.0 {
+                o.cummulative_quote_qty / o.executed_qty
+            } else {
+                o.price
+            };
+            history.push(format_order_history_row(
+                o.update_time.max(o.time),
+                &o.status,
+                &o.side,
+                display_qty_for_history(&o.status, o.orig_qty, o.executed_qty),
+                avg_price,
+                &o.client_order_id,
+            ));
+        }
 
         Ok(history)
     }

@@ -9,7 +9,9 @@ use crate::error::AppError;
 use crate::model::candle::Candle;
 use crate::model::order::OrderSide;
 
-use super::types::{AccountInfo, BinanceAllOrder, BinanceOrderResponse, ServerTimeResponse};
+use super::types::{
+    AccountInfo, BinanceAllOrder, BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
+};
 
 pub struct BinanceRestClient {
     http: reqwest::Client,
@@ -347,6 +349,38 @@ impl BinanceRestClient {
 
         Ok(all_orders)
     }
+
+    /// Fetch recent personal trades for a symbol.
+    pub async fn get_my_trades(&self, symbol: &str, limit: usize) -> Result<Vec<BinanceMyTrade>> {
+        self.check_rate_limit();
+
+        let limit = limit.clamp(1, 1000);
+        let query = format!("symbol={}&limit={}", symbol, limit);
+        let signed = self.sign(&query);
+        let url = format!("{}/api/v3/myTrades?{}", self.base_url, signed);
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await
+            .context("get_my_trades HTTP failed")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!("My trades request failed: {}", body));
+        }
+
+        Ok(resp.json().await?)
+    }
 }
 
 #[cfg(test)]
@@ -407,6 +441,9 @@ mod tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.check_rate_limit();
         }));
-        assert!(result.is_ok(), "check_rate_limit should recover from poison");
+        assert!(
+            result.is_ok(),
+            "check_rate_limit should recover from poison"
+        );
     }
 }
