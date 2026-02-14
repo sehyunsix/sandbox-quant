@@ -42,6 +42,8 @@ pub struct OrderHistorySnapshot {
     pub rows: Vec<String>,
     pub stats: OrderHistoryStats,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
+    pub fetched_at_ms: u64,
+    pub latest_event_ms: Option<u64>,
 }
 
 pub struct OrderManager {
@@ -307,6 +309,7 @@ impl OrderManager {
 
     /// Fetch order history from exchange and format rows for UI display.
     pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
+        let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
         let orders_result = self.rest_client.get_all_orders(&self.symbol, limit).await;
         let trades_result = self.rest_client.get_my_trades(&self.symbol, limit).await;
 
@@ -336,6 +339,9 @@ impl OrderManager {
         };
         orders.sort_by_key(|o| o.update_time.max(o.time));
         let stats = compute_trade_stats(trades.clone());
+        let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
+        let latest_trade_event = trades.iter().map(|t| t.time).max();
+        let latest_event_ms = latest_order_event.max(latest_trade_event);
 
         if let Err(e) = order_store::persist_order_snapshot(&self.symbol, &orders, &trades) {
             tracing::warn!(error = %e, "Failed to persist order snapshot to sqlite");
@@ -382,6 +388,8 @@ impl OrderManager {
                 rows: history,
                 stats,
                 strategy_stats,
+                fetched_at_ms,
+                latest_event_ms,
             });
         }
 
@@ -442,6 +450,8 @@ impl OrderManager {
             rows: history,
             stats,
             strategy_stats,
+            fetched_at_ms,
+            latest_event_ms,
         })
     }
 

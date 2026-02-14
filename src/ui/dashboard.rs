@@ -273,7 +273,11 @@ pub struct StatusBar<'a> {
     pub tick_count: u64,
     pub timeframe: &'a str,
     pub last_price_update_ms: Option<u64>,
+    pub last_price_event_ms: Option<u64>,
+    pub last_price_latency_ms: Option<u64>,
     pub last_order_history_update_ms: Option<u64>,
+    pub last_order_history_event_ms: Option<u64>,
+    pub last_order_history_latency_ms: Option<u64>,
 }
 
 impl Widget for StatusBar<'_> {
@@ -282,6 +286,11 @@ impl Widget for StatusBar<'_> {
             ts_ms.and_then(|ts| chrono::Utc.timestamp_millis_opt(ts as i64).single())
                 .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
                 .unwrap_or_else(|| "--:--:--".to_string())
+        };
+        let fmt_age = |lat_ms: Option<u64>| -> String {
+            lat_ms
+                .map(|v| format!("{}ms", v))
+                .unwrap_or_else(|| "--".to_string())
         };
 
         let conn_status = if self.ws_connected {
@@ -331,12 +340,22 @@ impl Widget for StatusBar<'_> {
             ),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("px:{}", fmt_update(self.last_price_update_ms)),
+                format!(
+                    "px:{} evt:{} lat:{}",
+                    fmt_update(self.last_price_update_ms),
+                    fmt_update(self.last_price_event_ms),
+                    fmt_age(self.last_price_latency_ms)
+                ),
                 Style::default().fg(Color::Blue),
             ),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("oh:{}", fmt_update(self.last_order_history_update_ms)),
+                format!(
+                    "oh:{} evt:{} lat:{}",
+                    fmt_update(self.last_order_history_update_ms),
+                    fmt_update(self.last_order_history_event_ms),
+                    fmt_age(self.last_order_history_latency_ms)
+                ),
                 Style::default().fg(Color::Cyan),
             ),
         ]);

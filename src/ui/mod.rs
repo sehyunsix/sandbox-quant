@@ -48,7 +48,11 @@ pub struct AppState {
     pub history_realized_pnl: f64,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub last_price_update_ms: Option<u64>,
+    pub last_price_event_ms: Option<u64>,
+    pub last_price_latency_ms: Option<u64>,
     pub last_order_history_update_ms: Option<u64>,
+    pub last_order_history_event_ms: Option<u64>,
+    pub last_order_history_latency_ms: Option<u64>,
     pub symbol_selector_open: bool,
     pub symbol_selector_index: usize,
     pub symbol_items: Vec<String>,
@@ -92,7 +96,11 @@ impl AppState {
             history_realized_pnl: 0.0,
             strategy_stats: HashMap::new(),
             last_price_update_ms: None,
+            last_price_event_ms: None,
+            last_price_latency_ms: None,
             last_order_history_update_ms: None,
+            last_order_history_event_ms: None,
+            last_order_history_latency_ms: None,
             symbol_selector_open: false,
             symbol_selector_index: 0,
             symbol_items: Vec::new(),
@@ -125,7 +133,10 @@ impl AppState {
         match event {
             AppEvent::MarketTick(tick) => {
                 self.tick_count += 1;
-                self.last_price_update_ms = Some(chrono::Utc::now().timestamp_millis() as u64);
+                let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                self.last_price_update_ms = Some(now_ms);
+                self.last_price_event_ms = Some(tick.timestamp_ms);
+                self.last_price_latency_ms = Some(now_ms.saturating_sub(tick.timestamp_ms));
 
                 // Aggregate tick into candles
                 let should_new = match &self.current_candle {
@@ -297,8 +308,11 @@ impl AppState {
                 self.history_lose_count = snapshot.stats.lose_count;
                 self.history_realized_pnl = snapshot.stats.realized_pnl;
                 self.strategy_stats = snapshot.strategy_stats;
-                self.last_order_history_update_ms =
-                    Some(chrono::Utc::now().timestamp_millis() as u64);
+                self.last_order_history_update_ms = Some(snapshot.fetched_at_ms);
+                self.last_order_history_event_ms = snapshot.latest_event_ms;
+                self.last_order_history_latency_ms = snapshot
+                    .latest_event_ms
+                    .map(|ts| snapshot.fetched_at_ms.saturating_sub(ts));
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -333,7 +347,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             tick_count: state.tick_count,
             timeframe: &state.timeframe,
             last_price_update_ms: state.last_price_update_ms,
+            last_price_event_ms: state.last_price_event_ms,
+            last_price_latency_ms: state.last_price_latency_ms,
             last_order_history_update_ms: state.last_order_history_update_ms,
+            last_order_history_event_ms: state.last_order_history_event_ms,
+            last_order_history_latency_ms: state.last_order_history_latency_ms,
         },
         outer[0],
     );
