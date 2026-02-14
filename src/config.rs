@@ -51,9 +51,12 @@ pub fn parse_interval_ms(s: &str) -> Result<u64> {
     }
 
     let (num_str, suffix) = s.split_at(s.len() - 1);
-    let n: u64 = num_str
-        .parse()
-        .with_context(|| format!("invalid interval '{}': quantity must be a positive integer", s))?;
+    let n: u64 = num_str.parse().with_context(|| {
+        format!(
+            "invalid interval '{}': quantity must be a positive integer",
+            s
+        )
+    })?;
     if n == 0 {
         bail!("invalid interval '{}': quantity must be > 0", s);
     }
