@@ -270,13 +270,10 @@ pub struct StatusBar<'a> {
     pub strategy_label: &'a str,
     pub ws_connected: bool,
     pub paused: bool,
-    pub tick_count: u64,
     pub timeframe: &'a str,
     pub last_price_update_ms: Option<u64>,
-    pub last_price_event_ms: Option<u64>,
     pub last_price_latency_ms: Option<u64>,
     pub last_order_history_update_ms: Option<u64>,
-    pub last_order_history_event_ms: Option<u64>,
     pub last_order_history_latency_ms: Option<u64>,
 }
 
@@ -335,15 +332,9 @@ impl Widget for StatusBar<'_> {
             pause_status,
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("ticks: {}", self.tick_count),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
                 format!(
-                    "px:{} evt:{} lat:{}",
+                    "updated:{} lat:{}",
                     fmt_update(self.last_price_update_ms),
-                    fmt_update(self.last_price_event_ms),
                     fmt_age(self.last_price_latency_ms)
                 ),
                 Style::default().fg(Color::Blue),
@@ -351,9 +342,8 @@ impl Widget for StatusBar<'_> {
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!(
-                    "oh:{} evt:{} lat:{}",
+                    "order-updated:{} lat:{}",
                     fmt_update(self.last_order_history_update_ms),
-                    fmt_update(self.last_order_history_event_ms),
                     fmt_age(self.last_order_history_latency_ms)
                 ),
                 Style::default().fg(Color::Cyan),
