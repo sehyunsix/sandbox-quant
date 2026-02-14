@@ -125,10 +125,10 @@ impl AppState {
             AppEvent::StrategySignal(ref signal) => {
                 self.last_signal = Some(signal.clone());
                 match signal {
-                    Signal::Buy => {
+                    Signal::Buy { .. } => {
                         self.push_log("Signal: BUY".to_string());
                     }
-                    Signal::Sell => {
+                    Signal::Sell { .. } => {
                         self.push_log("Signal: SELL".to_string());
                     }
                     Signal::Hold => {}
