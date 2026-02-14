@@ -152,6 +152,10 @@ pub struct OrderLogPanel<'a> {
     last_order: &'a Option<OrderUpdate>,
     fast_sma: Option<f64>,
     slow_sma: Option<f64>,
+    trade_count: u32,
+    win_count: u32,
+    lose_count: u32,
+    realized_pnl: f64,
 }
 
 impl<'a> OrderLogPanel<'a> {
@@ -160,12 +164,20 @@ impl<'a> OrderLogPanel<'a> {
         last_order: &'a Option<OrderUpdate>,
         fast_sma: Option<f64>,
         slow_sma: Option<f64>,
+        trade_count: u32,
+        win_count: u32,
+        lose_count: u32,
+        realized_pnl: f64,
     ) -> Self {
         Self {
             last_signal,
             last_order,
             fast_sma,
             slow_sma,
+            trade_count,
+            win_count,
+            lose_count,
+            realized_pnl,
         }
     }
 }
@@ -223,6 +235,23 @@ impl Widget for OrderLogPanel<'_> {
                 Span::styled(&fast_str, Style::default().fg(Color::White)),
                 Span::styled("  Slow SMA: ", Style::default().fg(Color::Yellow)),
                 Span::styled(&slow_str, Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Trades: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", self.trade_count), Style::default().fg(Color::White)),
+                Span::styled("  Win: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", self.win_count), Style::default().fg(Color::Green)),
+                Span::styled("  Lose: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", self.lose_count), Style::default().fg(Color::Red)),
+                Span::styled("  PnL: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:.4}", self.realized_pnl),
+                    Style::default().fg(if self.realized_pnl >= 0.0 {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    }),
+                ),
             ]),
         ];
 

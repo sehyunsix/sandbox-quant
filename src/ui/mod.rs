@@ -42,6 +42,10 @@ pub struct AppState {
     pub log_messages: Vec<String>,
     pub balances: HashMap<String, f64>,
     pub fill_markers: Vec<FillMarker>,
+    pub history_trade_count: u32,
+    pub history_win_count: u32,
+    pub history_lose_count: u32,
+    pub history_realized_pnl: f64,
     pub symbol_selector_open: bool,
     pub symbol_selector_index: usize,
     pub symbol_items: Vec<String>,
@@ -79,6 +83,10 @@ impl AppState {
             log_messages: Vec::new(),
             balances: HashMap::new(),
             fill_markers: Vec::new(),
+            history_trade_count: 0,
+            history_win_count: 0,
+            history_lose_count: 0,
+            history_realized_pnl: 0.0,
             symbol_selector_open: false,
             symbol_selector_index: 0,
             symbol_items: Vec::new(),
@@ -253,11 +261,11 @@ impl AppState {
             AppEvent::BalanceUpdate(balances) => {
                 self.balances = balances;
             }
-            AppEvent::OrderHistoryUpdate(history) => {
+            AppEvent::OrderHistoryUpdate(snapshot) => {
                 let mut open = Vec::new();
                 let mut filled = Vec::new();
 
-                for row in history {
+                for row in snapshot.rows {
                     let status = row.split_whitespace().nth(1).unwrap_or_default();
                     if status == "FILLED" {
                         filled.push(row);
@@ -277,6 +285,10 @@ impl AppState {
 
                 self.open_order_history = open;
                 self.filled_order_history = filled;
+                self.history_trade_count = snapshot.stats.trade_count;
+                self.history_win_count = snapshot.stats.win_count;
+                self.history_lose_count = snapshot.stats.lose_count;
+                self.history_realized_pnl = snapshot.stats.realized_pnl;
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -344,6 +356,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.last_order,
             state.fast_sma,
             state.slow_sma,
+            state.history_trade_count,
+            state.history_win_count,
+            state.history_lose_count,
+            state.history_realized_pnl,
         ),
         outer[2],
     );

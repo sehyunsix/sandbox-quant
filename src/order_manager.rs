@@ -5,7 +5,7 @@ use anyhow::Result;
 use chrono::TimeZone;
 
 use crate::binance::rest::BinanceRestClient;
-use crate::binance::types::BinanceOrderResponse;
+use crate::binance::types::{BinanceMyTrade, BinanceOrderResponse};
 use crate::model::order::{Fill, Order, OrderSide, OrderStatus, OrderType};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
@@ -26,6 +26,20 @@ pub enum OrderUpdate {
         client_order_id: String,
         reason: String,
     },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OrderHistoryStats {
+    pub trade_count: u32,
+    pub win_count: u32,
+    pub lose_count: u32,
+    pub realized_pnl: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OrderHistorySnapshot {
+    pub rows: Vec<String>,
+    pub stats: OrderHistoryStats,
 }
 
 pub struct OrderManager {
@@ -76,6 +90,72 @@ fn format_order_history_row(
     )
 }
 
+fn compute_trade_stats(mut trades: Vec<BinanceMyTrade>) -> OrderHistoryStats {
+    trades.sort_by_key(|t| (t.time, t.id));
+    let mut side: Option<OrderSide> = None;
+    let mut qty = 0.0_f64;
+    let mut entry_price = 0.0_f64;
+    let mut stats = OrderHistoryStats::default();
+
+    for t in trades {
+        let fill_side = if t.is_buyer {
+            OrderSide::Buy
+        } else {
+            OrderSide::Sell
+        };
+        let fill_qty = t.qty.max(0.0);
+        if fill_qty <= f64::EPSILON {
+            continue;
+        }
+        let fill_price = t.price;
+
+        match side {
+            None => {
+                side = Some(fill_side);
+                qty = fill_qty;
+                entry_price = fill_price;
+            }
+            Some(pos_side) if pos_side == fill_side => {
+                let total_cost = entry_price * qty + fill_price * fill_qty;
+                qty += fill_qty;
+                if qty > f64::EPSILON {
+                    entry_price = total_cost / qty;
+                }
+            }
+            Some(pos_side) => {
+                let close_qty = fill_qty.min(qty);
+                let pnl_delta = match pos_side {
+                    OrderSide::Buy => (fill_price - entry_price) * close_qty,
+                    OrderSide::Sell => (entry_price - fill_price) * close_qty,
+                };
+                if pnl_delta > 0.0 {
+                    stats.win_count += 1;
+                    stats.trade_count += 1;
+                } else if pnl_delta < 0.0 {
+                    stats.lose_count += 1;
+                    stats.trade_count += 1;
+                }
+                stats.realized_pnl += pnl_delta;
+
+                qty -= close_qty;
+                let remain_open_qty = fill_qty - close_qty;
+                if qty <= f64::EPSILON {
+                    side = None;
+                    qty = 0.0;
+                    entry_price = 0.0;
+                }
+                if remain_open_qty > f64::EPSILON {
+                    side = Some(fill_side);
+                    qty = remain_open_qty;
+                    entry_price = fill_price;
+                }
+            }
+        }
+    }
+
+    stats
+}
+
 impl OrderManager {
     pub fn new(rest_client: Arc<BinanceRestClient>, symbol: &str, order_amount_usdt: f64) -> Self {
         Self {
@@ -118,13 +198,19 @@ impl OrderManager {
     }
 
     /// Fetch order history from exchange and format rows for UI display.
-    pub async fn refresh_order_history(&self, limit: usize) -> Result<Vec<String>> {
+    pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
         let mut orders = self.rest_client.get_all_orders(&self.symbol, limit).await?;
-        let trades = self.rest_client.get_my_trades(&self.symbol, limit).await?;
+        let trades = match self.rest_client.get_my_trades(&self.symbol, limit).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch myTrades; falling back to order-only history");
+                Vec::new()
+            }
+        };
         orders.sort_by_key(|o| o.update_time.max(o.time));
+        let stats = compute_trade_stats(trades.clone());
 
-        let mut trades_by_order_id: HashMap<u64, Vec<crate::binance::types::BinanceMyTrade>> =
-            HashMap::new();
+        let mut trades_by_order_id: HashMap<u64, Vec<BinanceMyTrade>> = HashMap::new();
         for trade in trades {
             trades_by_order_id
                 .entry(trade.order_id)
@@ -169,7 +255,10 @@ impl OrderManager {
             ));
         }
 
-        Ok(history)
+        Ok(OrderHistorySnapshot {
+            rows: history,
+            stats,
+        })
     }
 
     pub async fn submit_order(&mut self, signal: Signal) -> Result<Option<OrderUpdate>> {

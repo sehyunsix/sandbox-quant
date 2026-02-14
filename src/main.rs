@@ -403,6 +403,12 @@ async fn main() -> Result<()> {
                                     }
                                     Err(e) => {
                                         tracing::warn!(error = %e, "Failed to refresh order history");
+                                        let _ = strat_app_tx
+                                            .send(AppEvent::LogMessage(format!(
+                                                "[WARN] Order history refresh failed: {}",
+                                                e
+                                            )))
+                                            .await;
                                     }
                                 }
                                 // Send updated balances to UI after fill
@@ -441,6 +447,12 @@ async fn main() -> Result<()> {
                                 }
                                 Err(e) => {
                                     tracing::warn!(error = %e, "Failed to refresh order history");
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::LogMessage(format!(
+                                            "[WARN] Order history refresh failed: {}",
+                                            e
+                                        )))
+                                        .await;
                                 }
                             }
                             if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
@@ -467,6 +479,12 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "Periodic order history sync failed");
+                            let _ = strat_app_tx
+                                .send(AppEvent::LogMessage(format!(
+                                    "[WARN] Periodic order history sync failed: {}",
+                                    e
+                                )))
+                                .await;
                         }
                     }
                 }
@@ -481,8 +499,18 @@ async fn main() -> Result<()> {
                     let _ = strat_app_tx
                         .send(AppEvent::LogMessage(format!("Switched symbol to {}", current_symbol)))
                         .await;
-                    if let Ok(history) = order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                        let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                    match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                        Ok(history) => {
+                            let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                        }
+                        Err(e) => {
+                            let _ = strat_app_tx
+                                .send(AppEvent::LogMessage(format!(
+                                    "[WARN] Symbol switch history refresh failed: {}",
+                                    e
+                                )))
+                                .await;
+                        }
                     }
                 }
                 _ = strategy_preset_rx.changed() => {
