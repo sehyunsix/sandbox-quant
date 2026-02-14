@@ -11,7 +11,7 @@ mod ui;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{Event, KeyCode};
 use tokio::sync::{mpsc, watch};
 
@@ -38,7 +38,21 @@ fn switch_timeframe(
     let symbol = config.binance.symbol.clone();
     let limit = config.ui.price_history_len;
     let tx = app_tx.clone();
-    let interval_ms = parse_interval_ms(&interval);
+    let interval_ms = match parse_interval_ms(&interval) {
+        Ok(ms) => ms,
+        Err(e) => {
+            let err_tx = tx.clone();
+            tokio::spawn(async move {
+                let _ = err_tx
+                    .send(AppEvent::Error(format!(
+                        "Invalid timeframe '{}': {}",
+                        interval, e
+                    )))
+                    .await;
+            });
+            return;
+        }
+    };
     let iv = interval.clone();
     tokio::spawn(async move {
         match rest.get_klines(&symbol, &iv, limit).await {
@@ -421,7 +435,10 @@ async fn main() -> Result<()> {
 
     // TUI main loop
     let mut terminal = ratatui::init();
-    let candle_interval_ms = config.binance.kline_interval_ms();
+    let candle_interval_ms = config
+        .binance
+        .kline_interval_ms()
+        .context("validated binance.kline_interval became invalid at runtime")?;
     let mut app_state = AppState::new(
         &config.binance.symbol,
         config.ui.price_history_len,
