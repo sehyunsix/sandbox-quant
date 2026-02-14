@@ -71,12 +71,14 @@ impl Widget for PositionPanel<'_> {
         let usdt_bal = self.balances.get("USDT").copied().unwrap_or(0.0);
         let btc_bal = self.balances.get("BTC").copied().unwrap_or(0.0);
 
-        let display_realized_pnl = if self.position.trade_count == 0 && self.history_trade_count > 0 {
+        let display_realized_pnl = if self.position.trade_count == 0 && self.history_trade_count > 0
+        {
             self.history_realized_pnl
         } else {
             self.position.realized_pnl
         };
-        let display_trade_count = if self.position.trade_count == 0 && self.history_trade_count > 0 {
+        let display_trade_count = if self.position.trade_count == 0 && self.history_trade_count > 0
+        {
             self.history_trade_count
         } else {
             self.position.trade_count
@@ -256,11 +258,20 @@ impl Widget for OrderLogPanel<'_> {
             ]),
             Line::from(vec![
                 Span::styled("Trades: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", self.trade_count), Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{}", self.trade_count),
+                    Style::default().fg(Color::White),
+                ),
                 Span::styled("  Win: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", self.win_count), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("{}", self.win_count),
+                    Style::default().fg(Color::Green),
+                ),
                 Span::styled("  Lose: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", self.lose_count), Style::default().fg(Color::Red)),
+                Span::styled(
+                    format!("{}", self.lose_count),
+                    Style::default().fg(Color::Red),
+                ),
                 Span::styled("  PnL: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:.4}", self.realized_pnl),
@@ -297,8 +308,13 @@ pub struct StatusBar<'a> {
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let fmt_update = |ts_ms: Option<u64>| -> String {
-            ts_ms.and_then(|ts| chrono::Utc.timestamp_millis_opt(ts as i64).single())
-                .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
+            ts_ms
+                .and_then(|ts| chrono::Utc.timestamp_millis_opt(ts as i64).single())
+                .map(|dt| {
+                    dt.with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string()
+                })
                 .unwrap_or_else(|| "--:--:--".to_string())
         };
         let fmt_age = |lat_ms: Option<u64>| -> String {
