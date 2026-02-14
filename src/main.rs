@@ -56,6 +56,14 @@ impl StrategyPreset {
             StrategyPreset::Slow => (20, 60, config.strategy.min_ticks_between_signals),
         }
     }
+
+    fn source_tag(self) -> &'static str {
+        match self {
+            StrategyPreset::Config => "cfg",
+            StrategyPreset::Fast => "fst",
+            StrategyPreset::Slow => "slw",
+        }
+    }
 }
 
 fn strategy_preset_from_index(index: usize) -> StrategyPreset {
@@ -391,7 +399,7 @@ async fn main() -> Result<()> {
                             .await;
 
                         // Submit order
-                        match order_mgr.submit_order(signal).await {
+                        match order_mgr.submit_order(signal, active_preset.source_tag()).await {
                             Ok(Some(ref update)) => {
                                 let _ = strat_app_tx
                                     .send(AppEvent::OrderUpdate(update.clone()))
@@ -435,7 +443,7 @@ async fn main() -> Result<()> {
                         .send(AppEvent::StrategySignal(signal.clone()))
                         .await;
 
-                    match order_mgr.submit_order(signal).await {
+                    match order_mgr.submit_order(signal, "mnl").await {
                         Ok(Some(ref update)) => {
                             let _ = strat_app_tx
                                 .send(AppEvent::OrderUpdate(update.clone()))

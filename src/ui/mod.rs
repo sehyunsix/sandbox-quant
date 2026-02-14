@@ -13,7 +13,7 @@ use crate::event::{AppEvent, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
-use crate::order_manager::OrderUpdate;
+use crate::order_manager::{OrderHistoryStats, OrderUpdate};
 
 use chart::{FillMarker, PriceChart};
 use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
@@ -46,6 +46,7 @@ pub struct AppState {
     pub history_win_count: u32,
     pub history_lose_count: u32,
     pub history_realized_pnl: f64,
+    pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub last_price_update_ms: Option<u64>,
     pub last_order_history_update_ms: Option<u64>,
     pub symbol_selector_open: bool,
@@ -89,6 +90,7 @@ impl AppState {
             history_win_count: 0,
             history_lose_count: 0,
             history_realized_pnl: 0.0,
+            strategy_stats: HashMap::new(),
             last_price_update_ms: None,
             last_order_history_update_ms: None,
             symbol_selector_open: false,
@@ -294,6 +296,7 @@ impl AppState {
                 self.history_win_count = snapshot.stats.win_count;
                 self.history_lose_count = snapshot.stats.lose_count;
                 self.history_realized_pnl = snapshot.stats.realized_pnl;
+                self.strategy_stats = snapshot.strategy_stats;
                 self.last_order_history_update_ms =
                     Some(chrono::Utc::now().timestamp_millis() as u64);
             }
@@ -391,6 +394,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             " Select Symbol ",
             &state.symbol_items,
             state.symbol_selector_index,
+            None,
         );
     } else if state.strategy_selector_open {
         render_selector_popup(
@@ -398,14 +402,36 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             " Select Strategy ",
             &state.strategy_items,
             state.strategy_selector_index,
+            Some(&state.strategy_stats),
         );
     }
 }
 
-fn render_selector_popup(frame: &mut Frame, title: &str, items: &[String], selected: usize) {
+fn render_selector_popup(
+    frame: &mut Frame,
+    title: &str,
+    items: &[String],
+    selected: usize,
+    stats: Option<&HashMap<String, OrderHistoryStats>>,
+) {
     let area = frame.area();
-    let width = area.width.min(48).max(24);
-    let height = (items.len() as u16 + 4).min(area.height.saturating_sub(2)).max(6);
+    let available_width = area.width.saturating_sub(2).max(1);
+    let width = if stats.is_some() {
+        let min_width = 44;
+        let preferred = 84;
+        preferred.min(available_width).max(min_width.min(available_width))
+    } else {
+        let min_width = 24;
+        let preferred = 48;
+        preferred.min(available_width).max(min_width.min(available_width))
+    };
+    let available_height = area.height.saturating_sub(2).max(1);
+    let desired_height = if stats.is_some() {
+        items.len() as u16 + 5
+    } else {
+        items.len() as u16 + 4
+    };
+    let height = desired_height.min(available_height).max(6.min(available_height));
     let popup = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
@@ -421,15 +447,35 @@ fn render_selector_popup(frame: &mut Frame, title: &str, items: &[String], selec
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let lines: Vec<Line> = items
+    let mut lines: Vec<Line> = Vec::new();
+    if stats.is_some() {
+        lines.push(Line::from(vec![Span::styled(
+            "  Strategy           W    L    T    PnL",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )]));
+    }
+
+    let mut item_lines: Vec<Line> = items
         .iter()
         .enumerate()
         .map(|(idx, item)| {
+            let item_text = if let Some(stats_map) = stats {
+                if let Some(s) = strategy_stats_for_item(stats_map, item) {
+                    format!(
+                        "{:<16}  W:{:<3} L:{:<3} T:{:<3} PnL:{:.4}",
+                        item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
+                    )
+                } else {
+                    format!("{:<16}  W:0   L:0   T:0   PnL:0.0000", item)
+                }
+            } else {
+                item.clone()
+            };
             if idx == selected {
                 Line::from(vec![
                     Span::styled("▶ ", Style::default().fg(Color::Yellow)),
                     Span::styled(
-                        item.as_str(),
+                        item_text,
                         Style::default()
                             .fg(Color::White)
                             .add_modifier(Modifier::BOLD),
@@ -438,14 +484,35 @@ fn render_selector_popup(frame: &mut Frame, title: &str, items: &[String], selec
             } else {
                 Line::from(vec![
                     Span::styled("  ", Style::default()),
-                    Span::styled(item.as_str(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(item_text, Style::default().fg(Color::DarkGray)),
                 ])
             }
         })
         .collect();
+    lines.append(&mut item_lines);
 
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().fg(Color::White)),
         inner,
     );
+}
+
+fn strategy_stats_for_item<'a>(
+    stats_map: &'a HashMap<String, OrderHistoryStats>,
+    item: &str,
+) -> Option<&'a OrderHistoryStats> {
+    if let Some(s) = stats_map.get(item) {
+        return Some(s);
+    }
+    let source_tag = match item {
+        "MA(Config)" => Some("cfg"),
+        "MA(Fast 5/20)" => Some("fst"),
+        "MA(Slow 20/60)" => Some("slw"),
+        _ => None,
+    };
+    source_tag.and_then(|tag| {
+        stats_map
+            .get(tag)
+            .or_else(|| stats_map.get(&tag.to_ascii_uppercase()))
+    })
 }

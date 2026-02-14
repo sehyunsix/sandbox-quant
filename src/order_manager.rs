@@ -106,7 +106,7 @@ fn source_label_from_client_order_id(client_order_id: &str) -> &'static str {
     }
 }
 
-fn format_trade_history_row(t: &BinanceMyTrade) -> String {
+fn format_trade_history_row(t: &BinanceMyTrade, source: &str) -> String {
     let side = if t.is_buyer { "BUY" } else { "SELL" };
     format_order_history_row(
         t.time,
@@ -114,7 +114,7 @@ fn format_trade_history_row(t: &BinanceMyTrade) -> String {
         side,
         t.qty,
         t.price,
-        &format!("order#{}#T{} [UNKNOWN]", t.order_id, t.id),
+        &format!("order#{}#T{} [{}]", t.order_id, t.id, source),
     )
 }
 
@@ -352,17 +352,36 @@ impl OrderManager {
             bucket.sort_by_key(|t| t.time);
         }
 
+        let mut order_source_by_id = HashMap::new();
+        for o in &orders {
+            order_source_by_id.insert(
+                o.order_id,
+                source_label_from_client_order_id(&o.client_order_id).to_string(),
+            );
+        }
+        let strategy_stats = compute_trade_stats_by_source(trades.clone(), &order_source_by_id);
+
         let mut history = Vec::new();
         let mut used_trade_ids = std::collections::HashSet::new();
 
         if orders.is_empty() && !trades.is_empty() {
             let mut sorted = trades;
             sorted.sort_by_key(|t| (t.time, t.id));
-            history.extend(sorted.iter().map(format_trade_history_row));
+            history.extend(
+                sorted.iter().map(|t| {
+                    format_trade_history_row(
+                        t,
+                        order_source_by_id
+                            .get(&t.order_id)
+                            .map(String::as_str)
+                            .unwrap_or("UNKNOWN"),
+                    )
+                }),
+            );
             return Ok(OrderHistorySnapshot {
                 rows: history,
                 stats,
-                strategy_stats: HashMap::new(),
+                strategy_stats,
             });
         }
 
@@ -378,7 +397,12 @@ impl OrderManager {
                             side,
                             t.qty,
                             t.price,
-                            &format!("{}#T{}", o.client_order_id, t.id),
+                            &format!(
+                                "{}#T{} [{}]",
+                                o.client_order_id,
+                                t.id,
+                                source_label_from_client_order_id(&o.client_order_id)
+                            ),
                         ));
                     }
                     continue;
@@ -404,18 +428,28 @@ impl OrderManager {
         for bucket in trades_by_order_id.values() {
             for t in bucket {
                 if !used_trade_ids.contains(&t.id) {
-                    history.push(format_trade_history_row(t));
+                    history.push(format_trade_history_row(
+                        t,
+                        order_source_by_id
+                            .get(&t.order_id)
+                            .map(String::as_str)
+                            .unwrap_or("UNKNOWN"),
+                    ));
                 }
             }
         }
         Ok(OrderHistorySnapshot {
             rows: history,
             stats,
-            strategy_stats: HashMap::new(),
+            strategy_stats,
         })
     }
 
-    pub async fn submit_order(&mut self, signal: Signal) -> Result<Option<OrderUpdate>> {
+    pub async fn submit_order(
+        &mut self,
+        signal: Signal,
+        source_tag: &str,
+    ) -> Result<Option<OrderUpdate>> {
         let side = match &signal {
             Signal::Buy => OrderSide::Buy,
             Signal::Sell => OrderSide::Sell,
@@ -486,7 +520,11 @@ impl OrderManager {
             }
         }
 
-        let client_order_id = format!("sq-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let client_order_id = format!(
+            "sq-{}-{}",
+            source_tag.to_ascii_lowercase(),
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
 
         let order = Order {
             client_order_id: client_order_id.clone(),

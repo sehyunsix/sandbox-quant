@@ -44,6 +44,7 @@ pub fn persist_order_snapshot(
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let tx = conn.transaction()?;
+    let mut source_by_order_id = std::collections::HashMap::new();
 
     for o in orders {
         let avg_price = if o.executed_qty > 0.0 {
@@ -82,6 +83,10 @@ pub fn persist_order_snapshot(
                 now_ms,
             ],
         )?;
+        source_by_order_id.insert(
+            o.order_id,
+            source_label_from_client_order_id(&o.client_order_id).to_string(),
+        );
     }
 
     for t in trades {
@@ -107,7 +112,10 @@ pub fn persist_order_snapshot(
                 t.qty,
                 t.price,
                 t.time as i64,
-                "UNKNOWN",
+                source_by_order_id
+                    .get(&t.order_id)
+                    .map(String::as_str)
+                    .unwrap_or("UNKNOWN"),
                 now_ms,
             ],
         )?;
