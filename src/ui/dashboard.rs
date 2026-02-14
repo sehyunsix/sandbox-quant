@@ -98,9 +98,7 @@ impl Widget for PositionPanel<'_> {
                 Span::styled("Side: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     side_str,
-                    Style::default()
-                        .fg(side_color)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(side_color).add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![
@@ -252,18 +250,14 @@ impl Widget for StatusBar<'_> {
         } else {
             Span::styled(
                 "DISCONNECTED",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )
         };
 
         let pause_status = if self.paused {
             Span::styled(
                 " STRAT OFF ",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )
         } else {
             Span::styled(" STRAT ON ", Style::default().fg(Color::Green))

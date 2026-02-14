@@ -9,3 +9,4 @@ Auto-generated from `data/demo_market_registry.csv`.
 | Alpaca | Paper | Option | AAPL call paper order | https://paper-api.alpaca.markets | options demo venue |
 | Tradier | Sandbox | Equity | SPY paper trading | https://sandbox.tradier.com/v1 | stock demo venue |
 | Tradier | Sandbox | Option | SPY put paper order | https://sandbox.tradier.com/v1 | options demo venue |
+| Tastytrade | Sandbox | Option | QQQ option chain demo | https://api.cert.tastyworks.com | cert sandbox venue |

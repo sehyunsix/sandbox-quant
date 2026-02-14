@@ -79,7 +79,7 @@ mod tests {
         let v = ema.push(14.0).unwrap();
         assert!((v - 11.0).abs() < f64::EPSILON);
     }
-    
+
     #[test]
     fn single_period() {
         let mut ema = Ema::new(1);
@@ -87,7 +87,7 @@ mod tests {
         // EMA_1 = 42.0
         let v = ema.push(42.0).unwrap();
         assert!((v - 42.0).abs() < f64::EPSILON);
-        
+
         // EMA_2 = (99.0 - 42.0) * 1 + 42.0 = 99.0
         let v = ema.push(99.0).unwrap();
         assert!((v - 99.0).abs() < f64::EPSILON);
