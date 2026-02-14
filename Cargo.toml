@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-quant"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -27,3 +27,17 @@ rustls = { version = "0.23", features = ["ring"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[profile.dev]
+# Keep debug info for this crate, but avoid full symbols for all dependencies.
+# This significantly reduces target/debug size during iterative development.
+debug = 1
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+debug = 1
+
+[profile.test.package."*"]
+debug = 0

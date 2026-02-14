@@ -103,6 +103,12 @@ Full raw output is saved at `docs/assets/cargo-run-output.txt`.
 tail -f sandbox-quant.log | jq .
 ```
 
+## Build Artifact Size
+
+If `target/` grows too large during local iteration, see:
+
+- `docs/target-size-analysis.md`
+
 ## Project Layout
 
 ```text
