@@ -382,26 +382,24 @@ impl OrderManager {
         if orders.is_empty() && !trades.is_empty() {
             let mut sorted = trades;
             sorted.sort_by_key(|t| (t.time, t.id));
-            history.extend(
-                sorted.iter().map(|t| {
-                    fills.push(OrderHistoryFill {
-                        timestamp_ms: t.time,
-                        side: if t.is_buyer {
-                            OrderSide::Buy
-                        } else {
-                            OrderSide::Sell
-                        },
-                        price: t.price,
-                    });
-                    format_trade_history_row(
-                        t,
-                        order_source_by_id
-                            .get(&t.order_id)
-                            .map(String::as_str)
-                            .unwrap_or("UNKNOWN"),
-                    )
-                }),
-            );
+            history.extend(sorted.iter().map(|t| {
+                fills.push(OrderHistoryFill {
+                    timestamp_ms: t.time,
+                    side: if t.is_buyer {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    },
+                    price: t.price,
+                });
+                format_trade_history_row(
+                    t,
+                    order_source_by_id
+                        .get(&t.order_id)
+                        .map(String::as_str)
+                        .unwrap_or("UNKNOWN"),
+                )
+            }));
             return Ok(OrderHistorySnapshot {
                 rows: history,
                 stats,
