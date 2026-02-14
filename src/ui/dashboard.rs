@@ -237,6 +237,7 @@ impl Widget for OrderLogPanel<'_> {
 
 pub struct StatusBar<'a> {
     pub symbol: &'a str,
+    pub strategy_label: &'a str,
     pub ws_connected: bool,
     pub paused: bool,
     pub tick_count: u64,
@@ -272,6 +273,8 @@ impl Widget for StatusBar<'_> {
             ),
             Span::styled("| ", Style::default().fg(Color::DarkGray)),
             Span::styled(self.symbol, Style::default().fg(Color::Cyan)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(self.strategy_label, Style::default().fg(Color::Magenta)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 self.timeframe.to_uppercase(),
@@ -432,6 +435,11 @@ impl Widget for KeybindBar {
             Span::styled("eek ", Style::default().fg(Color::DarkGray)),
             Span::styled("[M]", Style::default().fg(Color::Cyan)),
             Span::styled("onth ", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[T]", Style::default().fg(Color::Magenta)),
+            Span::styled("icker ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Y]", Style::default().fg(Color::Magenta)),
+            Span::styled("strategy ", Style::default().fg(Color::DarkGray)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);

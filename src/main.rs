@@ -19,6 +19,7 @@ use crate::binance::rest::BinanceRestClient;
 use crate::binance::ws::BinanceWsClient;
 use crate::config::{parse_interval_ms, Config};
 use crate::event::AppEvent;
+use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_manager::OrderManager;
 use crate::strategy::ma_crossover::MaCrossover;
@@ -27,7 +28,53 @@ use crate::ui::AppState;
 const ORDER_HISTORY_LIMIT: usize = 100;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StrategyPreset {
+    Config,
+    Fast,
+    Slow,
+}
+
+impl StrategyPreset {
+    fn label(self) -> &'static str {
+        match self {
+            StrategyPreset::Config => "MA(Config)",
+            StrategyPreset::Fast => "MA(Fast 5/20)",
+            StrategyPreset::Slow => "MA(Slow 20/60)",
+        }
+    }
+
+    fn periods(self, config: &Config) -> (usize, usize, u64) {
+        match self {
+            StrategyPreset::Config => (
+                config.strategy.fast_period,
+                config.strategy.slow_period,
+                config.strategy.min_ticks_between_signals,
+            ),
+            StrategyPreset::Fast => (5, 20, config.strategy.min_ticks_between_signals),
+            StrategyPreset::Slow => (20, 60, config.strategy.min_ticks_between_signals),
+        }
+    }
+}
+
+fn strategy_preset_from_index(index: usize) -> StrategyPreset {
+    match index {
+        1 => StrategyPreset::Fast,
+        2 => StrategyPreset::Slow,
+        _ => StrategyPreset::Config,
+    }
+}
+
+fn strategy_preset_to_index(preset: StrategyPreset) -> usize {
+    match preset {
+        StrategyPreset::Config => 0,
+        StrategyPreset::Fast => 1,
+        StrategyPreset::Slow => 2,
+    }
+}
+
 fn switch_timeframe(
+    symbol: &str,
     interval: &str,
     rest_client: &Arc<BinanceRestClient>,
     config: &Config,
@@ -35,7 +82,7 @@ fn switch_timeframe(
 ) {
     let interval = interval.to_string();
     let rest = rest_client.clone();
-    let symbol = config.binance.symbol.clone();
+    let symbol = symbol.to_string();
     let limit = config.ui.price_history_len;
     let tx = app_tx.clone();
     let interval_ms = match parse_interval_ms(&interval) {
@@ -121,6 +168,13 @@ async fn main() -> Result<()> {
     let (manual_order_tx, mut manual_order_rx) = mpsc::channel::<Signal>(16);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (strategy_enabled_tx, strategy_enabled_rx) = watch::channel(true);
+    let tradable_symbols = config.binance.tradable_symbols();
+    let initial_symbol = tradable_symbols
+        .first()
+        .cloned()
+        .unwrap_or_else(|| config.binance.symbol.clone());
+    let (ws_symbol_tx, ws_symbol_rx) = watch::channel(initial_symbol.clone());
+    let (strategy_preset_tx, mut strategy_preset_rx) = watch::channel(StrategyPreset::Config);
 
     // REST client
     let rest_client = Arc::new(BinanceRestClient::new(
@@ -155,7 +209,7 @@ async fn main() -> Result<()> {
     // Fetch historical klines to pre-fill chart
     let historical_candles = match rest_client
         .get_klines(
-            &config.binance.symbol,
+            &initial_symbol,
             &config.binance.kline_interval,
             config.ui.price_history_len,
         )
@@ -184,8 +238,7 @@ async fn main() -> Result<()> {
     };
 
     // Spawn WebSocket task
-    let ws_streams = vec![format!("{}@trade", config.binance.symbol.to_lowercase())];
-    let ws_client = BinanceWsClient::new(&config.binance.ws_base_url, ws_streams);
+    let ws_client = BinanceWsClient::new(&config.binance.ws_base_url);
     let ws_tick_tx = tick_tx;
     // ^ Move tick_tx into WS task. This way, when WS task drops ws_tick_tx,
     //   the strategy task's tick_rx.recv() returns None → clean shutdown.
@@ -193,7 +246,7 @@ async fn main() -> Result<()> {
     let ws_shutdown = shutdown_rx.clone();
     tokio::spawn(async move {
         if let Err(e) = ws_client
-            .connect_and_run(ws_tick_tx, ws_app_tx.clone(), ws_shutdown)
+            .connect_and_run(ws_tick_tx, ws_app_tx.clone(), ws_symbol_rx, ws_shutdown)
             .await
         {
             tracing::error!(error = %e, "WebSocket task failed");
@@ -213,15 +266,15 @@ async fn main() -> Result<()> {
     let mut strat_shutdown = shutdown_rx.clone();
     let strat_historical_closes: Vec<f64> = historical_candles.iter().map(|c| c.close).collect();
     let strat_enabled_rx = strategy_enabled_rx;
+    let mut strat_symbol_rx = ws_symbol_tx.subscribe();
     tokio::spawn(async move {
-        let mut strategy = MaCrossover::new(
-            strat_config.strategy.fast_period,
-            strat_config.strategy.slow_period,
-            strat_config.strategy.min_ticks_between_signals,
-        );
+        let mut active_preset = *strategy_preset_rx.borrow();
+        let (mut fast_period, mut slow_period, mut min_ticks) = active_preset.periods(&strat_config);
+        let mut strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
+        let mut current_symbol = strat_symbol_rx.borrow().clone();
         let mut order_mgr = OrderManager::new(
-            strat_rest,
-            &strat_config.binance.symbol,
+            strat_rest.clone(),
+            &current_symbol,
             strat_config.strategy.order_amount_usdt,
         );
         let mut order_history_sync =
@@ -272,10 +325,10 @@ async fn main() -> Result<()> {
         let _ = strat_app_tx
             .send(AppEvent::LogMessage(format!(
                 "Strategy: MA({}/{}) usdt={} cooldown={}",
-                strat_config.strategy.fast_period,
-                strat_config.strategy.slow_period,
+                fast_period,
+                slow_period,
                 strat_config.strategy.order_amount_usdt,
-                strat_config.strategy.min_ticks_between_signals,
+                min_ticks,
             )))
             .await;
 
@@ -417,6 +470,34 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                _ = strat_symbol_rx.changed() => {
+                    current_symbol = strat_symbol_rx.borrow().clone();
+                    order_mgr = OrderManager::new(
+                        strat_rest.clone(),
+                        &current_symbol,
+                        strat_config.strategy.order_amount_usdt,
+                    );
+                    strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
+                    let _ = strat_app_tx
+                        .send(AppEvent::LogMessage(format!("Switched symbol to {}", current_symbol)))
+                        .await;
+                    if let Ok(history) = order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                        let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                    }
+                }
+                _ = strategy_preset_rx.changed() => {
+                    active_preset = *strategy_preset_rx.borrow();
+                    (fast_period, slow_period, min_ticks) = active_preset.periods(&strat_config);
+                    strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
+                    let _ = strat_app_tx
+                        .send(AppEvent::LogMessage(format!(
+                            "Strategy switched: {} ({}/{})",
+                            active_preset.label(),
+                            fast_period,
+                            slow_period
+                        )))
+                        .await;
+                }
                 _ = strat_shutdown.changed() => {
                     tracing::info!("Strategy task shutting down");
                     break;
@@ -440,11 +521,18 @@ async fn main() -> Result<()> {
         .kline_interval_ms()
         .context("validated binance.kline_interval became invalid at runtime")?;
     let mut app_state = AppState::new(
-        &config.binance.symbol,
+        &initial_symbol,
+        StrategyPreset::Config.label(),
         config.ui.price_history_len,
         candle_interval_ms,
         &config.binance.kline_interval,
     );
+    app_state.symbol_items = tradable_symbols.clone();
+    app_state.strategy_items = vec![
+        StrategyPreset::Config.label().to_string(),
+        StrategyPreset::Fast.label().to_string(),
+        StrategyPreset::Slow.label().to_string(),
+    ];
 
     // Pre-fill chart with historical candles
     if !historical_candles.is_empty() {
@@ -457,8 +545,10 @@ async fn main() -> Result<()> {
 
     app_state.push_log(format!(
         "sandbox-quant started | {} | demo",
-        config.binance.symbol
+        initial_symbol
     ));
+    let mut current_symbol = initial_symbol.clone();
+    let mut current_preset = StrategyPreset::Config;
 
     loop {
         // Draw
@@ -467,6 +557,86 @@ async fn main() -> Result<()> {
         // Handle input (non-blocking with timeout)
         if crossterm::event::poll(Duration::from_millis(config.ui.refresh_rate_ms))? {
             if let Event::Key(key) = crossterm::event::read()? {
+                if app_state.symbol_selector_open {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('T') => {
+                            app_state.symbol_selector_open = false;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                            app_state.symbol_selector_index =
+                                app_state.symbol_selector_index.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                            app_state.symbol_selector_index = (app_state.symbol_selector_index + 1)
+                                .min(app_state.symbol_items.len().saturating_sub(1));
+                        }
+                        KeyCode::Enter => {
+                            if let Some(next_symbol) =
+                                app_state.symbol_items.get(app_state.symbol_selector_index)
+                            {
+                                if next_symbol != &current_symbol {
+                                    current_symbol = next_symbol.clone();
+                                    app_state.symbol = current_symbol.clone();
+                                    app_state.position = Position::new(current_symbol.clone());
+                                    app_state.candles.clear();
+                                    app_state.current_candle = None;
+                                    app_state.fill_markers.clear();
+                                    app_state.open_order_history.clear();
+                                    app_state.filled_order_history.clear();
+                                    let _ = ws_symbol_tx.send(current_symbol.clone());
+                                    switch_timeframe(
+                                        &current_symbol,
+                                        &app_state.timeframe,
+                                        &rest_client,
+                                        &config,
+                                        &app_tx,
+                                    );
+                                    app_state.push_log(format!(
+                                        "Symbol switched to {}",
+                                        current_symbol
+                                    ));
+                                }
+                            }
+                            app_state.symbol_selector_open = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                if app_state.strategy_selector_open {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            app_state.strategy_selector_open = false;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                            app_state.strategy_selector_index =
+                                app_state.strategy_selector_index.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                            app_state.strategy_selector_index =
+                                (app_state.strategy_selector_index + 1)
+                                    .min(app_state.strategy_items.len().saturating_sub(1));
+                        }
+                        KeyCode::Enter => {
+                            let next_preset =
+                                strategy_preset_from_index(app_state.strategy_selector_index);
+                            if next_preset != current_preset {
+                                current_preset = next_preset;
+                                app_state.strategy_label = current_preset.label().to_string();
+                                app_state.fast_sma = None;
+                                app_state.slow_sma = None;
+                                let _ = strategy_preset_tx.send(current_preset);
+                                app_state.push_log(format!(
+                                    "Strategy selected: {}",
+                                    current_preset.label()
+                                ));
+                            }
+                            app_state.strategy_selector_open = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => {
                         tracing::info!("User quit");
@@ -499,19 +669,31 @@ async fn main() -> Result<()> {
                         let _ = manual_order_tx.try_send(Signal::Sell);
                     }
                     KeyCode::Char('1') => {
-                        switch_timeframe("1m", &rest_client, &config, &app_tx);
+                        switch_timeframe(&current_symbol, "1m", &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('h') | KeyCode::Char('H') => {
-                        switch_timeframe("1h", &rest_client, &config, &app_tx);
+                        switch_timeframe(&current_symbol, "1h", &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('d') | KeyCode::Char('D') => {
-                        switch_timeframe("1d", &rest_client, &config, &app_tx);
+                        switch_timeframe(&current_symbol, "1d", &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('w') | KeyCode::Char('W') => {
-                        switch_timeframe("1w", &rest_client, &config, &app_tx);
+                        switch_timeframe(&current_symbol, "1w", &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('m') | KeyCode::Char('M') => {
-                        switch_timeframe("1M", &rest_client, &config, &app_tx);
+                        switch_timeframe(&current_symbol, "1M", &rest_client, &config, &app_tx);
+                    }
+                    KeyCode::Char('t') | KeyCode::Char('T') => {
+                        app_state.symbol_selector_index = app_state
+                            .symbol_items
+                            .iter()
+                            .position(|s| s == &current_symbol)
+                            .unwrap_or(0);
+                        app_state.symbol_selector_open = true;
+                    }
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        app_state.strategy_selector_index = strategy_preset_to_index(current_preset);
+                        app_state.strategy_selector_open = true;
                     }
                     _ => {}
                 }

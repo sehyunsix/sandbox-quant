@@ -43,18 +43,15 @@ impl ExponentialBackoff {
 
 pub struct BinanceWsClient {
     url: String,
-    streams: Vec<String>,
 }
 
 impl BinanceWsClient {
     /// Create a new WebSocket client.
     ///
     /// `ws_base_url` — e.g. `wss://stream.testnet.binance.vision/ws`
-    /// `streams`     — e.g. `["btcusdt@trade", "btcusdt@miniTicker"]`
-    pub fn new(ws_base_url: &str, streams: Vec<String>) -> Self {
+    pub fn new(ws_base_url: &str) -> Self {
         Self {
             url: ws_base_url.to_string(),
-            streams,
         }
     }
 
@@ -64,6 +61,7 @@ impl BinanceWsClient {
         &self,
         tick_tx: mpsc::Sender<Tick>,
         status_tx: mpsc::Sender<AppEvent>,
+        mut symbol_rx: watch::Receiver<String>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let mut backoff =
@@ -72,7 +70,12 @@ impl BinanceWsClient {
 
         loop {
             attempt += 1;
-            match self.connect_once(&tick_tx, &status_tx, &mut shutdown).await {
+            let symbol = symbol_rx.borrow().clone();
+            let streams = vec![format!("{}@trade", symbol.to_lowercase())];
+            match self
+                .connect_once(&streams, &tick_tx, &status_tx, &mut symbol_rx, &mut shutdown)
+                .await
+            {
                 Ok(()) => {
                     // Clean shutdown requested
                     let _ = status_tx
@@ -117,8 +120,10 @@ impl BinanceWsClient {
 
     async fn connect_once(
         &self,
+        streams: &[String],
         tick_tx: &mpsc::Sender<Tick>,
         status_tx: &mpsc::Sender<AppEvent>,
+        symbol_rx: &mut watch::Receiver<String>,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<()> {
         let _ = status_tx
@@ -140,7 +145,7 @@ impl BinanceWsClient {
         // Send SUBSCRIBE message per Binance WebSocket API spec
         let subscribe_msg = serde_json::json!({
             "method": "SUBSCRIBE",
-            "params": self.streams,
+            "params": streams,
             "id": 1
         });
         write
@@ -154,7 +159,7 @@ impl BinanceWsClient {
         let _ = status_tx
             .send(AppEvent::LogMessage(format!(
                 "Subscribed to: {}",
-                self.streams.join(", ")
+                streams.join(", ")
             )))
             .await;
 
@@ -211,7 +216,7 @@ impl BinanceWsClient {
                     // Send UNSUBSCRIBE before closing
                     let unsub_msg = serde_json::json!({
                         "method": "UNSUBSCRIBE",
-                        "params": self.streams,
+                        "params": streams,
                         "id": 2
                     });
                     let _ = write
@@ -219,6 +224,10 @@ impl BinanceWsClient {
                         .await;
                     let _ = write.send(tungstenite::Message::Close(None)).await;
                     return Ok(());
+                }
+                _ = symbol_rx.changed() => {
+                    let _ = write.send(tungstenite::Message::Close(None)).await;
+                    return Err(anyhow::anyhow!("Symbol changed, reconnecting WebSocket"));
                 }
             }
         }

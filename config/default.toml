@@ -2,6 +2,7 @@
 rest_base_url = "https://demo-api.binance.com"
 ws_base_url = "wss://demo-stream.binance.com/ws"
 symbol = "BTCUSDT"
+symbols = ["ETHUSDT", "BNBUSDT", "SOLUSDT"]
 recv_window = 5000
 kline_interval = "1m"
 

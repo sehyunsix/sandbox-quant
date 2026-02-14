@@ -15,6 +15,8 @@ pub struct BinanceConfig {
     pub rest_base_url: String,
     pub ws_base_url: String,
     pub symbol: String,
+    #[serde(default)]
+    pub symbols: Vec<String>,
     pub recv_window: u64,
     pub kline_interval: String,
     #[serde(skip)]
@@ -78,6 +80,20 @@ impl BinanceConfig {
     pub fn kline_interval_ms(&self) -> Result<u64> {
         parse_interval_ms(&self.kline_interval)
     }
+
+    pub fn tradable_symbols(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.symbol.trim().is_empty() {
+            out.push(self.symbol.trim().to_ascii_uppercase());
+        }
+        for sym in &self.symbols {
+            let s = sym.trim().to_ascii_uppercase();
+            if !s.is_empty() && !out.iter().any(|v| v == &s) {
+                out.push(s);
+            }
+        }
+        out
+    }
 }
 
 impl Config {
@@ -116,6 +132,7 @@ mod tests {
 rest_base_url = "https://demo-api.binance.com"
 ws_base_url = "wss://demo-stream.binance.com/ws"
 symbol = "BTCUSDT"
+symbols = ["ETHUSDT", "BNBUSDT"]
 recv_window = 5000
 kline_interval = "1m"
 
@@ -134,10 +151,33 @@ level = "debug"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.binance.symbol, "BTCUSDT");
+        assert_eq!(config.binance.symbols.len(), 2);
         assert_eq!(config.strategy.fast_period, 10);
         assert_eq!(config.strategy.slow_period, 30);
         assert!((config.strategy.order_amount_usdt - 10.0).abs() < f64::EPSILON);
         assert_eq!(config.ui.price_history_len, 120);
+    }
+
+    #[test]
+    fn tradable_symbols_dedup_and_include_primary() {
+        let cfg = BinanceConfig {
+            rest_base_url: "x".to_string(),
+            ws_base_url: "y".to_string(),
+            symbol: "btcusdt".to_string(),
+            symbols: vec![
+                "ETHUSDT".to_string(),
+                "BTCUSDT".to_string(),
+                "  ".to_string(),
+            ],
+            recv_window: 5000,
+            kline_interval: "1m".to_string(),
+            api_key: String::new(),
+            api_secret: String::new(),
+        };
+        assert_eq!(
+            cfg.tradable_symbols(),
+            vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()]
+        );
     }
 
     #[test]

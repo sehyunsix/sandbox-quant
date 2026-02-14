@@ -3,7 +3,10 @@ pub mod dashboard;
 
 use std::collections::HashMap;
 
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::event::{AppEvent, WsConnectionStatus};
@@ -20,6 +23,7 @@ const MAX_FILL_MARKERS: usize = 200;
 
 pub struct AppState {
     pub symbol: String,
+    pub strategy_label: String,
     pub candles: Vec<Candle>,
     pub current_candle: Option<CandleBuilder>,
     pub candle_interval_ms: u64,
@@ -38,17 +42,25 @@ pub struct AppState {
     pub log_messages: Vec<String>,
     pub balances: HashMap<String, f64>,
     pub fill_markers: Vec<FillMarker>,
+    pub symbol_selector_open: bool,
+    pub symbol_selector_index: usize,
+    pub symbol_items: Vec<String>,
+    pub strategy_selector_open: bool,
+    pub strategy_selector_index: usize,
+    pub strategy_items: Vec<String>,
 }
 
 impl AppState {
     pub fn new(
         symbol: &str,
+        strategy_label: &str,
         price_history_len: usize,
         candle_interval_ms: u64,
         timeframe: &str,
     ) -> Self {
         Self {
             symbol: symbol.to_string(),
+            strategy_label: strategy_label.to_string(),
             candles: Vec::with_capacity(price_history_len),
             current_candle: None,
             candle_interval_ms,
@@ -67,6 +79,16 @@ impl AppState {
             log_messages: Vec::new(),
             balances: HashMap::new(),
             fill_markers: Vec::new(),
+            symbol_selector_open: false,
+            symbol_selector_index: 0,
+            symbol_items: Vec::new(),
+            strategy_selector_open: false,
+            strategy_selector_index: 0,
+            strategy_items: vec![
+                "MA(Config)".to_string(),
+                "MA(Fast 5/20)".to_string(),
+                "MA(Slow 20/60)".to_string(),
+            ],
         }
     }
 
@@ -283,6 +305,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     frame.render_widget(
         StatusBar {
             symbol: &state.symbol,
+            strategy_label: &state.strategy_label,
             ws_connected: state.ws_connected,
             paused: state.paused,
             tick_count: state.tick_count,
@@ -336,4 +359,68 @@ pub fn render(frame: &mut Frame, state: &AppState) {
 
     // Keybind bar
     frame.render_widget(KeybindBar, outer[5]);
+
+    if state.symbol_selector_open {
+        render_selector_popup(
+            frame,
+            " Select Symbol ",
+            &state.symbol_items,
+            state.symbol_selector_index,
+        );
+    } else if state.strategy_selector_open {
+        render_selector_popup(
+            frame,
+            " Select Strategy ",
+            &state.strategy_items,
+            state.strategy_selector_index,
+        );
+    }
+}
+
+fn render_selector_popup(frame: &mut Frame, title: &str, items: &[String], selected: usize) {
+    let area = frame.area();
+    let width = area.width.min(48).max(24);
+    let height = (items.len() as u16 + 4).min(area.height.saturating_sub(2)).max(6);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let lines: Vec<Line> = items
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            if idx == selected {
+                Line::from(vec![
+                    Span::styled("▶ ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        item.as_str(),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(item.as_str(), Style::default().fg(Color::DarkGray)),
+                ])
+            }
+        })
+        .collect();
+
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().fg(Color::White)),
+        inner,
+    );
 }
