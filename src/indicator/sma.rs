@@ -91,7 +91,7 @@ mod tests {
         sma.push(10.0);
         sma.push(20.0);
         sma.push(30.0); // avg = 20
-        // Wrap around
+                        // Wrap around
         let v = sma.push(40.0).unwrap(); // [40, 20, 30] -> avg = 30
         assert!((v - 30.0).abs() < f64::EPSILON);
 

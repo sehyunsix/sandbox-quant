@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -43,22 +43,36 @@ pub struct LoggingConfig {
 }
 
 /// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.
-pub fn parse_interval_ms(s: &str) -> u64 {
+pub fn parse_interval_ms(s: &str) -> Result<u64> {
+    if s.len() < 2 {
+        bail!(
+            "kline_interval must include a positive number and unit, got '{}'",
+            s
+        );
+    }
+
     let (num_str, suffix) = s.split_at(s.len() - 1);
-    let n: u64 = num_str.parse().unwrap_or(1);
-    match suffix {
+    let n: u64 = num_str
+        .parse()
+        .with_context(|| format!("invalid kline interval number '{}'", num_str))?;
+    if n == 0 {
+        bail!("kline_interval value must be > 0, got '{}'", s);
+    }
+
+    let ms = match suffix {
         "s" => n * 1_000,
         "m" => n * 60_000,
         "h" => n * 3_600_000,
         "d" => n * 86_400_000,
         "w" => n * 7 * 86_400_000,
         "M" => n * 30 * 86_400_000,
-        _ => n * 60_000,
-    }
+        _ => bail!("unsupported kline_interval unit '{}'", suffix),
+    };
+    Ok(ms)
 }
 
 impl BinanceConfig {
-    pub fn kline_interval_ms(&self) -> u64 {
+    pub fn kline_interval_ms(&self) -> Result<u64> {
         parse_interval_ms(&self.kline_interval)
     }
 }
@@ -78,6 +92,11 @@ impl Config {
             .context("BINANCE_API_KEY not set in .env or environment")?;
         config.binance.api_secret = std::env::var("BINANCE_API_SECRET")
             .context("BINANCE_API_SECRET not set in .env or environment")?;
+
+        config
+            .binance
+            .kline_interval_ms()
+            .context("invalid binance.kline_interval in config/default.toml")?;
 
         Ok(config)
     }
@@ -116,5 +135,19 @@ level = "debug"
         assert_eq!(config.strategy.slow_period, 30);
         assert!((config.strategy.order_amount_usdt - 10.0).abs() < f64::EPSILON);
         assert_eq!(config.ui.price_history_len, 120);
+    }
+
+    #[test]
+    fn parse_interval_valid() {
+        assert_eq!(parse_interval_ms("1m").unwrap(), 60_000);
+        assert_eq!(parse_interval_ms("2h").unwrap(), 7_200_000);
+    }
+
+    #[test]
+    fn parse_interval_rejects_invalid_inputs() {
+        assert!(parse_interval_ms("").is_err());
+        assert!(parse_interval_ms("0m").is_err());
+        assert!(parse_interval_ms("xm").is_err());
+        assert!(parse_interval_ms("1x").is_err());
     }
 }

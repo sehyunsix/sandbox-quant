@@ -45,18 +45,14 @@ impl MaCrossover {
 
         let signal = match (fast, slow, self.prev_fast, self.prev_slow) {
             (Some(f), Some(s), Some(pf), Some(ps)) => {
-                let cooldown_ok = self.tick_count - self.last_signal_tick
-                    >= self.min_ticks_between_signals;
+                let cooldown_ok =
+                    self.tick_count - self.last_signal_tick >= self.min_ticks_between_signals;
 
                 if pf <= ps && f > s && self.position == PositionState::Flat && cooldown_ok {
                     self.position = PositionState::Long;
                     self.last_signal_tick = self.tick_count;
                     Signal::Buy
-                } else if pf >= ps
-                    && f < s
-                    && self.position == PositionState::Long
-                    && cooldown_ok
-                {
+                } else if pf >= ps && f < s && self.position == PositionState::Long && cooldown_ok {
                     self.position = PositionState::Flat;
                     self.last_signal_tick = self.tick_count;
                     Signal::Sell
@@ -163,7 +159,11 @@ mod tests {
         // Continue rising - should stay Hold, never Buy again
         for &p in &[160.0, 170.0, 180.0, 190.0] {
             let sig = strat.on_tick(&tick(p));
-            assert_eq!(sig, Signal::Hold, "Should not double-buy while already long");
+            assert_eq!(
+                sig,
+                Signal::Hold,
+                "Should not double-buy while already long"
+            );
         }
     }
 
