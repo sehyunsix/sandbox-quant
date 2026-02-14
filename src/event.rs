@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::model::candle::Candle;
 use crate::model::signal::Signal;
 use crate::model::tick::Tick;
-use crate::order_manager::OrderUpdate;
+use crate::order_manager::{OrderHistorySnapshot, OrderUpdate};
 
 #[derive(Debug, Clone)]
 pub enum WsConnectionStatus {
@@ -28,6 +28,7 @@ pub enum AppEvent {
         interval: String,
     },
     BalanceUpdate(HashMap<String, f64>),
+    OrderHistoryUpdate(OrderHistorySnapshot),
     LogMessage(String),
     Error(String),
 }

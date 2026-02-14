@@ -4,6 +4,8 @@ pub struct Candle {
     pub high: f64,
     pub low: f64,
     pub close: f64,
+    pub open_time: u64,
+    pub close_time: u64,
 }
 
 impl Candle {
@@ -26,6 +28,7 @@ pub struct CandleBuilder {
 impl CandleBuilder {
     /// Start a new candle. The bucket is aligned to the interval.
     pub fn new(price: f64, timestamp_ms: u64, interval_ms: u64) -> Self {
+        assert!(interval_ms > 0, "interval_ms must be > 0");
         let open_time = timestamp_ms - (timestamp_ms % interval_ms);
         Self {
             open: price,
@@ -56,6 +59,8 @@ impl CandleBuilder {
             high: self.high,
             low: self.low,
             close: self.close,
+            open_time: self.open_time,
+            close_time: self.close_time,
         }
     }
 }
@@ -92,7 +97,15 @@ mod tests {
             high: 105.0,
             low: 90.0,
             close: 95.0,
+            open_time: 0,
+            close_time: 60_000,
         };
         assert!(!candle.is_bullish());
+    }
+
+    #[test]
+    #[should_panic(expected = "interval_ms must be > 0")]
+    fn candle_builder_rejects_zero_interval() {
+        let _ = CandleBuilder::new(100.0, 60_500, 0);
     }
 }

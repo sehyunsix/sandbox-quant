@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -8,7 +9,7 @@ use crate::error::AppError;
 use crate::model::candle::Candle;
 use crate::model::order::OrderSide;
 
-use super::types::{AccountInfo, BinanceOrderResponse, ServerTimeResponse};
+use super::types::{AccountInfo, BinanceAllOrder, BinanceOrderResponse, ServerTimeResponse};
 
 pub struct BinanceRestClient {
     http: reqwest::Client,
@@ -204,11 +205,20 @@ impl BinanceRestClient {
         let candles: Vec<Candle> = resp
             .iter()
             .filter_map(|kline| {
+                let open_time = kline.get(0)?.as_u64()?;
                 let open = kline.get(1)?.as_str()?.parse::<f64>().ok()?;
                 let high = kline.get(2)?.as_str()?.parse::<f64>().ok()?;
                 let low = kline.get(3)?.as_str()?.parse::<f64>().ok()?;
                 let close = kline.get(4)?.as_str()?.parse::<f64>().ok()?;
-                Some(Candle { open, high, low, close })
+                let close_time = kline.get(6)?.as_u64()?;
+                Some(Candle {
+                    open,
+                    high,
+                    low,
+                    close,
+                    open_time,
+                    close_time,
+                })
             })
             .collect();
 
@@ -222,10 +232,7 @@ impl BinanceRestClient {
     ) -> Result<BinanceOrderResponse> {
         self.check_rate_limit();
 
-        let query = format!(
-            "symbol={}&origClientOrderId={}",
-            symbol, client_order_id
-        );
+        let query = format!("symbol={}&origClientOrderId={}", symbol, client_order_id);
         let signed = self.sign(&query);
         let url = format!("{}/api/v3/order?{}", self.base_url, signed);
 
@@ -252,6 +259,88 @@ impl BinanceRestClient {
         }
 
         Ok(resp.json().await?)
+    }
+
+    /// Fetch one page of orders for a symbol.
+    async fn get_all_orders_page(
+        &self,
+        symbol: &str,
+        limit: usize,
+        from_order_id: Option<u64>,
+    ) -> Result<Vec<BinanceAllOrder>> {
+        self.check_rate_limit();
+
+        let limit = limit.clamp(1, 1000);
+        let query = match from_order_id {
+            Some(order_id) => format!("symbol={}&limit={}&orderId={}", symbol, limit, order_id),
+            None => format!("symbol={}&limit={}", symbol, limit),
+        };
+        let signed = self.sign(&query);
+        let url = format!("{}/api/v3/allOrders?{}", self.base_url, signed);
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await
+            .context("get_all_orders HTTP failed")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!("All orders request failed: {}", body));
+        }
+
+        Ok(resp.json().await?)
+    }
+
+    /// Fetch all available orders for a symbol by paging through `/api/v3/allOrders`.
+    /// `page_size` controls each request size (1..=1000).
+    pub async fn get_all_orders(&self, symbol: &str, page_size: usize) -> Result<Vec<BinanceAllOrder>> {
+        let mut all_orders = Vec::new();
+        let mut seen_order_ids = HashSet::new();
+        // Start from the oldest cursor so we can reliably walk beyond 1000 orders.
+        let mut from_order_id: Option<u64> = Some(0);
+        let page_size = page_size.clamp(1, 1000);
+
+        loop {
+            let page = self
+                .get_all_orders_page(symbol, page_size, from_order_id)
+                .await?;
+
+            if page.is_empty() {
+                break;
+            }
+
+            let fetched = page.len();
+            let mut max_seen_in_page = 0_u64;
+            for order in page {
+                max_seen_in_page = max_seen_in_page.max(order.order_id);
+                if seen_order_ids.insert(order.order_id) {
+                    all_orders.push(order);
+                }
+            }
+
+            if fetched < page_size {
+                break;
+            }
+
+            let current_cursor = from_order_id.unwrap_or(0);
+            let next_cursor = max_seen_in_page.saturating_add(1);
+            if next_cursor <= current_cursor {
+                break;
+            }
+            from_order_id = Some(next_cursor);
+        }
+
+        Ok(all_orders)
     }
 }
 

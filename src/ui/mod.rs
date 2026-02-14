@@ -8,9 +8,10 @@ use ratatui::Frame;
 
 use crate::event::{AppEvent, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
+use crate::model::order::Fill;
 use crate::model::position::Position;
 use crate::model::signal::Signal;
-use crate::order_manager::OrderUpdate;
+use crate::order_manager::{HistoricalFill, OrderUpdate};
 
 use chart::{FillMarker, PriceChart};
 use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
@@ -20,6 +21,7 @@ const MAX_FILL_MARKERS: usize = 200;
 
 pub struct AppState {
     pub symbol: String,
+    pub product_label: String,
     pub candles: Vec<Candle>,
     pub current_candle: Option<CandleBuilder>,
     pub candle_interval_ms: u64,
@@ -29,6 +31,7 @@ pub struct AppState {
     pub last_signal: Option<Signal>,
     pub last_order: Option<OrderUpdate>,
     pub order_history: Vec<String>,
+    pub order_history_scroll: usize,
     pub fast_sma: Option<f64>,
     pub slow_sma: Option<f64>,
     pub ws_connected: bool,
@@ -42,12 +45,14 @@ pub struct AppState {
 impl AppState {
     pub fn new(
         symbol: &str,
+        product_label: &str,
         price_history_len: usize,
         candle_interval_ms: u64,
         timeframe: &str,
     ) -> Self {
         Self {
             symbol: symbol.to_string(),
+            product_label: product_label.to_string(),
             candles: Vec::with_capacity(price_history_len),
             current_candle: None,
             candle_interval_ms,
@@ -57,6 +62,7 @@ impl AppState {
             last_signal: None,
             last_order: None,
             order_history: Vec::new(),
+            order_history_scroll: 0,
             fast_sma: None,
             slow_sma: None,
             ws_connected: false,
@@ -80,6 +86,57 @@ impl AppState {
         self.log_messages.push(msg);
         if self.log_messages.len() > MAX_LOG_MESSAGES {
             self.log_messages.remove(0);
+        }
+    }
+
+    fn candle_index_for_timestamp(&self, timestamp_ms: u64) -> Option<usize> {
+        if let Some(index) = self
+            .candles
+            .iter()
+            .position(|c| timestamp_ms >= c.open_time && timestamp_ms < c.close_time)
+        {
+            return Some(index);
+        }
+        if self
+            .current_candle
+            .as_ref()
+            .is_some_and(|cb| cb.contains(timestamp_ms))
+        {
+            return Some(self.candles.len());
+        }
+        None
+    }
+
+    fn rebuild_fill_markers_from_history(&mut self, fills: &[HistoricalFill]) {
+        self.fill_markers.clear();
+        for fill in fills {
+            if let Some(candle_index) = self.candle_index_for_timestamp(fill.timestamp_ms) {
+                self.fill_markers.push(FillMarker {
+                    candle_index,
+                    price: fill.avg_price,
+                    side: fill.side,
+                });
+                if self.fill_markers.len() > MAX_FILL_MARKERS {
+                    self.fill_markers.remove(0);
+                }
+            }
+        }
+    }
+
+    fn rebuild_position_from_history(&mut self, fills: &[HistoricalFill]) {
+        let mut reconstructed = Position::new(self.symbol.clone());
+        for fill in fills {
+            let synthetic_fill = Fill {
+                price: fill.avg_price,
+                qty: fill.qty,
+                commission: 0.0,
+                commission_asset: "N/A".to_string(),
+            };
+            reconstructed.apply_fill(fill.side, &[synthetic_fill]);
+        }
+        self.position = reconstructed;
+        if let Some(price) = self.last_price() {
+            self.position.update_unrealized_pnl(price);
         }
     }
 
@@ -123,10 +180,10 @@ impl AppState {
             AppEvent::StrategySignal(ref signal) => {
                 self.last_signal = Some(signal.clone());
                 match signal {
-                    Signal::Buy => {
+                    Signal::Buy { .. } => {
                         self.push_log("Signal: BUY".to_string());
                     }
-                    Signal::Sell => {
+                    Signal::Sell { .. } => {
                         self.push_log("Signal: SELL".to_string());
                     }
                     Signal::Hold => {}
@@ -221,12 +278,16 @@ impl AppState {
             AppEvent::BalanceUpdate(balances) => {
                 self.balances = balances;
             }
-            AppEvent::OrderHistoryUpdate(history) => {
-                self.order_history = history;
+            AppEvent::OrderHistoryUpdate(snapshot) => {
+                self.order_history = snapshot.rows;
                 if self.order_history.len() > MAX_LOG_MESSAGES {
                     let excess = self.order_history.len() - MAX_LOG_MESSAGES;
                     self.order_history.drain(..excess);
                 }
+                let max_scroll = self.order_history.len().saturating_sub(1);
+                self.order_history_scroll = self.order_history_scroll.min(max_scroll);
+                self.rebuild_position_from_history(&snapshot.fills);
+                self.rebuild_fill_markers_from_history(&snapshot.fills);
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -244,9 +305,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         .constraints([
             Constraint::Length(1), // status bar
             Constraint::Min(8),    // main area (chart + position)
-            Constraint::Length(5), // order log
-            Constraint::Length(6), // order history
-            Constraint::Length(8), // system log
+            Constraint::Length(4), // order log
+            Constraint::Length(10), // order history
+            Constraint::Length(5), // system log
             Constraint::Length(1), // keybinds
         ])
         .split(frame.area());
@@ -255,6 +316,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     frame.render_widget(
         StatusBar {
             symbol: &state.symbol,
+            product_label: &state.product_label,
             ws_connected: state.ws_connected,
             paused: state.paused,
             tick_count: state.tick_count,
@@ -298,7 +360,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     );
 
     // Order history panel
-    frame.render_widget(OrderHistoryPanel::new(&state.order_history), outer[3]);
+    frame.render_widget(
+        OrderHistoryPanel::new(&state.order_history, state.order_history_scroll),
+        outer[3],
+    );
 
     // System log panel
     frame.render_widget(LogPanel::new(&state.log_messages), outer[4]);

@@ -100,9 +100,13 @@ impl OrderManager {
         Ok(self.balances.clone())
     }
 
-    /// Fetch order history from exchange and build UI rows + fill marker metadata.
-    pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
-        let mut orders = self.rest_client.get_all_orders(&self.symbol, limit).await?;
+    /// Fetch full order history from exchange and build UI rows + fill marker metadata.
+    /// `page_size` is per-request size for paginated exchange calls.
+    pub async fn refresh_order_history(&self, page_size: usize) -> Result<OrderHistorySnapshot> {
+        let mut orders = self
+            .rest_client
+            .get_all_orders(&self.symbol, page_size)
+            .await?;
         orders.sort_by_key(|o| o.update_time.max(o.time));
 
         let mut history = Vec::with_capacity(orders.len());
