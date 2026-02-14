@@ -1,0 +1,2 @@
+exchange,environment,asset_class,product,api_base_url,notes
+Binance,Spot Testnet,Crypto,BTCUSDT spot,https://testnet.binance.vision,existing integration baseline
