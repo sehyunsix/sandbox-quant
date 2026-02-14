@@ -367,17 +367,15 @@ impl OrderManager {
         if orders.is_empty() && !trades.is_empty() {
             let mut sorted = trades;
             sorted.sort_by_key(|t| (t.time, t.id));
-            history.extend(
-                sorted.iter().map(|t| {
-                    format_trade_history_row(
-                        t,
-                        order_source_by_id
-                            .get(&t.order_id)
-                            .map(String::as_str)
-                            .unwrap_or("UNKNOWN"),
-                    )
-                }),
-            );
+            history.extend(sorted.iter().map(|t| {
+                format_trade_history_row(
+                    t,
+                    order_source_by_id
+                        .get(&t.order_id)
+                        .map(String::as_str)
+                        .unwrap_or("UNKNOWN"),
+                )
+            }));
             return Ok(OrderHistorySnapshot {
                 rows: history,
                 stats,
