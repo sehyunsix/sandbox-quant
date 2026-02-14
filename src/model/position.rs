@@ -9,6 +9,8 @@ pub struct Position {
     pub realized_pnl: f64,
     pub unrealized_pnl: f64,
     pub trade_count: u32,
+    pub winning_trade_count: u32,
+    pub losing_trade_count: u32,
 }
 
 impl Position {
@@ -21,6 +23,8 @@ impl Position {
             realized_pnl: 0.0,
             unrealized_pnl: 0.0,
             trade_count: 0,
+            winning_trade_count: 0,
+            losing_trade_count: 0,
         }
     }
 
@@ -52,6 +56,11 @@ impl Position {
                         None => 0.0,
                     };
                     self.realized_pnl += pnl;
+                    if pnl > 0.0 {
+                        self.winning_trade_count += 1;
+                    } else if pnl < 0.0 {
+                        self.losing_trade_count += 1;
+                    }
                     self.qty -= close_qty;
                     if self.qty <= f64::EPSILON {
                         self.side = None;
@@ -74,6 +83,14 @@ impl Position {
             Some(OrderSide::Sell) => (self.entry_price - current_price) * self.qty,
             None => 0.0,
         };
+    }
+
+    pub fn win_rate_percent(&self) -> f64 {
+        let total = self.winning_trade_count + self.losing_trade_count;
+        if total == 0 {
+            return 0.0;
+        }
+        (self.winning_trade_count as f64 / total as f64) * 100.0
     }
 }
 
@@ -117,5 +134,19 @@ mod tests {
 
         pos.update_unrealized_pnl(41800.0);
         assert!((pos.unrealized_pnl - (-0.20)).abs() < 0.001);
+    }
+
+    #[test]
+    fn win_rate_tracks_wins_and_losses() {
+        let mut pos = Position::new("BTCUSDT".to_string());
+        pos.apply_fill(OrderSide::Buy, &[make_fill(100.0, 1.0)]);
+        pos.apply_fill(OrderSide::Sell, &[make_fill(110.0, 1.0)]); // win
+
+        pos.apply_fill(OrderSide::Buy, &[make_fill(100.0, 1.0)]);
+        pos.apply_fill(OrderSide::Sell, &[make_fill(90.0, 1.0)]); // loss
+
+        assert_eq!(pos.winning_trade_count, 1);
+        assert_eq!(pos.losing_trade_count, 1);
+        assert!((pos.win_rate_percent() - 50.0).abs() < f64::EPSILON);
     }
 }

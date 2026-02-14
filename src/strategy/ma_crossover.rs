@@ -1,3 +1,5 @@
+use uuid;
+
 use crate::indicator::sma::Sma;
 use crate::model::signal::Signal;
 use crate::model::tick::Tick;
@@ -51,7 +53,9 @@ impl MaCrossover {
                 if pf <= ps && f > s && self.position == PositionState::Flat && cooldown_ok {
                     self.position = PositionState::Long;
                     self.last_signal_tick = self.tick_count;
-                    Signal::Buy
+                    Signal::Buy {
+                        trace_id: uuid::Uuid::new_v4(),
+                    }
                 } else if pf >= ps
                     && f < s
                     && self.position == PositionState::Long
@@ -59,7 +63,9 @@ impl MaCrossover {
                 {
                     self.position = PositionState::Flat;
                     self.last_signal_tick = self.tick_count;
-                    Signal::Sell
+                    Signal::Sell {
+                        trace_id: uuid::Uuid::new_v4(),
+                    }
                 } else {
                     Signal::Hold
                 }
@@ -88,6 +94,7 @@ impl MaCrossover {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::signal::Signal;
 
     fn tick(price: f64) -> Tick {
         Tick {
@@ -125,7 +132,11 @@ mod tests {
         // prev: fast=75, slow=85 (fast < slow)
         // now:  fast=avg(70,120)=95, slow=avg(90,80,70,120)=90 (fast > slow)
         let sig = strat.on_tick(&tick(120.0));
-        assert_eq!(sig, Signal::Buy, "Expected Buy signal, got {:?}", sig);
+        assert!(
+            matches!(sig, Signal::Buy { .. }),
+            "Expected Buy signal, got {:?}",
+            sig
+        );
         assert!(strat.is_long());
     }
 
@@ -201,6 +212,12 @@ mod tests {
 
         let run1 = run(&prices);
         let run2 = run(&prices);
-        assert_eq!(run1, run2, "Strategy must be deterministic");
+        assert_eq!(run1.len(), run2.len(), "Runs should have the same length");
+        for (s1, s2) in run1.iter().zip(run2.iter()) {
+            assert!(
+                std::mem::discriminant(s1) == std::mem::discriminant(s2),
+                "Signal variants should be identical"
+            );
+        }
     }
 }

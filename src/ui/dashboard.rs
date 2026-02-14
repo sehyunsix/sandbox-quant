@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
@@ -138,6 +138,18 @@ impl Widget for PositionPanel<'_> {
                     Style::default().fg(Color::White),
                 ),
             ]),
+            Line::from(vec![
+                Span::styled("WinRate:", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(
+                        " {:.1}% ({}/{})",
+                        self.position.win_rate_percent(),
+                        self.position.winning_trade_count,
+                        self.position.winning_trade_count + self.position.losing_trade_count
+                    ),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
         ];
 
         let block = Block::default()
@@ -239,6 +251,7 @@ impl Widget for OrderLogPanel<'_> {
 
 pub struct StatusBar<'a> {
     pub symbol: &'a str,
+    pub product_label: &'a str,
     pub ws_connected: bool,
     pub paused: bool,
     pub tick_count: u64,
@@ -280,6 +293,13 @@ impl Widget for StatusBar<'_> {
             Span::styled(self.symbol, Style::default().fg(Color::Cyan)),
             Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled(
+                self.product_label,
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
                 self.timeframe.to_uppercase(),
                 Style::default()
                     .fg(Color::Yellow)
@@ -302,15 +322,15 @@ impl Widget for StatusBar<'_> {
 
 /// Scrolling order history panel that shows recent order events.
 pub struct OrderHistoryPanel<'a> {
-    open_messages: &'a [String],
-    filled_messages: &'a [String],
+    messages: &'a [String],
+    scroll_offset: usize,
 }
 
 impl<'a> OrderHistoryPanel<'a> {
-    pub fn new(open_messages: &'a [String], filled_messages: &'a [String]) -> Self {
+    pub fn new(messages: &'a [String], scroll_offset: usize) -> Self {
         Self {
-            open_messages,
-            filled_messages,
+            messages,
+            scroll_offset,
         }
     }
 }
@@ -321,47 +341,32 @@ impl Widget for OrderHistoryPanel<'_> {
             .title(" Order History ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
-        let inner = block.inner(area);
-        block.render(area, buf);
+        let inner_height = block.inner(area).height as usize;
 
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(inner);
+        let len = self.messages.len();
+        let end = len.saturating_sub(self.scroll_offset);
+        let start = end.saturating_sub(inner_height);
 
-        let render_list = |title: &str, messages: &[String], area: Rect, buf: &mut Buffer| {
-            let sub_block = Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray));
-            let inner_height = sub_block.inner(area).height as usize;
-            let visible: Vec<Line> = messages
-                .iter()
-                .rev()
-                .take(inner_height)
-                .rev()
-                .map(|msg| {
-                    let color = if msg.contains("REJECTED") {
-                        Color::Red
-                    } else if msg.contains("FILLED") {
-                        Color::Green
-                    } else if msg.contains("SUBMITTED") || msg.contains("PARTIALLY_FILLED") {
-                        Color::Cyan
-                    } else {
-                        Color::DarkGray
-                    };
-                    Line::from(Span::styled(msg.as_str(), Style::default().fg(color)))
-                })
-                .collect();
+        let visible: Vec<Line> = self.messages[start..end]
+            .iter()
+            .map(|msg| {
+                let color = if msg.contains("REJECTED") {
+                    Color::Red
+                } else if msg.contains("FILLED") {
+                    Color::Green
+                } else if msg.contains("SUBMITTED") {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                };
+                Line::from(Span::styled(msg.as_str(), Style::default().fg(color)))
+            })
+            .collect();
 
-            Paragraph::new(visible)
-                .block(sub_block)
-                .wrap(Wrap { trim: true })
-                .render(area, buf);
-        };
-
-        render_list(" Open ", self.open_messages, cols[0], buf);
-        render_list(" Filled ", self.filled_messages, cols[1], buf);
+        Paragraph::new(visible)
+            .block(block)
+            .wrap(Wrap { trim: true })
+            .render(area, buf);
     }
 }
 
@@ -428,6 +433,8 @@ impl Widget for KeybindBar {
             Span::styled("[S]", Style::default().fg(Color::Red)),
             Span::styled("ell ", Style::default().fg(Color::DarkGray)),
             Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[0]", Style::default().fg(Color::Cyan)),
+            Span::styled("sec ", Style::default().fg(Color::DarkGray)),
             Span::styled("[1]", Style::default().fg(Color::Cyan)),
             Span::styled("min ", Style::default().fg(Color::DarkGray)),
             Span::styled("[H]", Style::default().fg(Color::Cyan)),
@@ -438,6 +445,19 @@ impl Widget for KeybindBar {
             Span::styled("eek ", Style::default().fg(Color::DarkGray)),
             Span::styled("[M]", Style::default().fg(Color::Cyan)),
             Span::styled("onth ", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[5]", Style::default().fg(Color::Magenta)),
+            Span::styled("BTC S ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[6]", Style::default().fg(Color::Magenta)),
+            Span::styled("BTC F ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[7]", Style::default().fg(Color::Magenta)),
+            Span::styled("ETH S ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[8]", Style::default().fg(Color::Magenta)),
+            Span::styled("ETH F ", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[J]", Style::default().fg(Color::Cyan)),
+            Span::styled("/[K]", Style::default().fg(Color::Cyan)),
+            Span::styled(" history ", Style::default().fg(Color::DarkGray)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);

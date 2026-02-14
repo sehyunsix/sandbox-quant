@@ -1,7 +1,7 @@
 [binance]
+product = "btc_spot"  # btc_spot | btc_future | eth_spot | eth_future
 rest_base_url = "https://demo-api.binance.com"
 ws_base_url = "wss://demo-stream.binance.com/ws"
-symbol = "BTCUSDT"
 recv_window = 5000
 kline_interval = "1m"
 
