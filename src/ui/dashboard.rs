@@ -475,6 +475,8 @@ impl Widget for KeybindBar {
             Span::styled("│ ", Style::default().fg(Color::DarkGray)),
             Span::styled("[1]", Style::default().fg(Color::Cyan)),
             Span::styled("min ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[0]", Style::default().fg(Color::Cyan)),
+            Span::styled("sec ", Style::default().fg(Color::DarkGray)),
             Span::styled("[H]", Style::default().fg(Color::Cyan)),
             Span::styled("our ", Style::default().fg(Color::DarkGray)),
             Span::styled("[D]", Style::default().fg(Color::Cyan)),

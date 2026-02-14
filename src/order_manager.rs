@@ -9,6 +9,7 @@ use crate::binance::types::{BinanceMyTrade, BinanceOrderResponse};
 use crate::model::order::{Fill, Order, OrderSide, OrderStatus, OrderType};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
+use crate::order_store;
 
 #[derive(Debug, Clone)]
 pub enum OrderUpdate {
@@ -40,6 +41,7 @@ pub struct OrderHistoryStats {
 pub struct OrderHistorySnapshot {
     pub rows: Vec<String>,
     pub stats: OrderHistoryStats,
+    pub strategy_stats: HashMap<String, OrderHistoryStats>,
 }
 
 pub struct OrderManager {
@@ -87,6 +89,32 @@ fn format_order_history_row(
         qty,
         avg_price,
         client_order_id
+    )
+}
+
+fn source_label_from_client_order_id(client_order_id: &str) -> &'static str {
+    if client_order_id.contains("-mnl-") {
+        "MANUAL"
+    } else if client_order_id.contains("-cfg-") {
+        "MA(Config)"
+    } else if client_order_id.contains("-fst-") {
+        "MA(Fast 5/20)"
+    } else if client_order_id.contains("-slw-") {
+        "MA(Slow 20/60)"
+    } else {
+        "UNKNOWN"
+    }
+}
+
+fn format_trade_history_row(t: &BinanceMyTrade) -> String {
+    let side = if t.is_buyer { "BUY" } else { "SELL" };
+    format_order_history_row(
+        t.time,
+        "FILLED",
+        side,
+        t.qty,
+        t.price,
+        &format!("order#{}#T{} [UNKNOWN]", t.order_id, t.id),
     )
 }
 
@@ -156,6 +184,86 @@ fn compute_trade_stats(mut trades: Vec<BinanceMyTrade>) -> OrderHistoryStats {
     stats
 }
 
+fn compute_trade_stats_by_source(
+    mut trades: Vec<BinanceMyTrade>,
+    order_source_by_id: &HashMap<u64, String>,
+) -> HashMap<String, OrderHistoryStats> {
+    #[derive(Clone, Copy, Default)]
+    struct SourcePos {
+        side: Option<OrderSide>,
+        qty: f64,
+        entry_price: f64,
+    }
+
+    trades.sort_by_key(|t| (t.time, t.id));
+    let mut pos_by_source: HashMap<String, SourcePos> = HashMap::new();
+    let mut stats_by_source: HashMap<String, OrderHistoryStats> = HashMap::new();
+
+    for t in trades {
+        let source = order_source_by_id
+            .get(&t.order_id)
+            .cloned()
+            .unwrap_or_else(|| "UNKNOWN".to_string());
+        let fill_side = if t.is_buyer {
+            OrderSide::Buy
+        } else {
+            OrderSide::Sell
+        };
+        let fill_qty = t.qty.max(0.0);
+        if fill_qty <= f64::EPSILON {
+            continue;
+        }
+
+        let pos = pos_by_source.entry(source.clone()).or_default();
+        let stats = stats_by_source.entry(source).or_default();
+
+        match pos.side {
+            None => {
+                pos.side = Some(fill_side);
+                pos.qty = fill_qty;
+                pos.entry_price = t.price;
+            }
+            Some(pos_side) if pos_side == fill_side => {
+                let total_cost = pos.entry_price * pos.qty + t.price * fill_qty;
+                pos.qty += fill_qty;
+                if pos.qty > f64::EPSILON {
+                    pos.entry_price = total_cost / pos.qty;
+                }
+            }
+            Some(pos_side) => {
+                let close_qty = fill_qty.min(pos.qty);
+                let pnl_delta = match pos_side {
+                    OrderSide::Buy => (t.price - pos.entry_price) * close_qty,
+                    OrderSide::Sell => (pos.entry_price - t.price) * close_qty,
+                };
+                if pnl_delta > 0.0 {
+                    stats.win_count += 1;
+                    stats.trade_count += 1;
+                } else if pnl_delta < 0.0 {
+                    stats.lose_count += 1;
+                    stats.trade_count += 1;
+                }
+                stats.realized_pnl += pnl_delta;
+
+                pos.qty -= close_qty;
+                let remain = fill_qty - close_qty;
+                if pos.qty <= f64::EPSILON {
+                    pos.side = None;
+                    pos.qty = 0.0;
+                    pos.entry_price = 0.0;
+                }
+                if remain > f64::EPSILON {
+                    pos.side = Some(fill_side);
+                    pos.qty = remain;
+                    pos.entry_price = t.price;
+                }
+            }
+        }
+    }
+
+    stats_by_source
+}
+
 impl OrderManager {
     pub fn new(rest_client: Arc<BinanceRestClient>, symbol: &str, order_amount_usdt: f64) -> Self {
         Self {
@@ -199,8 +307,27 @@ impl OrderManager {
 
     /// Fetch order history from exchange and format rows for UI display.
     pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
-        let mut orders = self.rest_client.get_all_orders(&self.symbol, limit).await?;
-        let trades = match self.rest_client.get_my_trades(&self.symbol, limit).await {
+        let orders_result = self.rest_client.get_all_orders(&self.symbol, limit).await;
+        let trades_result = self.rest_client.get_my_trades(&self.symbol, limit).await;
+
+        if orders_result.is_err() && trades_result.is_err() {
+            let oe = orders_result.err().unwrap();
+            let te = trades_result.err().unwrap();
+            return Err(anyhow::anyhow!(
+                "order history fetch failed: allOrders={} | myTrades={}",
+                oe,
+                te
+            ));
+        }
+
+        let mut orders = match orders_result {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch allOrders; falling back to trade-only history");
+                Vec::new()
+            }
+        };
+        let trades = match trades_result {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to fetch myTrades; falling back to order-only history");
@@ -210,22 +337,40 @@ impl OrderManager {
         orders.sort_by_key(|o| o.update_time.max(o.time));
         let stats = compute_trade_stats(trades.clone());
 
+        if let Err(e) = order_store::persist_order_snapshot(&self.symbol, &orders, &trades) {
+            tracing::warn!(error = %e, "Failed to persist order snapshot to sqlite");
+        }
+
         let mut trades_by_order_id: HashMap<u64, Vec<BinanceMyTrade>> = HashMap::new();
-        for trade in trades {
+        for trade in &trades {
             trades_by_order_id
                 .entry(trade.order_id)
                 .or_default()
-                .push(trade);
+                .push(trade.clone());
         }
         for bucket in trades_by_order_id.values_mut() {
             bucket.sort_by_key(|t| t.time);
         }
 
         let mut history = Vec::new();
+        let mut used_trade_ids = std::collections::HashSet::new();
+
+        if orders.is_empty() && !trades.is_empty() {
+            let mut sorted = trades;
+            sorted.sort_by_key(|t| (t.time, t.id));
+            history.extend(sorted.iter().map(format_trade_history_row));
+            return Ok(OrderHistorySnapshot {
+                rows: history,
+                stats,
+                strategy_stats: HashMap::new(),
+            });
+        }
+
         for o in orders {
             if o.executed_qty > 0.0 {
                 if let Some(order_trades) = trades_by_order_id.get(&o.order_id) {
                     for t in order_trades {
+                        used_trade_ids.insert(t.id);
                         let side = if t.is_buyer { "BUY" } else { "SELL" };
                         history.push(format_order_history_row(
                             t.time,
@@ -255,9 +400,18 @@ impl OrderManager {
             ));
         }
 
+        // Include trades that did not match fetched order pages.
+        for bucket in trades_by_order_id.values() {
+            for t in bucket {
+                if !used_trade_ids.contains(&t.id) {
+                    history.push(format_trade_history_row(t));
+                }
+            }
+        }
         Ok(OrderHistorySnapshot {
             rows: history,
             stats,
+            strategy_stats: HashMap::new(),
         })
     }
 

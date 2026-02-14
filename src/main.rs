@@ -5,6 +5,7 @@ mod event;
 mod indicator;
 mod model;
 mod order_manager;
+mod order_store;
 mod strategy;
 mod ui;
 
@@ -695,6 +696,9 @@ async fn main() -> Result<()> {
                     KeyCode::Char('s') | KeyCode::Char('S') => {
                         app_state.push_log("Manual SELL (position)".to_string());
                         let _ = manual_order_tx.try_send(Signal::Sell);
+                    }
+                    KeyCode::Char('0') => {
+                        switch_timeframe(&current_symbol, "1s", &rest_client, &config, &app_tx);
                     }
                     KeyCode::Char('1') => {
                         switch_timeframe(&current_symbol, "1m", &rest_client, &config, &app_tx);
