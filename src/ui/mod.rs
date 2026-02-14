@@ -116,8 +116,16 @@ impl AppState {
                         tick.timestamp_ms,
                         self.candle_interval_ms,
                     ));
+                } else if let Some(cb) = self.current_candle.as_mut() {
+                    cb.update(tick.price);
                 } else {
-                    self.current_candle.as_mut().unwrap().update(tick.price);
+                    // Defensive fallback: avoid panic if tick ordering/state gets out of sync.
+                    self.current_candle = Some(CandleBuilder::new(
+                        tick.price,
+                        tick.timestamp_ms,
+                        self.candle_interval_ms,
+                    ));
+                    self.push_log("[WARN] Recovered missing current candle state".to_string());
                 }
 
                 self.position.update_unrealized_pnl(tick.price);
