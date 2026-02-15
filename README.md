@@ -1,195 +1,111 @@
 # sandbox-quant
 
-<p align="center">
-  <b>Rust-native Binance Spot Testnet trading prototype</b><br/>
-  Moving Average Crossover strategy + real-time stream + terminal dashboard
-</p>
+Rust-native Binance Spot Testnet trading prototype.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/rust-1.75%2B-0f172a?style=for-the-badge&logo=rust" alt="Rust 1.75+" />
-  <img src="https://img.shields.io/badge/exchange-binance%20spot%20testnet-1f2937?style=for-the-badge" alt="Binance Spot Testnet" />
-  <img src="https://img.shields.io/badge/ui-ratatui-0b3b2e?style=for-the-badge" alt="ratatui" />
-</p>
+It provides real-time market streaming, strategy-driven order execution, cumulative trade history, and a terminal dashboard for monitoring positions and performance.
 
-> [!WARNING]
-> Testnet only. Do not use real mainnet API keys.
+## Main Features
 
-## What This Project Does
-
-- Streams market ticks from Binance Spot Testnet WebSocket
-- Generates MA crossover signals (fast/slow SMA)
-- Places and tracks orders through REST
-- Renders position, pnl, and event flow in terminal UI
-- Logs structured JSON to `sandbox-quant.log`
-
-## Architecture
-
-```text
-WS Task ──tick──> Strategy Task ──signal──> Order Manager
-    │                                           │
-    │         (all send AppEvent)               │
-    └──MarketTick──> app_event_rx <──OrderUpdate─┘
-                         │
-                    TUI Main Loop (ratatui)
-```
+- Real-time market + strategy loop
+  - Streams Binance Spot Testnet trades through WebSocket.
+  - Runs MA crossover logic and executes orders via REST.
+- Terminal trading dashboard (ratatui)
+  - Live chart, position panel, order/signal panel, order history, and system log.
+  - Fast keyboard control for trading and navigation.
+- Historical trade persistence and recovery
+  - Persists orders/trades to SQLite.
+  - Automatically backfills missing history and continues with incremental sync.
+- Stable cumulative performance stats
+  - Keeps cumulative `Trades/W/L/PnL` from resetting on transient API issues.
+  - Uses history-first stats for consistent dashboard values.
+- Strategy and manual-performance breakdown
+  - Strategy selector shows per-strategy `W/L/T/PnL`.
+  - Includes `MANUAL(rest)` and `TOTAL` rows for attribution.
+- Chart fill markers
+  - Shows historical `B/S` markers mapped by symbol/timeframe.
+  - Keeps marker display simple (`B/S` only).
+- Operational robustness
+  - Handles Binance time drift errors (`-1021`) with time sync + retry.
+  - Reduces high request-weight behavior to avoid rate-limit pressure.
 
 ## Quick Start
 
-1. Clone and enter the repo
-   ```bash
-   cd sandbox-quant
-   ```
-2. Create env file
-   ```bash
-   cp .env.example .env
-   ```
-3. Fill testnet keys in `.env`
-   ```bash
-   BINANCE_API_KEY=your_testnet_api_key_here
-   BINANCE_API_SECRET=your_testnet_api_secret_here
-   ```
-4. Build and run
-   ```bash
-   cargo build --release
-   cargo run --release
-   ```
+1. Create environment file:
+
+```bash
+cp .env.example .env
+```
+
+2. Set your Binance Spot Testnet credentials in `.env`:
+
+```bash
+BINANCE_API_KEY=your_testnet_api_key_here
+BINANCE_API_SECRET=your_testnet_api_secret_here
+```
+
+3. Run:
+
+```bash
+cargo run --bin sandbox-quant
+```
 
 ## Runtime Configuration
 
-Edit `config/default.toml`:
+Edit `config/default.toml` as needed.
 
-```toml
-[binance]
-rest_base_url = "https://testnet.binance.vision"
-ws_base_url = "wss://testnet.binance.vision/ws"
-symbol = "BTCUSDT"
-recv_window = 5000
-kline_interval = "1m"
+## Usage
 
-[strategy]
-fast_period = 10
-slow_period = 30
-order_amount_usdt = 10.0
-min_ticks_between_signals = 50
+Main keys:
 
-[ui]
-refresh_rate_ms = 100
-price_history_len = 120
-```
+- `Q`: quit
+- `P`: pause strategy
+- `R`: resume strategy
+- `B`: manual buy
+- `S`: manual sell
+- `T`: open symbol selector
+- `Y`: open strategy selector
+- `0/1/H/D/W/M`: switch timeframe (`1s/1m/1h/1d/1w/1M`)
 
-## CLI Verification Screenshot
+Example flow:
 
-Below is a captured CLI screenshot from a real `cargo run` execution on **2026-02-13 (PST)**.
+1. Start with `cargo run --bin sandbox-quant`
+2. Press `Y`, choose a strategy with arrows, then Enter
+3. Press `B` for a manual buy
+4. Verify `B/S` markers on chart
+5. Open `Y` again to review strategy stats and `MANUAL(rest)`
 
-- Command used:
-  ```bash
-  (cd /tmp && cargo run --manifest-path /Users/yuksehyun/project/sandbox-quant/Cargo.toml)
-  ```
-- Why `/tmp`: run-path verification without local `config/default.toml` so the binary starts and exits predictably.
+## Run Capture
 
-![cargo run screenshot](docs/assets/cargo-run-cli.svg)
+### Terminal Screenshot
 
-Full raw output is saved at `docs/assets/cargo-run-output.txt`.
+The image below summarizes a real `cargo run --bin sandbox-quant` session:
 
-## Dashboard Keys
+![cargo run terminal snapshot](docs/assets/cargo-run-terminal-snapshot.png)
 
-- `Q`: Graceful shutdown
-- `P`: Pause strategy
-- `R`: Resume strategy
+### Raw Output
 
-## Logs
+Captured run output:
 
-```bash
-tail -f sandbox-quant.log | jq .
-```
+- `docs/assets/cargo-run-output.txt`
 
-## Build Artifact Size
-
-If `target/` grows too large during local iteration, see:
-
-- `docs/target-size-analysis.md`
+Note:
+- This is a TUI app. Running in non-interactive output redirection contexts can fail terminal initialization.
+- For normal usage, run directly in an interactive terminal.
 
 ## Project Layout
 
 ```text
 sandbox-quant/
 ├── Cargo.toml
-├── .env.example
 ├── config/default.toml
 ├── docs/assets/
-│   ├── cargo-run-cli.svg
+│   ├── cargo-run-terminal-snapshot.svg
 │   └── cargo-run-output.txt
 ├── src/
 │   ├── main.rs
-│   ├── config.rs
-│   ├── error.rs
-│   ├── event.rs
 │   ├── order_manager.rs
-│   ├── binance/
-│   ├── indicator/
-│   ├── model/
-│   ├── strategy/
-│   └── ui/
+│   ├── order_store.rs
+│   ├── ui/
+│   └── ...
 └── TESTING.md
 ```
-
-## Testing
-
-```bash
-cargo test
-cargo test -- --ignored
-```
-
-<<<<<<< HEAD
-Reference: `TESTING.md`
-
-## Automation (Hourly)
-
-This repository includes a scheduled GitHub Actions workflow:
-
-- `.github/workflows/periodic-maintenance.yml`
-
-What it does every hour:
-
-- Runs `cargo fmt --all` and opens a PR if formatting changes are found
-- Bumps crate patch version in `Cargo.toml` (e.g. `0.1.0` -> `0.1.1`)
-- Runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- Runs `cargo test --workspace --all-targets --all-features`
-- Opens (or updates) a health-check issue when clippy/tests fail
-
-You can also run it manually with `workflow_dispatch` from the Actions tab.
-
-## Hourly Exchange/Product PR Automation
-
-This repository also includes an hourly scheduler for expanding demo venue coverage:
-
-- `.github/workflows/hourly-market-catalog-pr.yml`
-
-What it does every hour:
-
-- Runs `scripts/validate_market_catalog.sh` to fail early on malformed catalog data
-- Runs `scripts/hourly_market_update.sh`
-- Adds the next not-yet-registered exchange/product candidate from `data/demo_market_backlog.csv`
-- Updates `data/demo_market_registry.csv` and `docs/hourly-market-catalog.md`
-- Opens a PR from a fresh branch `chore/hourly-market-catalog/<run_id>`
-Reference: `TESTING.md`
-
-## Multi-Broker Demo Probe (Stocks/Options)
-
-To validate non-crypto paper/sandbox venues before full adapter work, run:
-
-```bash
-cargo run --bin demo_broker_probe
-```
-
-Environment variables:
-
-- `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`
-- `TRADIER_SANDBOX_TOKEN`
-
-Optional endpoint overrides:
-
-- `ALPACA_PAPER_BASE_URL` (default: `https://paper-api.alpaca.markets`)
-- `TRADIER_SANDBOX_BASE_URL` (default: `https://sandbox.tradier.com/v1`)
-
-See `docs/multi-broker-demo-integration.md` for scope and roadmap.
