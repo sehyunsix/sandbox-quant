@@ -130,6 +130,44 @@ pub struct AccountBalance {
     pub locked: f64,
 }
 
+/// Binance futures order response (POST /fapi/v1/order, RESULT/FULL-like fields).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceFuturesOrderResponse {
+    pub symbol: String,
+    pub order_id: u64,
+    pub client_order_id: String,
+    #[serde(default, deserialize_with = "string_to_f64")]
+    pub price: f64,
+    #[serde(default, deserialize_with = "string_to_f64")]
+    pub orig_qty: f64,
+    #[serde(default, deserialize_with = "string_to_f64")]
+    pub executed_qty: f64,
+    #[serde(default, deserialize_with = "string_to_f64")]
+    pub avg_price: f64,
+    pub status: String,
+    pub r#type: String,
+    pub side: String,
+}
+
+/// Binance futures account info (GET /fapi/v2/account).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceFuturesAccountInfo {
+    #[serde(default)]
+    pub assets: Vec<BinanceFuturesAssetBalance>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceFuturesAssetBalance {
+    pub asset: String,
+    #[serde(default, deserialize_with = "string_to_f64")]
+    pub wallet_balance: f64,
+    #[serde(default, deserialize_with = "string_to_f64")]
+    pub available_balance: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

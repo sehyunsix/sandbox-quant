@@ -9,7 +9,8 @@ use crate::model::candle::Candle;
 use crate::model::order::OrderSide;
 
 use super::types::{
-    AccountInfo, BinanceAllOrder, BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
+    AccountInfo, BinanceAllOrder, BinanceFuturesAccountInfo, BinanceFuturesOrderResponse,
+    BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
 };
 
 pub struct BinanceRestClient {
@@ -152,6 +153,35 @@ impl BinanceRestClient {
         Ok(resp.json().await?)
     }
 
+    pub async fn get_futures_account(&self) -> Result<BinanceFuturesAccountInfo> {
+        self.check_rate_limit();
+
+        let signed = self.sign("");
+        let url = format!("{}/fapi/v2/account?{}", self.futures_base_url, signed);
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await
+            .context("get_futures_account HTTP failed")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!("Futures account request failed: {}", body));
+        }
+
+        Ok(resp.json().await?)
+    }
+
     pub async fn place_market_order(
         &self,
         symbol: &str,
@@ -207,6 +237,86 @@ impl BinanceRestClient {
             "Order response received"
         );
         Ok(order)
+    }
+
+    pub async fn place_futures_market_order(
+        &self,
+        symbol: &str,
+        side: OrderSide,
+        quantity: f64,
+        client_order_id: &str,
+    ) -> Result<BinanceOrderResponse> {
+        self.check_rate_limit();
+
+        let query = format!(
+            "symbol={}&side={}&type=MARKET&quantity={:.5}&newClientOrderId={}&newOrderRespType=RESULT",
+            symbol,
+            side.as_binance_str(),
+            quantity,
+            client_order_id,
+        );
+        let signed = self.sign(&query);
+        let url = format!("{}/fapi/v1/order?{}", self.futures_base_url, signed);
+
+        tracing::info!(
+            symbol,
+            side = %side,
+            quantity,
+            client_order_id,
+            "Placing futures market order"
+        );
+
+        let resp = self
+            .http
+            .post(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await
+            .context("place_futures_market_order HTTP failed")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!("Futures order request failed: {}", body));
+        }
+
+        let fut: BinanceFuturesOrderResponse = resp.json().await?;
+        let avg = if fut.avg_price > 0.0 {
+            fut.avg_price
+        } else if fut.price > 0.0 {
+            fut.price
+        } else {
+            0.0
+        };
+        let fills = if fut.executed_qty > 0.0 && avg > 0.0 {
+            vec![super::types::BinanceFill {
+                price: avg,
+                qty: fut.executed_qty,
+                commission: 0.0,
+                commission_asset: "USDT".to_string(),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        Ok(BinanceOrderResponse {
+            symbol: fut.symbol,
+            order_id: fut.order_id,
+            client_order_id: fut.client_order_id,
+            price: if fut.price > 0.0 { fut.price } else { avg },
+            orig_qty: fut.orig_qty,
+            executed_qty: fut.executed_qty,
+            status: fut.status,
+            r#type: fut.r#type,
+            side: fut.side,
+            fills,
+        })
     }
 
     /// Fetch historical kline (candlestick) OHLC data.

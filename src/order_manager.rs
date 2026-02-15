@@ -317,6 +317,13 @@ impl OrderManager {
     /// Returns the balances map (asset → free balance) for non-zero balances.
     pub async fn refresh_balances(&mut self) -> Result<HashMap<String, f64>> {
         if self.market == MarketKind::Futures {
+            let account = self.rest_client.get_futures_account().await?;
+            self.balances.clear();
+            for a in &account.assets {
+                if a.wallet_balance.abs() > f64::EPSILON {
+                    self.balances.insert(a.asset.clone(), a.available_balance);
+                }
+            }
             return Ok(self.balances.clone());
         }
         let account = self.rest_client.get_account().await?;
@@ -596,13 +603,6 @@ impl OrderManager {
         signal: Signal,
         source_tag: &str,
     ) -> Result<Option<OrderUpdate>> {
-        if self.market == MarketKind::Futures {
-            return Ok(Some(OrderUpdate::Rejected {
-                client_order_id: "n/a".to_string(),
-                reason: "Futures order is not supported in current build".to_string(),
-            }));
-        }
-
         let side = match &signal {
             Signal::Buy => OrderSide::Buy,
             Signal::Sell => OrderSide::Sell,
@@ -625,15 +625,21 @@ impl OrderManager {
                 (raw_qty * 100_000.0).floor() / 100_000.0
             }
             OrderSide::Sell => {
-                // Sell what we have
-                if self.position.is_flat() {
-                    return Ok(Some(OrderUpdate::Rejected {
-                        client_order_id: "n/a".to_string(),
-                        reason: "No position to sell".to_string(),
-                    }));
+                if self.market == MarketKind::Spot {
+                    // Spot: sell only what we have.
+                    if self.position.is_flat() {
+                        return Ok(Some(OrderUpdate::Rejected {
+                            client_order_id: "n/a".to_string(),
+                            reason: "No position to sell".to_string(),
+                        }));
+                    }
+                    // Round position qty to 5 decimal places
+                    (self.position.qty * 100_000.0).floor() / 100_000.0
+                } else {
+                    // Futures: SELL may open/increase short, use notional sizing.
+                    let raw_qty = self.order_amount_usdt / self.last_price;
+                    (raw_qty * 100_000.0).floor() / 100_000.0
                 }
-                // Round position qty to 5 decimal places
-                (self.position.qty * 100_000.0).floor() / 100_000.0
             }
         };
 
@@ -648,27 +654,32 @@ impl OrderManager {
         }
 
         // Check balance before placing order
-        match side {
-            OrderSide::Buy => {
-                let usdt_free = self.balances.get("USDT").copied().unwrap_or(0.0);
-                let order_value = qty * self.last_price;
-                if usdt_free < order_value {
-                    return Ok(Some(OrderUpdate::Rejected {
-                        client_order_id: "n/a".to_string(),
-                        reason: format!(
-                            "Insufficient USDT: need {:.2}, have {:.2}",
-                            order_value, usdt_free
-                        ),
-                    }));
+        if self.market == MarketKind::Spot {
+            match side {
+                OrderSide::Buy => {
+                    let usdt_free = self.balances.get("USDT").copied().unwrap_or(0.0);
+                    let order_value = qty * self.last_price;
+                    if usdt_free < order_value {
+                        return Ok(Some(OrderUpdate::Rejected {
+                            client_order_id: "n/a".to_string(),
+                            reason: format!(
+                                "Insufficient USDT: need {:.2}, have {:.2}",
+                                order_value, usdt_free
+                            ),
+                        }));
+                    }
                 }
-            }
-            OrderSide::Sell => {
-                let btc_free = self.balances.get("BTC").copied().unwrap_or(0.0);
-                if btc_free < qty {
-                    return Ok(Some(OrderUpdate::Rejected {
-                        client_order_id: "n/a".to_string(),
-                        reason: format!("Insufficient BTC: need {:.5}, have {:.5}", qty, btc_free),
-                    }));
+                OrderSide::Sell => {
+                    let btc_free = self.balances.get("BTC").copied().unwrap_or(0.0);
+                    if btc_free < qty {
+                        return Ok(Some(OrderUpdate::Rejected {
+                            client_order_id: "n/a".to_string(),
+                            reason: format!(
+                                "Insufficient BTC: need {:.5}, have {:.5}",
+                                qty, btc_free
+                            ),
+                        }));
+                    }
                 }
             }
         }
@@ -703,11 +714,17 @@ impl OrderManager {
             "Submitting order"
         );
 
-        match self
-            .rest_client
-            .place_market_order(&self.symbol, side, qty, &client_order_id)
-            .await
-        {
+        let submit_res = if self.market == MarketKind::Futures {
+            self.rest_client
+                .place_futures_market_order(&self.symbol, side, qty, &client_order_id)
+                .await
+        } else {
+            self.rest_client
+                .place_market_order(&self.symbol, side, qty, &client_order_id)
+                .await
+        };
+
+        match submit_res {
             Ok(response) => {
                 let update = self.process_order_response(&client_order_id, side, &response);
 
