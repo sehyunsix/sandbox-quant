@@ -810,28 +810,34 @@ impl OrderManager {
 
         // Check balance before placing order
         if self.market == MarketKind::Spot {
+            let (base_asset, quote_asset) = split_symbol_assets(&self.symbol);
             match side {
                 OrderSide::Buy => {
-                    let usdt_free = self.balances.get("USDT").copied().unwrap_or(0.0);
+                    let quote_asset_name = if quote_asset.is_empty() {
+                        "USDT"
+                    } else {
+                        quote_asset.as_str()
+                    };
+                    let quote_free = self.balances.get(quote_asset_name).copied().unwrap_or(0.0);
                     let order_value = qty * self.last_price;
-                    if usdt_free < order_value {
+                    if quote_free < order_value {
                         return Ok(Some(OrderUpdate::Rejected {
                             client_order_id: "n/a".to_string(),
                             reason: format!(
-                                "Insufficient USDT: need {:.2}, have {:.2}",
-                                order_value, usdt_free
+                                "Insufficient {}: need {:.2}, have {:.2}",
+                                quote_asset_name, order_value, quote_free
                             ),
                         }));
                     }
                 }
                 OrderSide::Sell => {
-                    let btc_free = self.balances.get("BTC").copied().unwrap_or(0.0);
-                    if btc_free < qty {
+                    let base_free = self.balances.get(base_asset.as_str()).copied().unwrap_or(0.0);
+                    if base_free < qty {
                         return Ok(Some(OrderUpdate::Rejected {
                             client_order_id: "n/a".to_string(),
                             reason: format!(
-                                "Insufficient BTC: need {:.5}, have {:.5}",
-                                qty, btc_free
+                                "Insufficient {}: need {:.5}, have {:.5}",
+                                base_asset, qty, base_free
                             ),
                         }));
                     }
@@ -973,7 +979,7 @@ impl OrderManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{ceil_to_step, display_qty_for_history, floor_to_step};
+    use super::{ceil_to_step, display_qty_for_history, floor_to_step, split_symbol_assets};
     use crate::model::order::OrderStatus;
 
     #[test]
@@ -1044,5 +1050,25 @@ mod tests {
         assert!((ceil_to_step(0.123001, 0.001) - 0.124).abs() < 1e-12);
         assert!((ceil_to_step(0.123456, 0.0001) - 0.1235).abs() < 1e-12);
         assert!((ceil_to_step(0.0, 0.001) - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn split_symbol_assets_parses_known_quote_suffixes() {
+        assert_eq!(
+            split_symbol_assets("ETHUSDT"),
+            ("ETH".to_string(), "USDT".to_string())
+        );
+        assert_eq!(
+            split_symbol_assets("ETHBTC"),
+            ("ETH".to_string(), "BTC".to_string())
+        );
+    }
+
+    #[test]
+    fn split_symbol_assets_falls_back_when_quote_unknown() {
+        assert_eq!(
+            split_symbol_assets("FOOBAR"),
+            ("FOOBAR".to_string(), String::new())
+        );
     }
 }
