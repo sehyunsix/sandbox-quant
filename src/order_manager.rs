@@ -44,6 +44,8 @@ pub struct OrderHistorySnapshot {
     pub stats: OrderHistoryStats,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub fills: Vec<OrderHistoryFill>,
+    pub open_qty: f64,
+    pub open_entry_price: f64,
     pub estimated_total_pnl_usdt: Option<f64>,
     pub trade_data_complete: bool,
     pub fetched_at_ms: u64,
@@ -441,6 +443,12 @@ impl OrderManager {
                 stats,
                 strategy_stats,
                 fills,
+                open_qty: open_pos.qty,
+                open_entry_price: if open_pos.qty > f64::EPSILON {
+                    open_pos.cost_quote / open_pos.qty
+                } else {
+                    0.0
+                },
                 estimated_total_pnl_usdt,
                 trade_data_complete,
                 fetched_at_ms,
@@ -525,6 +533,12 @@ impl OrderManager {
             stats,
             strategy_stats,
             fills,
+            open_qty: open_pos.qty,
+            open_entry_price: if open_pos.qty > f64::EPSILON {
+                open_pos.cost_quote / open_pos.qty
+            } else {
+                0.0
+            },
             estimated_total_pnl_usdt,
             trade_data_complete,
             fetched_at_ms,

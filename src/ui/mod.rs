@@ -11,6 +11,7 @@ use ratatui::Frame;
 
 use crate::event::{AppEvent, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
+use crate::model::order::OrderSide;
 use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
@@ -398,6 +399,22 @@ impl AppState {
                         self.history_lose_count = snapshot.stats.lose_count;
                         self.history_realized_pnl = snapshot.stats.realized_pnl;
                         self.strategy_stats = snapshot.strategy_stats;
+                        // Keep position panel aligned with exchange history state
+                        // so Qty/Entry/UnrPL reflect actual holdings, not only session fills.
+                        if snapshot.open_qty > f64::EPSILON {
+                            self.position.side = Some(OrderSide::Buy);
+                            self.position.qty = snapshot.open_qty;
+                            self.position.entry_price = snapshot.open_entry_price;
+                            if let Some(px) = self.last_price() {
+                                self.position.unrealized_pnl =
+                                    (px - snapshot.open_entry_price) * snapshot.open_qty;
+                            }
+                        } else {
+                            self.position.side = None;
+                            self.position.qty = 0.0;
+                            self.position.entry_price = 0.0;
+                            self.position.unrealized_pnl = 0.0;
+                        }
                     }
                     if !snapshot.fills.is_empty() || self.history_fills.is_empty() {
                         self.history_fills = snapshot.fills.clone();
