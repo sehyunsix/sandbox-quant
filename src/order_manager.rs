@@ -90,6 +90,19 @@ fn floor_to_step(value: f64, step: f64) -> f64 {
     }
 }
 
+fn ceil_to_step(value: f64, step: f64) -> f64 {
+    if !value.is_finite() || !step.is_finite() || step <= 0.0 {
+        return 0.0;
+    }
+    let units = (value / step).ceil();
+    let ceiled = units * step;
+    if ceiled < 0.0 {
+        0.0
+    } else {
+        ceiled
+    }
+}
+
 fn display_qty_for_history(status: &str, orig_qty: f64, executed_qty: f64) -> f64 {
     match status {
         "FILLED" | "PARTIALLY_FILLED" => executed_qty,
@@ -662,14 +675,26 @@ impl OrderManager {
                 .await?
         };
 
-        let qty = floor_to_step(raw_qty, rules.step_size);
+        let qty = if self.market == MarketKind::Futures {
+            // Futures: auto-bump qty to satisfy minQty/minNotional so orders can pass filters.
+            let mut required = rules.min_qty.max(raw_qty);
+            if let Some(min_notional) = rules.min_notional {
+                if min_notional > 0.0 && self.last_price > 0.0 {
+                    required = required.max(min_notional / self.last_price);
+                }
+            }
+            ceil_to_step(required, rules.step_size)
+        } else {
+            // Spot: keep conservative flooring so we never overshoot available balance.
+            floor_to_step(raw_qty, rules.step_size)
+        };
 
         if qty <= 0.0 {
             return Ok(Some(OrderUpdate::Rejected {
                 client_order_id: "n/a".to_string(),
                 reason: format!(
-                    "Calculated qty too small after step normalization (raw {:.8}, step {:.8})",
-                    raw_qty, rules.step_size
+                    "Calculated qty too small after normalization (raw {:.8}, step {:.8}, minQty {:.8})",
+                    raw_qty, rules.step_size, rules.min_qty
                 ),
             }));
         }
@@ -857,7 +882,7 @@ impl OrderManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_qty_for_history, floor_to_step};
+    use super::{ceil_to_step, display_qty_for_history, floor_to_step};
     use crate::model::order::OrderStatus;
 
     #[test]
@@ -921,5 +946,12 @@ mod tests {
         assert!((floor_to_step(0.123456, 0.001) - 0.123).abs() < 1e-12);
         assert!((floor_to_step(0.123456, 0.0001) - 0.1234).abs() < 1e-12);
         assert!((floor_to_step(0.0009, 0.001) - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn quantity_is_ceiled_to_exchange_step() {
+        assert!((ceil_to_step(0.123001, 0.001) - 0.124).abs() < 1e-12);
+        assert!((ceil_to_step(0.123456, 0.0001) - 0.1235).abs() < 1e-12);
+        assert!((ceil_to_step(0.0, 0.001) - 0.0).abs() < 1e-12);
     }
 }
