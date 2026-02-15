@@ -15,6 +15,7 @@ use super::types::{
 pub struct BinanceRestClient {
     http: reqwest::Client,
     base_url: String,
+    futures_base_url: String,
     api_key: String,
     secret_key: String,
     recv_window: u64,
@@ -25,10 +26,17 @@ pub struct BinanceRestClient {
 }
 
 impl BinanceRestClient {
-    pub fn new(base_url: &str, api_key: &str, secret_key: &str, recv_window: u64) -> Self {
+    pub fn new(
+        base_url: &str,
+        futures_base_url: &str,
+        api_key: &str,
+        secret_key: &str,
+        recv_window: u64,
+    ) -> Self {
         Self {
             http: reqwest::Client::new(),
             base_url: base_url.to_string(),
+            futures_base_url: futures_base_url.to_string(),
             api_key: api_key.to_string(),
             secret_key: secret_key.to_string(),
             recv_window,
@@ -61,7 +69,10 @@ impl BinanceRestClient {
         let local_ms = chrono::Utc::now().timestamp_millis();
         let offset = server_ms - local_ms;
         self.time_offset_ms.store(offset, Ordering::Relaxed);
-        tracing::warn!(offset_ms = offset, "Synchronized Binance server time offset");
+        tracing::warn!(
+            offset_ms = offset,
+            "Synchronized Binance server time offset"
+        );
         Ok(())
     }
 
@@ -206,12 +217,30 @@ impl BinanceRestClient {
         interval: &str,
         limit: usize,
     ) -> Result<Vec<Candle>> {
+        self.get_klines_for_market(symbol, interval, limit, false)
+            .await
+    }
+
+    pub async fn get_klines_for_market(
+        &self,
+        symbol: &str,
+        interval: &str,
+        limit: usize,
+        is_futures: bool,
+    ) -> Result<Vec<Candle>> {
         self.check_rate_limit();
 
-        let url = format!(
-            "{}/api/v3/klines?symbol={}&interval={}&limit={}",
-            self.base_url, symbol, interval, limit,
-        );
+        let url = if is_futures {
+            format!(
+                "{}/fapi/v1/klines?symbol={}&interval={}&limit={}",
+                self.futures_base_url, symbol, interval, limit,
+            )
+        } else {
+            format!(
+                "{}/api/v3/klines?symbol={}&interval={}&limit={}",
+                self.base_url, symbol, interval, limit,
+            )
+        };
 
         let resp: Vec<Vec<serde_json::Value>> = self
             .http
@@ -340,11 +369,7 @@ impl BinanceRestClient {
 
     /// Fetch recent orders for a symbol from `/api/v3/allOrders`.
     /// `limit` controls max rows returned (1..=1000).
-    pub async fn get_all_orders(
-        &self,
-        symbol: &str,
-        limit: usize,
-    ) -> Result<Vec<BinanceAllOrder>> {
+    pub async fn get_all_orders(&self, symbol: &str, limit: usize) -> Result<Vec<BinanceAllOrder>> {
         self.get_all_orders_page(symbol, limit, None).await
     }
 
@@ -414,7 +439,11 @@ impl BinanceRestClient {
 
         loop {
             let page = self
-                .get_my_trades_page(symbol, page_size.min(target.saturating_sub(out.len())), Some(cursor))
+                .get_my_trades_page(
+                    symbol,
+                    page_size.min(target.saturating_sub(out.len())),
+                    Some(cursor),
+                )
                 .await?;
             if page.is_empty() {
                 break;
@@ -489,6 +518,7 @@ mod tests {
     fn hmac_signing_produces_hex_signature() {
         let client = BinanceRestClient::new(
             "https://testnet.binance.vision",
+            "https://testnet.binancefuture.com",
             "test_key",
             "test_secret",
             5000,
@@ -526,6 +556,7 @@ mod tests {
     fn check_rate_limit_does_not_panic_on_poisoned_mutex() {
         let client = BinanceRestClient::new(
             "https://testnet.binance.vision",
+            "https://testnet.binancefuture.com",
             "test_key",
             "test_secret",
             5000,

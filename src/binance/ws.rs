@@ -42,16 +42,18 @@ impl ExponentialBackoff {
 }
 
 pub struct BinanceWsClient {
-    url: String,
+    spot_url: String,
+    futures_url: String,
 }
 
 impl BinanceWsClient {
     /// Create a new WebSocket client.
     ///
     /// `ws_base_url` — e.g. `wss://stream.testnet.binance.vision/ws`
-    pub fn new(ws_base_url: &str) -> Self {
+    pub fn new(ws_base_url: &str, futures_ws_base_url: &str) -> Self {
         Self {
-            url: ws_base_url.to_string(),
+            spot_url: ws_base_url.to_string(),
+            futures_url: futures_ws_base_url.to_string(),
         }
     }
 
@@ -70,10 +72,23 @@ impl BinanceWsClient {
 
         loop {
             attempt += 1;
-            let symbol = symbol_rx.borrow().clone();
+            let instrument = symbol_rx.borrow().clone();
+            let (symbol, is_futures) = parse_instrument_symbol(&instrument);
             let streams = vec![format!("{}@trade", symbol.to_lowercase())];
+            let ws_url = if is_futures {
+                &self.futures_url
+            } else {
+                &self.spot_url
+            };
             match self
-                .connect_once(&streams, &tick_tx, &status_tx, &mut symbol_rx, &mut shutdown)
+                .connect_once(
+                    ws_url,
+                    &streams,
+                    &tick_tx,
+                    &status_tx,
+                    &mut symbol_rx,
+                    &mut shutdown,
+                )
                 .await
             {
                 Ok(()) => {
@@ -120,6 +135,7 @@ impl BinanceWsClient {
 
     async fn connect_once(
         &self,
+        ws_url: &str,
         streams: &[String],
         tick_tx: &mpsc::Sender<Tick>,
         status_tx: &mpsc::Sender<AppEvent>,
@@ -127,10 +143,10 @@ impl BinanceWsClient {
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<()> {
         let _ = status_tx
-            .send(AppEvent::LogMessage(format!("Connecting to {}", self.url)))
+            .send(AppEvent::LogMessage(format!("Connecting to {}", ws_url)))
             .await;
 
-        let (ws_stream, resp) = tokio_tungstenite::connect_async(&self.url)
+        let (ws_stream, resp) = tokio_tungstenite::connect_async(ws_url)
             .await
             .map_err(|e| {
                 let detail = format_ws_error(&e);
@@ -271,6 +287,14 @@ impl BinanceWsClient {
             }
         }
     }
+}
+
+fn parse_instrument_symbol(instrument: &str) -> (String, bool) {
+    let trimmed = instrument.trim();
+    if let Some(symbol) = trimmed.strip_suffix(" (FUT)") {
+        return (symbol.to_ascii_uppercase(), true);
+    }
+    (trimmed.to_ascii_uppercase(), false)
 }
 
 /// Format a tungstenite WebSocket error into a detailed, human-readable string.

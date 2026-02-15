@@ -12,6 +12,12 @@ use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_store;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketKind {
+    Spot,
+    Futures,
+}
+
 #[derive(Debug, Clone)]
 pub enum OrderUpdate {
     Submitted {
@@ -65,6 +71,7 @@ pub struct OrderManager {
     active_orders: HashMap<String, Order>,
     position: Position,
     symbol: String,
+    market: MarketKind,
     order_amount_usdt: f64,
     balances: HashMap<String, f64>,
     last_price: f64,
@@ -170,11 +177,21 @@ fn apply_spot_trade_with_fee(
     let fee_is_quote = !quote_asset.is_empty() && fee_asset.eq_ignore_ascii_case(quote_asset);
 
     if t.is_buyer {
-        let net_qty = (qty - if fee_is_base { t.commission.max(0.0) } else { 0.0 }).max(0.0);
+        let net_qty = (qty
+            - if fee_is_base {
+                t.commission.max(0.0)
+            } else {
+                0.0
+            })
+        .max(0.0);
         if net_qty <= f64::EPSILON {
             return;
         }
-        let fee_quote = if fee_is_quote { t.commission.max(0.0) } else { 0.0 };
+        let fee_quote = if fee_is_quote {
+            t.commission.max(0.0)
+        } else {
+            0.0
+        };
         pos.qty += net_qty;
         pos.cost_quote += qty * t.price + fee_quote;
         return;
@@ -265,12 +282,18 @@ fn compute_trade_stats_by_source(
 }
 
 impl OrderManager {
-    pub fn new(rest_client: Arc<BinanceRestClient>, symbol: &str, order_amount_usdt: f64) -> Self {
+    pub fn new(
+        rest_client: Arc<BinanceRestClient>,
+        symbol: &str,
+        market: MarketKind,
+        order_amount_usdt: f64,
+    ) -> Self {
         Self {
             rest_client,
             active_orders: HashMap::new(),
             position: Position::new(symbol.to_string()),
             symbol: symbol.to_string(),
+            market,
             order_amount_usdt,
             balances: HashMap::new(),
             last_price: 0.0,
@@ -293,6 +316,9 @@ impl OrderManager {
     /// Fetch account balances from Binance and update internal state.
     /// Returns the balances map (asset → free balance) for non-zero balances.
     pub async fn refresh_balances(&mut self) -> Result<HashMap<String, f64>> {
+        if self.market == MarketKind::Futures {
+            return Ok(self.balances.clone());
+        }
         let account = self.rest_client.get_account().await?;
         self.balances.clear();
         for b in &account.balances {
@@ -307,6 +333,23 @@ impl OrderManager {
 
     /// Fetch order history from exchange and format rows for UI display.
     pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
+        if self.market == MarketKind::Futures {
+            let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+            return Ok(OrderHistorySnapshot {
+                rows: Vec::new(),
+                stats: OrderHistoryStats::default(),
+                strategy_stats: HashMap::new(),
+                fills: Vec::new(),
+                open_qty: 0.0,
+                open_entry_price: 0.0,
+                estimated_total_pnl_usdt: Some(0.0),
+                trade_data_complete: true,
+                fetched_at_ms: now_ms,
+                fetch_latency_ms: 0,
+                latest_event_ms: None,
+            });
+        }
+
         let fetch_started = Instant::now();
         let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
         let orders_result = self.rest_client.get_all_orders(&self.symbol, limit).await;
@@ -314,18 +357,21 @@ impl OrderManager {
         let persisted_trade_count = order_store::load_trade_count(&self.symbol).unwrap_or(0);
         let need_backfill = persisted_trade_count < limit;
         let trades_result = match (need_backfill, last_trade_id) {
-            (true, _) => self
-                .rest_client
-                .get_my_trades_history(&self.symbol, limit.max(1))
-                .await,
-            (false, Some(last_id)) => self
-                .rest_client
-                .get_my_trades_since(&self.symbol, last_id.saturating_add(1), 10)
-                .await,
-            (false, None) => self
-                .rest_client
-                .get_my_trades_history(&self.symbol, limit.max(1))
-                .await,
+            (true, _) => {
+                self.rest_client
+                    .get_my_trades_history(&self.symbol, limit.max(1))
+                    .await
+            }
+            (false, Some(last_id)) => {
+                self.rest_client
+                    .get_my_trades_since(&self.symbol, last_id.saturating_add(1), 10)
+                    .await
+            }
+            (false, None) => {
+                self.rest_client
+                    .get_my_trades_history(&self.symbol, limit.max(1))
+                    .await
+            }
         };
         let fetch_latency_ms = fetch_started.elapsed().as_millis() as u64;
         let trade_data_complete = trades_result.is_ok();
@@ -418,26 +464,24 @@ impl OrderManager {
         if orders.is_empty() && !trades.is_empty() {
             let mut sorted = trades;
             sorted.sort_by_key(|t| (t.time, t.id));
-            history.extend(
-                sorted.iter().map(|t| {
-                    fills.push(OrderHistoryFill {
-                        timestamp_ms: t.time,
-                        side: if t.is_buyer {
-                            OrderSide::Buy
-                        } else {
-                            OrderSide::Sell
-                        },
-                        price: t.price,
-                    });
-                    format_trade_history_row(
-                        t,
-                        order_source_by_id
-                            .get(&t.order_id)
-                            .map(String::as_str)
-                            .unwrap_or("UNKNOWN"),
-                    )
-                }),
-            );
+            history.extend(sorted.iter().map(|t| {
+                fills.push(OrderHistoryFill {
+                    timestamp_ms: t.time,
+                    side: if t.is_buyer {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    },
+                    price: t.price,
+                });
+                format_trade_history_row(
+                    t,
+                    order_source_by_id
+                        .get(&t.order_id)
+                        .map(String::as_str)
+                        .unwrap_or("UNKNOWN"),
+                )
+            }));
             return Ok(OrderHistorySnapshot {
                 rows: history,
                 stats,
@@ -552,6 +596,13 @@ impl OrderManager {
         signal: Signal,
         source_tag: &str,
     ) -> Result<Option<OrderUpdate>> {
+        if self.market == MarketKind::Futures {
+            return Ok(Some(OrderUpdate::Rejected {
+                client_order_id: "n/a".to_string(),
+                reason: "Futures order is not supported in current build".to_string(),
+            }));
+        }
+
         let side = match &signal {
             Signal::Buy => OrderSide::Buy,
             Signal::Sell => OrderSide::Sell,

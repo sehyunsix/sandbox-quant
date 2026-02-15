@@ -14,9 +14,15 @@ pub struct Config {
 pub struct BinanceConfig {
     pub rest_base_url: String,
     pub ws_base_url: String,
+    #[serde(default = "default_futures_rest_base_url")]
+    pub futures_rest_base_url: String,
+    #[serde(default = "default_futures_ws_base_url")]
+    pub futures_ws_base_url: String,
     pub symbol: String,
     #[serde(default)]
     pub symbols: Vec<String>,
+    #[serde(default)]
+    pub futures_symbols: Vec<String>,
     pub recv_window: u64,
     pub kline_interval: String,
     #[serde(skip)]
@@ -44,6 +50,14 @@ pub struct LoggingConfig {
     pub level: String,
 }
 
+fn default_futures_rest_base_url() -> String {
+    "https://fapi.binance.com".to_string()
+}
+
+fn default_futures_ws_base_url() -> String {
+    "wss://fstream.binance.com/ws".to_string()
+}
+
 /// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.
 pub fn parse_interval_ms(s: &str) -> Result<u64> {
     if s.len() < 2 {
@@ -51,9 +65,12 @@ pub fn parse_interval_ms(s: &str) -> Result<u64> {
     }
 
     let (num_str, suffix) = s.split_at(s.len() - 1);
-    let n: u64 = num_str
-        .parse()
-        .with_context(|| format!("invalid interval '{}': quantity must be a positive integer", s))?;
+    let n: u64 = num_str.parse().with_context(|| {
+        format!(
+            "invalid interval '{}': quantity must be a positive integer",
+            s
+        )
+    })?;
     if n == 0 {
         bail!("invalid interval '{}': quantity must be > 0", s);
     }
@@ -90,6 +107,20 @@ impl BinanceConfig {
             let s = sym.trim().to_ascii_uppercase();
             if !s.is_empty() && !out.iter().any(|v| v == &s) {
                 out.push(s);
+            }
+        }
+        out
+    }
+
+    pub fn tradable_instruments(&self) -> Vec<String> {
+        let mut out = self.tradable_symbols();
+        for sym in &self.futures_symbols {
+            let s = sym.trim().to_ascii_uppercase();
+            if !s.is_empty() {
+                let label = format!("{} (FUT)", s);
+                if !out.iter().any(|v| v == &label) {
+                    out.push(label);
+                }
             }
         }
         out
@@ -131,8 +162,11 @@ mod tests {
 [binance]
 rest_base_url = "https://demo-api.binance.com"
 ws_base_url = "wss://demo-stream.binance.com/ws"
+futures_rest_base_url = "https://fapi.binance.com"
+futures_ws_base_url = "wss://fstream.binance.com/ws"
 symbol = "BTCUSDT"
 symbols = ["ETHUSDT", "BNBUSDT"]
+futures_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
 recv_window = 5000
 kline_interval = "1m"
 
@@ -152,6 +186,7 @@ level = "debug"
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.binance.symbol, "BTCUSDT");
         assert_eq!(config.binance.symbols.len(), 2);
+        assert_eq!(config.binance.futures_symbols.len(), 4);
         assert_eq!(config.strategy.fast_period, 10);
         assert_eq!(config.strategy.slow_period, 30);
         assert!((config.strategy.order_amount_usdt - 10.0).abs() < f64::EPSILON);
@@ -163,12 +198,15 @@ level = "debug"
         let cfg = BinanceConfig {
             rest_base_url: "x".to_string(),
             ws_base_url: "y".to_string(),
+            futures_rest_base_url: "z".to_string(),
+            futures_ws_base_url: "w".to_string(),
             symbol: "btcusdt".to_string(),
             symbols: vec![
                 "ETHUSDT".to_string(),
                 "BTCUSDT".to_string(),
                 "  ".to_string(),
             ],
+            futures_symbols: vec![],
             recv_window: 5000,
             kline_interval: "1m".to_string(),
             api_key: String::new(),
@@ -177,6 +215,32 @@ level = "debug"
         assert_eq!(
             cfg.tradable_symbols(),
             vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()]
+        );
+    }
+
+    #[test]
+    fn tradable_instruments_include_futures_labels() {
+        let cfg = BinanceConfig {
+            rest_base_url: "x".to_string(),
+            ws_base_url: "y".to_string(),
+            futures_rest_base_url: "z".to_string(),
+            futures_ws_base_url: "w".to_string(),
+            symbol: "BTCUSDT".to_string(),
+            symbols: vec!["ETHUSDT".to_string()],
+            futures_symbols: vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
+            recv_window: 5000,
+            kline_interval: "1m".to_string(),
+            api_key: String::new(),
+            api_secret: String::new(),
+        };
+        assert_eq!(
+            cfg.tradable_instruments(),
+            vec![
+                "BTCUSDT".to_string(),
+                "ETHUSDT".to_string(),
+                "BTCUSDT (FUT)".to_string(),
+                "ETHUSDT (FUT)".to_string()
+            ]
         );
     }
 

@@ -88,7 +88,9 @@ impl Widget for PositionPanel<'_> {
             .map(|v| format!("{:+.2}", v))
             .unwrap_or_else(|| "---".to_string());
         let equity_roi_pct = match (self.current_equity_usdt, self.initial_equity_usdt) {
-            (Some(cur), Some(init)) if init.abs() > f64::EPSILON => Some((cur - init) / init * 100.0),
+            (Some(cur), Some(init)) if init.abs() > f64::EPSILON => {
+                Some((cur - init) / init * 100.0)
+            }
             _ => None,
         };
         let equity_roi_text = equity_roi_pct
@@ -134,11 +136,7 @@ impl Widget for PositionPanel<'_> {
                 Span::styled("EqΔ:  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     equity_delta_text,
-                    Style::default().fg(
-                        equity_delta
-                            .map(pnl_color)
-                            .unwrap_or(Color::White),
-                    ),
+                    Style::default().fg(equity_delta.map(pnl_color).unwrap_or(Color::White)),
                 ),
             ]),
             Line::from(vec![
@@ -152,11 +150,7 @@ impl Widget for PositionPanel<'_> {
                 Span::styled("EqROI:", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!(" {}", equity_roi_text),
-                    Style::default().fg(
-                        equity_roi_pct
-                            .map(pnl_color)
-                            .unwrap_or(Color::White),
-                    ),
+                    Style::default().fg(equity_roi_pct.map(pnl_color).unwrap_or(Color::White)),
                 ),
             ]),
             Line::from(Span::styled(
@@ -316,11 +310,20 @@ impl Widget for OrderLogPanel<'_> {
             ]),
             Line::from(vec![
                 Span::styled("Trades: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", self.trade_count), Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{}", self.trade_count),
+                    Style::default().fg(Color::White),
+                ),
                 Span::styled("  Win: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", self.win_count), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("{}", self.win_count),
+                    Style::default().fg(Color::Green),
+                ),
                 Span::styled("  Lose: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", self.lose_count), Style::default().fg(Color::Red)),
+                Span::styled(
+                    format!("{}", self.lose_count),
+                    Style::default().fg(Color::Red),
+                ),
                 Span::styled("  PnL: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:.4}", self.realized_pnl),
@@ -357,8 +360,13 @@ pub struct StatusBar<'a> {
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let fmt_update = |ts_ms: Option<u64>| -> String {
-            ts_ms.and_then(|ts| chrono::Utc.timestamp_millis_opt(ts as i64).single())
-                .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
+            ts_ms
+                .and_then(|ts| chrono::Utc.timestamp_millis_opt(ts as i64).single())
+                .map(|dt| {
+                    dt.with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string()
+                })
                 .unwrap_or_else(|| "--:--:--".to_string())
         };
         let fmt_age = |lat_ms: Option<u64>| -> String {
@@ -576,6 +584,8 @@ impl Widget for KeybindBar {
             Span::styled("icker ", Style::default().fg(Color::DarkGray)),
             Span::styled("[Y]", Style::default().fg(Color::Magenta)),
             Span::styled("strategy ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[A]", Style::default().fg(Color::Magenta)),
+            Span::styled("ccount", Style::default().fg(Color::DarkGray)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);
