@@ -22,6 +22,7 @@ pub struct PositionPanel<'a> {
     current_equity_usdt: Option<f64>,
     history_trade_count: u32,
     history_realized_pnl: f64,
+    last_applied_fee: &'a str,
 }
 
 impl<'a> PositionPanel<'a> {
@@ -33,6 +34,7 @@ impl<'a> PositionPanel<'a> {
         current_equity_usdt: Option<f64>,
         history_trade_count: u32,
         history_realized_pnl: f64,
+        last_applied_fee: &'a str,
     ) -> Self {
         Self {
             position,
@@ -42,6 +44,7 @@ impl<'a> PositionPanel<'a> {
             current_equity_usdt,
             history_trade_count,
             history_realized_pnl,
+            last_applied_fee,
         }
     }
 }
@@ -207,6 +210,10 @@ impl Widget for PositionPanel<'_> {
                     format!(" {}", display_trade_count),
                     Style::default().fg(Color::White),
                 ),
+            ]),
+            Line::from(vec![
+                Span::styled("Fee:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(self.last_applied_fee, Style::default().fg(Color::LightBlue)),
             ]),
         ];
 

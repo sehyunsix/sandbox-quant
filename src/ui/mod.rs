@@ -11,7 +11,7 @@ use ratatui::Frame;
 
 use crate::event::{AppEvent, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
-use crate::model::order::OrderSide;
+use crate::model::order::{Fill, OrderSide};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
@@ -70,6 +70,7 @@ pub struct AppState {
     pub history_popup_open: bool,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
+    pub last_applied_fee: String,
 }
 
 impl AppState {
@@ -131,6 +132,7 @@ impl AppState {
             history_popup_open: false,
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
+            last_applied_fee: "---".to_string(),
         }
     }
 
@@ -349,6 +351,9 @@ impl AppState {
                         fills,
                         avg_price,
                     } => {
+                        if let Some(summary) = format_last_applied_fee(&self.symbol, fills) {
+                            self.last_applied_fee = summary;
+                        }
                         self.position.apply_fill(*side, fills);
                         self.refresh_equity_usdt();
                         let candle_index = if self.current_candle.is_some() {
@@ -567,6 +572,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             state.current_equity_usdt,
             state.history_trade_count,
             state.history_realized_pnl,
+            &state.last_applied_fee,
         ),
         main_area[1],
     );
@@ -877,5 +883,98 @@ fn subtract_stats(total: &OrderHistoryStats, used: &OrderHistoryStats) -> OrderH
         win_count: total.win_count.saturating_sub(used.win_count),
         lose_count: total.lose_count.saturating_sub(used.lose_count),
         realized_pnl: total.realized_pnl - used.realized_pnl,
+    }
+}
+
+fn split_symbol_assets(symbol: &str) -> (String, String) {
+    const QUOTE_SUFFIXES: [&str; 10] = [
+        "USDT", "USDC", "FDUSD", "BUSD", "TUSD", "TRY", "EUR", "BTC", "ETH", "BNB",
+    ];
+    for q in QUOTE_SUFFIXES {
+        if let Some(base) = symbol.strip_suffix(q) {
+            if !base.is_empty() {
+                return (base.to_string(), q.to_string());
+            }
+        }
+    }
+    (symbol.to_string(), String::new())
+}
+
+fn format_last_applied_fee(symbol: &str, fills: &[Fill]) -> Option<String> {
+    if fills.is_empty() {
+        return None;
+    }
+    let (base_asset, quote_asset) = split_symbol_assets(symbol);
+    let mut fee_by_asset: HashMap<String, f64> = HashMap::new();
+    let mut notional_quote = 0.0;
+    let mut fee_quote_equiv = 0.0;
+    let mut quote_convertible = !quote_asset.is_empty();
+
+    for f in fills {
+        if f.qty > 0.0 && f.price > 0.0 {
+            notional_quote += f.qty * f.price;
+        }
+        if f.commission <= 0.0 {
+            continue;
+        }
+        *fee_by_asset.entry(f.commission_asset.clone()).or_insert(0.0) += f.commission;
+        if !quote_asset.is_empty() && f.commission_asset.eq_ignore_ascii_case(&quote_asset) {
+            fee_quote_equiv += f.commission;
+        } else if !base_asset.is_empty() && f.commission_asset.eq_ignore_ascii_case(&base_asset) {
+            fee_quote_equiv += f.commission * f.price.max(0.0);
+        } else {
+            quote_convertible = false;
+        }
+    }
+
+    if fee_by_asset.is_empty() {
+        return Some("0".to_string());
+    }
+
+    if quote_convertible && notional_quote > f64::EPSILON {
+        let fee_pct = fee_quote_equiv / notional_quote * 100.0;
+        return Some(format!(
+            "{:.3}% ({:.4} {})",
+            fee_pct, fee_quote_equiv, quote_asset
+        ));
+    }
+
+    let mut items: Vec<(String, f64)> = fee_by_asset.into_iter().collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    if items.len() == 1 {
+        let (asset, amount) = &items[0];
+        Some(format!("{:.6} {}", amount, asset))
+    } else {
+        Some(format!("mixed fees ({})", items.len()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_last_applied_fee;
+    use crate::model::order::Fill;
+
+    #[test]
+    fn fee_summary_from_quote_asset_commission() {
+        let fills = vec![Fill {
+            price: 2000.0,
+            qty: 0.5,
+            commission: 1.0,
+            commission_asset: "USDT".to_string(),
+        }];
+        let summary = format_last_applied_fee("ETHUSDT", &fills).unwrap();
+        assert_eq!(summary, "0.100% (1.0000 USDT)");
+    }
+
+    #[test]
+    fn fee_summary_from_base_asset_commission() {
+        let fills = vec![Fill {
+            price: 2000.0,
+            qty: 0.5,
+            commission: 0.0005,
+            commission_asset: "ETH".to_string(),
+        }];
+        let summary = format_last_applied_fee("ETHUSDT", &fills).unwrap();
+        assert_eq!(summary, "0.100% (1.0000 USDT)");
     }
 }
