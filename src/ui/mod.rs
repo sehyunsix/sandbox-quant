@@ -15,6 +15,7 @@ use crate::model::order::OrderSide;
 use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
+use crate::order_store;
 
 use chart::{FillMarker, PriceChart};
 use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
@@ -66,6 +67,8 @@ pub struct AppState {
     pub strategy_selector_index: usize,
     pub strategy_items: Vec<String>,
     pub account_popup_open: bool,
+    pub history_popup_open: bool,
+    pub history_rows: Vec<String>,
 }
 
 impl AppState {
@@ -124,6 +127,8 @@ impl AppState {
                 "MA(Slow 20/60)".to_string(),
             ],
             account_popup_open: false,
+            history_popup_open: false,
+            history_rows: Vec::new(),
         }
     }
 
@@ -139,6 +144,28 @@ impl AppState {
         self.log_messages.push(msg);
         if self.log_messages.len() > MAX_LOG_MESSAGES {
             self.log_messages.remove(0);
+        }
+    }
+
+    pub fn refresh_history_rows(&mut self) {
+        match order_store::load_daily_realized_returns(400) {
+            Ok(rows) => {
+                let mut lines = Vec::with_capacity(rows.len() + 1);
+                lines.push("Ticker           Date         RealizedROI   RealizedPnL".to_string());
+                for row in rows {
+                    lines.push(format!(
+                        "{:<16} {:<12} {:>10.2}% {:>12.4}",
+                        row.symbol, row.date, row.realized_return_pct, row.realized_pnl
+                    ));
+                }
+                self.history_rows = lines;
+            }
+            Err(e) => {
+                self.history_rows = vec![
+                    "Ticker           Date         RealizedROI   RealizedPnL".to_string(),
+                    format!("(failed to load history: {})", e),
+                ];
+            }
         }
     }
 
@@ -434,6 +461,7 @@ impl AppState {
                 self.last_order_history_update_ms = Some(snapshot.fetched_at_ms);
                 self.last_order_history_event_ms = snapshot.latest_event_ms;
                 self.last_order_history_latency_ms = Some(snapshot.fetch_latency_ms);
+                self.refresh_history_rows();
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -557,6 +585,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         );
     } else if state.account_popup_open {
         render_account_popup(frame, &state.balances);
+    } else if state.history_popup_open {
+        render_history_popup(frame, &state.history_rows);
     }
 }
 
@@ -608,6 +638,46 @@ fn render_account_popup(frame: &mut Frame, balances: &HashMap<String, f64>) {
     }
 
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_history_popup(frame: &mut Frame, rows: &[String]) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4).max(40),
+        height: area.height.saturating_sub(2).max(12),
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" History by Ticker/Date ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let max_rows = inner.height.saturating_sub(1) as usize;
+    let mut visible: Vec<Line> = Vec::new();
+    for (idx, row) in rows.iter().take(max_rows).enumerate() {
+        let color = if idx == 0 {
+            Color::Cyan
+        } else if row.contains('-') && row.contains('%') {
+            Color::White
+        } else {
+            Color::DarkGray
+        };
+        visible.push(Line::from(Span::styled(
+            row.clone(),
+            Style::default().fg(color),
+        )));
+    }
+    if visible.is_empty() {
+        visible.push(Line::from(Span::styled(
+            "No history rows",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    frame.render_widget(Paragraph::new(visible), inner);
 }
 
 fn render_selector_popup(

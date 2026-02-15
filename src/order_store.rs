@@ -1,5 +1,7 @@
 use anyhow::Result;
+use chrono::TimeZone;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 
 use crate::binance::types::{BinanceAllOrder, BinanceMyTrade};
 
@@ -7,6 +9,14 @@ use crate::binance::types::{BinanceAllOrder, BinanceMyTrade};
 pub struct PersistedTrade {
     pub trade: BinanceMyTrade,
     pub source: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DailyRealizedReturn {
+    pub symbol: String,
+    pub date: String,
+    pub realized_return_pct: f64,
+    pub realized_pnl: f64,
 }
 
 pub fn persist_order_snapshot(
@@ -229,4 +239,164 @@ pub fn load_trade_count(symbol: &str) -> Result<usize> {
     )?;
     let count = stmt.query_row([symbol], |row| row.get::<_, i64>(0))?;
     Ok(count.max(0) as usize)
+}
+
+#[derive(Clone, Copy, Default)]
+struct LongPos {
+    qty: f64,
+    cost_quote: f64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct DailyBucket {
+    pnl: f64,
+    basis: f64,
+}
+
+pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedReturn>> {
+    std::fs::create_dir_all("data")?;
+    let conn = Connection::open("data/order_history.sqlite")?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms
+        FROM order_history_trades
+        ORDER BY symbol ASC, event_time_ms ASC, trade_id ASC
+        "#,
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)? as u64,
+            row.get::<_, i64>(2)? as u64,
+            row.get::<_, String>(3)?,
+            row.get::<_, f64>(4)?,
+            row.get::<_, f64>(5)?,
+            row.get::<_, f64>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, i64>(8)? as u64,
+        ))
+    })?;
+
+    let mut pos_by_symbol: HashMap<String, LongPos> = HashMap::new();
+    let mut daily_by_key: HashMap<(String, String), DailyBucket> = HashMap::new();
+
+    for row in rows {
+        let (
+            symbol,
+            _trade_id,
+            _order_id,
+            side,
+            qty_raw,
+            price,
+            commission,
+            commission_asset,
+            event_time_ms,
+        ) = row?;
+        let qty = qty_raw.max(0.0);
+        if qty <= f64::EPSILON {
+            continue;
+        }
+
+        let (base_asset, quote_asset) = split_symbol_assets(&symbol);
+        let fee_is_base =
+            !base_asset.is_empty() && commission_asset.eq_ignore_ascii_case(&base_asset);
+        let fee_is_quote =
+            !quote_asset.is_empty() && commission_asset.eq_ignore_ascii_case(&quote_asset);
+        let pos = pos_by_symbol.entry(symbol.clone()).or_default();
+
+        if side.eq_ignore_ascii_case("BUY") {
+            let net_qty = (qty
+                - if fee_is_base {
+                    commission.max(0.0)
+                } else {
+                    0.0
+                })
+            .max(0.0);
+            if net_qty <= f64::EPSILON {
+                continue;
+            }
+            let fee_quote = if fee_is_quote {
+                commission.max(0.0)
+            } else {
+                0.0
+            };
+            pos.qty += net_qty;
+            pos.cost_quote += qty * price + fee_quote;
+            continue;
+        }
+
+        if pos.qty <= f64::EPSILON {
+            continue;
+        }
+        let close_qty = qty.min(pos.qty);
+        if close_qty <= f64::EPSILON {
+            continue;
+        }
+        let avg_cost = pos.cost_quote / pos.qty.max(f64::EPSILON);
+        let fee_quote_total = if fee_is_quote {
+            commission.max(0.0)
+        } else if fee_is_base {
+            commission.max(0.0) * price
+        } else {
+            0.0
+        };
+        let fee_quote = fee_quote_total * (close_qty / qty.max(f64::EPSILON));
+        let realized_pnl = (close_qty * price - fee_quote) - (avg_cost * close_qty);
+        let realized_basis = avg_cost * close_qty;
+
+        let date = chrono::Utc
+            .timestamp_millis_opt(event_time_ms as i64)
+            .single()
+            .map(|dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let bucket = daily_by_key.entry((symbol.clone(), date)).or_default();
+        bucket.pnl += realized_pnl;
+        bucket.basis += realized_basis;
+
+        pos.qty -= close_qty;
+        pos.cost_quote -= realized_basis;
+        if pos.qty <= f64::EPSILON {
+            pos.qty = 0.0;
+            pos.cost_quote = 0.0;
+        }
+    }
+
+    let mut out: Vec<DailyRealizedReturn> = daily_by_key
+        .into_iter()
+        .map(|((symbol, date), b)| DailyRealizedReturn {
+            symbol,
+            date,
+            realized_return_pct: if b.basis.abs() > f64::EPSILON {
+                (b.pnl / b.basis) * 100.0
+            } else {
+                0.0
+            },
+            realized_pnl: b.pnl,
+        })
+        .collect();
+
+    out.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.symbol.cmp(&b.symbol)));
+    if out.len() > limit {
+        out.truncate(limit);
+    }
+    Ok(out)
+}
+
+fn split_symbol_assets(symbol: &str) -> (String, String) {
+    const QUOTE_SUFFIXES: [&str; 10] = [
+        "USDT", "USDC", "FDUSD", "BUSD", "TUSD", "TRY", "EUR", "BTC", "ETH", "BNB",
+    ];
+    for q in QUOTE_SUFFIXES {
+        if let Some(base) = symbol.strip_suffix(q) {
+            if !base.is_empty() {
+                return (base.to_string(), q.to_string());
+            }
+        }
+    }
+    (symbol.to_string(), String::new())
 }

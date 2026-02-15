@@ -592,6 +592,7 @@ async fn main() -> Result<()> {
         candle_interval_ms,
         &config.binance.kline_interval,
     );
+    app_state.refresh_history_rows();
     app_state.symbol_items = tradable_symbols.clone();
     app_state.strategy_items = vec![
         StrategyPreset::Config.label().to_string(),
@@ -666,8 +667,7 @@ async fn main() -> Result<()> {
                                     let (_, market) = parse_instrument_label(&current_symbol);
                                     if market == MarketKind::Futures {
                                         app_state.push_log(
-                                            "[WARN] Futures mode is chart-only in current build"
-                                                .to_string(),
+                                            "Futures mode enabled (orders + chart)".to_string(),
                                         );
                                     }
                                 }
@@ -716,6 +716,15 @@ async fn main() -> Result<()> {
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Enter => {
                             app_state.account_popup_open = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                if app_state.history_popup_open {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('i') | KeyCode::Char('I') | KeyCode::Enter => {
+                            app_state.history_popup_open = false;
                         }
                         _ => {}
                     }
@@ -785,6 +794,10 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
                         app_state.account_popup_open = true;
+                    }
+                    KeyCode::Char('i') | KeyCode::Char('I') => {
+                        app_state.refresh_history_rows();
+                        app_state.history_popup_open = true;
                     }
                     _ => {}
                 }
