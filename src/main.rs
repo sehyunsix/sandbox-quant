@@ -199,18 +199,13 @@ async fn main() -> Result<()> {
         Ok(()) => {
             tracing::info!("Binance demo ping OK");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage(
-                    "Binance demo ping OK".to_string(),
-                ))
+                .send(AppEvent::LogMessage("Binance demo ping OK".to_string()))
                 .await;
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to ping Binance demo");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "[ERR] Ping failed: {}",
-                    e
-                )))
+                .send(AppEvent::LogMessage(format!("[ERR] Ping failed: {}", e)))
                 .await;
         }
     }
@@ -260,10 +255,7 @@ async fn main() -> Result<()> {
         {
             tracing::error!(error = %e, "WebSocket task failed");
             let _ = ws_app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "[ERR] WS task failed: {}",
-                    e
-                )))
+                .send(AppEvent::LogMessage(format!("[ERR] WS task failed: {}", e)))
                 .await;
         }
     });
@@ -278,7 +270,8 @@ async fn main() -> Result<()> {
     let mut strat_symbol_rx = ws_symbol_tx.subscribe();
     tokio::spawn(async move {
         let mut active_preset = *strategy_preset_rx.borrow();
-        let (mut fast_period, mut slow_period, mut min_ticks) = active_preset.periods(&strat_config);
+        let (mut fast_period, mut slow_period, mut min_ticks) =
+            active_preset.periods(&strat_config);
         let mut strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
         let mut current_symbol = strat_symbol_rx.borrow().clone();
         let mut order_mgr = OrderManager::new(
@@ -300,9 +293,7 @@ async fn main() -> Result<()> {
                         usdt, btc
                     )))
                     .await;
-                let _ = strat_app_tx
-                    .send(AppEvent::BalanceUpdate(balances))
-                    .await;
+                let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to fetch initial balances");
@@ -334,10 +325,7 @@ async fn main() -> Result<()> {
         let _ = strat_app_tx
             .send(AppEvent::LogMessage(format!(
                 "Strategy: MA({}/{}) usdt={} cooldown={}",
-                fast_period,
-                slow_period,
-                strat_config.strategy.order_amount_usdt,
-                min_ticks,
+                fast_period, slow_period, strat_config.strategy.order_amount_usdt, min_ticks,
             )))
             .await;
 
@@ -580,10 +568,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    app_state.push_log(format!(
-        "sandbox-quant started | {} | demo",
-        initial_symbol
-    ));
+    app_state.push_log(format!("sandbox-quant started | {} | demo", initial_symbol));
     let mut current_symbol = initial_symbol.clone();
     let mut current_preset = StrategyPreset::Config;
 
@@ -628,10 +613,8 @@ async fn main() -> Result<()> {
                                         &config,
                                         &app_tx,
                                     );
-                                    app_state.push_log(format!(
-                                        "Symbol switched to {}",
-                                        current_symbol
-                                    ));
+                                    app_state
+                                        .push_log(format!("Symbol switched to {}", current_symbol));
                                 }
                             }
                             app_state.symbol_selector_open = false;
@@ -650,9 +633,9 @@ async fn main() -> Result<()> {
                                 app_state.strategy_selector_index.saturating_sub(1);
                         }
                         KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            app_state.strategy_selector_index =
-                                (app_state.strategy_selector_index + 1)
-                                    .min(app_state.strategy_items.len().saturating_sub(1));
+                            app_state.strategy_selector_index = (app_state.strategy_selector_index
+                                + 1)
+                            .min(app_state.strategy_items.len().saturating_sub(1));
                         }
                         KeyCode::Enter => {
                             let next_preset =
@@ -732,7 +715,8 @@ async fn main() -> Result<()> {
                         app_state.symbol_selector_open = true;
                     }
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        app_state.strategy_selector_index = strategy_preset_to_index(current_preset);
+                        app_state.strategy_selector_index =
+                            strategy_preset_to_index(current_preset);
                         app_state.strategy_selector_open = true;
                     }
                     _ => {}
