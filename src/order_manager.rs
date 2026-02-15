@@ -327,18 +327,21 @@ impl OrderManager {
         let persisted_trade_count = order_store::load_trade_count(&self.symbol).unwrap_or(0);
         let need_backfill = persisted_trade_count < limit;
         let trades_result = match (need_backfill, last_trade_id) {
-            (true, _) => self
-                .rest_client
-                .get_my_trades_history(&self.symbol, limit.max(1))
-                .await,
-            (false, Some(last_id)) => self
-                .rest_client
-                .get_my_trades_since(&self.symbol, last_id.saturating_add(1), 10)
-                .await,
-            (false, None) => self
-                .rest_client
-                .get_my_trades_history(&self.symbol, limit.max(1))
-                .await,
+            (true, _) => {
+                self.rest_client
+                    .get_my_trades_history(&self.symbol, limit.max(1))
+                    .await
+            }
+            (false, Some(last_id)) => {
+                self.rest_client
+                    .get_my_trades_since(&self.symbol, last_id.saturating_add(1), 10)
+                    .await
+            }
+            (false, None) => {
+                self.rest_client
+                    .get_my_trades_history(&self.symbol, limit.max(1))
+                    .await
+            }
         };
         let fetch_latency_ms = fetch_started.elapsed().as_millis() as u64;
         let trade_data_complete = trades_result.is_ok();
@@ -425,26 +428,24 @@ impl OrderManager {
         if orders.is_empty() && !trades.is_empty() {
             let mut sorted = trades;
             sorted.sort_by_key(|t| (t.time, t.id));
-            history.extend(
-                sorted.iter().map(|t| {
-                    fills.push(OrderHistoryFill {
-                        timestamp_ms: t.time,
-                        side: if t.is_buyer {
-                            OrderSide::Buy
-                        } else {
-                            OrderSide::Sell
-                        },
-                        price: t.price,
-                    });
-                    format_trade_history_row(
-                        t,
-                        order_source_by_id
-                            .get(&t.order_id)
-                            .map(String::as_str)
-                            .unwrap_or("UNKNOWN"),
-                    )
-                }),
-            );
+            history.extend(sorted.iter().map(|t| {
+                fills.push(OrderHistoryFill {
+                    timestamp_ms: t.time,
+                    side: if t.is_buyer {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    },
+                    price: t.price,
+                });
+                format_trade_history_row(
+                    t,
+                    order_source_by_id
+                        .get(&t.order_id)
+                        .map(String::as_str)
+                        .unwrap_or("UNKNOWN"),
+                )
+            }));
             return Ok(OrderHistorySnapshot {
                 rows: history,
                 stats,

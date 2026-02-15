@@ -61,7 +61,10 @@ impl BinanceRestClient {
         let local_ms = chrono::Utc::now().timestamp_millis();
         let offset = server_ms - local_ms;
         self.time_offset_ms.store(offset, Ordering::Relaxed);
-        tracing::warn!(offset_ms = offset, "Synchronized Binance server time offset");
+        tracing::warn!(
+            offset_ms = offset,
+            "Synchronized Binance server time offset"
+        );
         Ok(())
     }
 
@@ -340,11 +343,7 @@ impl BinanceRestClient {
 
     /// Fetch recent orders for a symbol from `/api/v3/allOrders`.
     /// `limit` controls max rows returned (1..=1000).
-    pub async fn get_all_orders(
-        &self,
-        symbol: &str,
-        limit: usize,
-    ) -> Result<Vec<BinanceAllOrder>> {
+    pub async fn get_all_orders(&self, symbol: &str, limit: usize) -> Result<Vec<BinanceAllOrder>> {
         self.get_all_orders_page(symbol, limit, None).await
     }
 
@@ -414,7 +413,11 @@ impl BinanceRestClient {
 
         loop {
             let page = self
-                .get_my_trades_page(symbol, page_size.min(target.saturating_sub(out.len())), Some(cursor))
+                .get_my_trades_page(
+                    symbol,
+                    page_size.min(target.saturating_sub(out.len())),
+                    Some(cursor),
+                )
                 .await?;
             if page.is_empty() {
                 break;

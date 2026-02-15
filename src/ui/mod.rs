@@ -509,11 +509,15 @@ fn render_selector_popup(
     let width = if stats.is_some() {
         let min_width = 44;
         let preferred = 84;
-        preferred.min(available_width).max(min_width.min(available_width))
+        preferred
+            .min(available_width)
+            .max(min_width.min(available_width))
     } else {
         let min_width = 24;
         let preferred = 48;
-        preferred.min(available_width).max(min_width.min(available_width))
+        preferred
+            .min(available_width)
+            .max(min_width.min(available_width))
     };
     let available_height = area.height.saturating_sub(2).max(1);
     let desired_height = if stats.is_some() {
@@ -521,7 +525,9 @@ fn render_selector_popup(
     } else {
         items.len() as u16 + 4
     };
-    let height = desired_height.min(available_height).max(6.min(available_height));
+    let height = desired_height
+        .min(available_height)
+        .max(6.min(available_height));
     let popup = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
@@ -541,7 +547,9 @@ fn render_selector_popup(
     if stats.is_some() {
         lines.push(Line::from(vec![Span::styled(
             "  Strategy           W    L    T    PnL",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )]));
     }
 
@@ -605,7 +613,9 @@ fn render_selector_popup(
                 "  TOTAL              W:{:<3} L:{:<3} T:{:<3} PnL:{:.4}",
                 t.win_count, t.lose_count, t.trade_count, t.realized_pnl
             ),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )]));
     }
 
