@@ -69,6 +69,7 @@ pub struct AppState {
     pub account_popup_open: bool,
     pub history_popup_open: bool,
     pub history_rows: Vec<String>,
+    pub history_bucket: order_store::HistoryBucket,
 }
 
 impl AppState {
@@ -129,6 +130,7 @@ impl AppState {
             account_popup_open: false,
             history_popup_open: false,
             history_rows: Vec::new(),
+            history_bucket: order_store::HistoryBucket::Day,
         }
     }
 
@@ -148,7 +150,7 @@ impl AppState {
     }
 
     pub fn refresh_history_rows(&mut self) {
-        match order_store::load_daily_realized_returns(400) {
+        match order_store::load_realized_returns_by_bucket(self.history_bucket, 400) {
             Ok(rows) => {
                 use std::collections::{BTreeMap, BTreeSet};
 
@@ -165,10 +167,9 @@ impl AppState {
                 // Keep recent dates only to avoid horizontal overflow in terminal.
                 let mut dates: Vec<String> = date_set.into_iter().collect();
                 dates.sort();
-                dates.reverse();
                 const MAX_DATE_COLS: usize = 6;
                 if dates.len() > MAX_DATE_COLS {
-                    dates.truncate(MAX_DATE_COLS);
+                    dates = dates[dates.len() - MAX_DATE_COLS..].to_vec();
                 }
 
                 let mut lines = Vec::new();
@@ -623,7 +624,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     } else if state.account_popup_open {
         render_account_popup(frame, &state.balances);
     } else if state.history_popup_open {
-        render_history_popup(frame, &state.history_rows);
+        render_history_popup(frame, &state.history_rows, state.history_bucket);
     }
 }
 
@@ -677,7 +678,7 @@ fn render_account_popup(frame: &mut Frame, balances: &HashMap<String, f64>) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_history_popup(frame: &mut Frame, rows: &[String]) {
+fn render_history_popup(frame: &mut Frame, rows: &[String], bucket: order_store::HistoryBucket) {
     let area = frame.area();
     let popup = Rect {
         x: area.x + 2,
@@ -687,7 +688,11 @@ fn render_history_popup(frame: &mut Frame, rows: &[String]) {
     };
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(" History by Ticker/Date ")
+        .title(match bucket {
+            order_store::HistoryBucket::Day => " History (Day ROI) ",
+            order_store::HistoryBucket::Hour => " History (Hour ROI) ",
+            order_store::HistoryBucket::Month => " History (Month ROI) ",
+        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(popup);

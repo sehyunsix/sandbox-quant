@@ -16,7 +16,29 @@ pub struct DailyRealizedReturn {
     pub symbol: String,
     pub date: String,
     pub realized_return_pct: f64,
-    pub realized_pnl: f64,
+}
+
+fn ensure_trade_schema(conn: &Connection) -> Result<()> {
+    for ddl in [
+        "ALTER TABLE order_history_trades ADD COLUMN commission REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE order_history_trades ADD COLUMN commission_asset TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE order_history_trades ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0.0",
+    ] {
+        if let Err(e) = conn.execute(ddl, []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(e.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryBucket {
+    Day,
+    Hour,
+    Month,
 }
 
 pub fn persist_order_snapshot(
@@ -53,24 +75,14 @@ pub fn persist_order_snapshot(
             commission REAL NOT NULL DEFAULT 0.0,
             commission_asset TEXT NOT NULL DEFAULT '',
             event_time_ms INTEGER NOT NULL,
+            realized_pnl REAL NOT NULL DEFAULT 0.0,
             source TEXT NOT NULL,
             updated_at_ms INTEGER NOT NULL,
             PRIMARY KEY(symbol, trade_id)
         );
         "#,
     )?;
-    // Backward-compatible schema upgrades for existing DB files.
-    for ddl in [
-        "ALTER TABLE order_history_trades ADD COLUMN commission REAL NOT NULL DEFAULT 0.0",
-        "ALTER TABLE order_history_trades ADD COLUMN commission_asset TEXT NOT NULL DEFAULT ''",
-    ] {
-        if let Err(e) = conn.execute(ddl, []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column name") {
-                return Err(e.into());
-            }
-        }
-    }
+    ensure_trade_schema(&conn)?;
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let tx = conn.transaction()?;
@@ -123,8 +135,8 @@ pub fn persist_order_snapshot(
         tx.execute(
             r#"
             INSERT INTO order_history_trades (
-                symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, source, updated_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, realized_pnl, source, updated_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(symbol, trade_id) DO UPDATE SET
                 order_id = excluded.order_id,
                 side = excluded.side,
@@ -133,6 +145,7 @@ pub fn persist_order_snapshot(
                 commission = excluded.commission,
                 commission_asset = excluded.commission_asset,
                 event_time_ms = excluded.event_time_ms,
+                realized_pnl = excluded.realized_pnl,
                 source = excluded.source,
                 updated_at_ms = excluded.updated_at_ms
             "#,
@@ -146,6 +159,7 @@ pub fn persist_order_snapshot(
                 t.commission,
                 t.commission_asset,
                 t.time as i64,
+                t.realized_pnl,
                 source_by_order_id
                     .get(&t.order_id)
                     .map(String::as_str)
@@ -176,9 +190,10 @@ fn source_label_from_client_order_id(client_order_id: &str) -> &'static str {
 pub fn load_persisted_trades(symbol: &str) -> Result<Vec<PersistedTrade>> {
     std::fs::create_dir_all("data")?;
     let conn = Connection::open("data/order_history.sqlite")?;
+    ensure_trade_schema(&conn)?;
     let mut stmt = conn.prepare(
         r#"
-        SELECT trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, source
+        SELECT trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, realized_pnl, source
         FROM order_history_trades
         WHERE symbol = ?1
         ORDER BY event_time_ms ASC, trade_id ASC
@@ -197,12 +212,13 @@ pub fn load_persisted_trades(symbol: &str) -> Result<Vec<PersistedTrade>> {
             commission: row.get(5)?,
             commission_asset: row.get(6)?,
             time: row.get::<_, i64>(7)? as u64,
+            realized_pnl: row.get(8)?,
             is_buyer,
             is_maker: false,
         };
         Ok(PersistedTrade {
             trade,
-            source: row.get(8)?,
+            source: row.get(9)?,
         })
     })?;
 
@@ -253,12 +269,16 @@ struct DailyBucket {
     basis: f64,
 }
 
-pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedReturn>> {
+pub fn load_realized_returns_by_bucket(
+    bucket: HistoryBucket,
+    limit: usize,
+) -> Result<Vec<DailyRealizedReturn>> {
     std::fs::create_dir_all("data")?;
     let conn = Connection::open("data/order_history.sqlite")?;
+    ensure_trade_schema(&conn)?;
     let mut stmt = conn.prepare(
         r#"
-        SELECT symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms
+        SELECT symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, realized_pnl
         FROM order_history_trades
         ORDER BY symbol ASC, event_time_ms ASC, trade_id ASC
         "#,
@@ -275,6 +295,7 @@ pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedRetu
             row.get::<_, f64>(6)?,
             row.get::<_, String>(7)?,
             row.get::<_, i64>(8)? as u64,
+            row.get::<_, f64>(9)?,
         ))
     })?;
 
@@ -292,6 +313,7 @@ pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedRetu
             commission,
             commission_asset,
             event_time_ms,
+            realized_pnl,
         ) = row?;
         let qty = qty_raw.max(0.0);
         if qty <= f64::EPSILON {
@@ -304,6 +326,26 @@ pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedRetu
         let fee_is_quote =
             !quote_asset.is_empty() && commission_asset.eq_ignore_ascii_case(&quote_asset);
         let pos = pos_by_symbol.entry(symbol.clone()).or_default();
+
+        let date = chrono::Utc
+            .timestamp_millis_opt(event_time_ms as i64)
+            .single()
+            .map(|dt| dt.with_timezone(&chrono::Local))
+            .map(|dt| match bucket {
+                HistoryBucket::Day => dt.format("%Y-%m-%d").to_string(),
+                HistoryBucket::Hour => dt.format("%Y-%m-%d %H:00").to_string(),
+                HistoryBucket::Month => dt.format("%Y-%m").to_string(),
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Futures: realized_pnl is provided directly by exchange, do not apply spot long inventory logic.
+        if symbol.ends_with("#FUT") {
+            let basis = (qty * price).abs();
+            let bucket = daily_by_key.entry((symbol.clone(), date)).or_default();
+            bucket.pnl += realized_pnl;
+            bucket.basis += basis;
+            continue;
+        }
 
         if side.eq_ignore_ascii_case("BUY") {
             let net_qty = (qty
@@ -345,15 +387,6 @@ pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedRetu
         let realized_pnl = (close_qty * price - fee_quote) - (avg_cost * close_qty);
         let realized_basis = avg_cost * close_qty;
 
-        let date = chrono::Utc
-            .timestamp_millis_opt(event_time_ms as i64)
-            .single()
-            .map(|dt| {
-                dt.with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "unknown".to_string());
         let bucket = daily_by_key.entry((symbol.clone(), date)).or_default();
         bucket.pnl += realized_pnl;
         bucket.basis += realized_basis;
@@ -376,7 +409,6 @@ pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedRetu
             } else {
                 0.0
             },
-            realized_pnl: b.pnl,
         })
         .collect();
 
@@ -385,6 +417,10 @@ pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedRetu
         out.truncate(limit);
     }
     Ok(out)
+}
+
+pub fn load_daily_realized_returns(limit: usize) -> Result<Vec<DailyRealizedReturn>> {
+    load_realized_returns_by_bucket(HistoryBucket::Day, limit)
 }
 
 fn split_symbol_assets(symbol: &str) -> (String, String) {

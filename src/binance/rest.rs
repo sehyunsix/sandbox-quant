@@ -9,8 +9,9 @@ use crate::model::candle::Candle;
 use crate::model::order::OrderSide;
 
 use super::types::{
-    AccountInfo, BinanceAllOrder, BinanceFuturesAccountInfo, BinanceFuturesOrderResponse,
-    BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
+    AccountInfo, BinanceAllOrder, BinanceFuturesAccountInfo, BinanceFuturesAllOrder,
+    BinanceFuturesOrderResponse, BinanceFuturesUserTrade, BinanceMyTrade, BinanceOrderResponse,
+    ServerTimeResponse,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -540,6 +541,76 @@ impl BinanceRestClient {
         self.get_all_orders_page(symbol, limit, None).await
     }
 
+    async fn get_futures_all_orders_page(
+        &self,
+        symbol: &str,
+        limit: usize,
+        from_order_id: Option<u64>,
+    ) -> Result<Vec<BinanceAllOrder>> {
+        self.check_rate_limit();
+        let limit = limit.clamp(1, 1000);
+        let query = match from_order_id {
+            Some(order_id) => format!("symbol={}&limit={}&orderId={}", symbol, limit, order_id),
+            None => format!("symbol={}&limit={}", symbol, limit),
+        };
+        let signed = self.sign_futures(&query);
+        let url = format!("{}/fapi/v1/allOrders?{}", self.futures_base_url, signed);
+        let resp = self
+            .http
+            .get(&url)
+            .header("X-MBX-APIKEY", &self.futures_api_key)
+            .send()
+            .await
+            .context("get_futures_all_orders HTTP failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Futures allOrders request failed: {}",
+                body
+            ));
+        }
+        let rows: Vec<BinanceFuturesAllOrder> = resp.json().await?;
+        Ok(rows
+            .into_iter()
+            .map(|o| {
+                let cumm_quote = if o.cum_quote > 0.0 {
+                    o.cum_quote
+                } else {
+                    o.avg_price * o.executed_qty
+                };
+                BinanceAllOrder {
+                    symbol: o.symbol,
+                    order_id: o.order_id,
+                    client_order_id: o.client_order_id,
+                    price: o.price,
+                    orig_qty: o.orig_qty,
+                    executed_qty: o.executed_qty,
+                    cummulative_quote_qty: cumm_quote,
+                    status: o.status,
+                    r#type: o.r#type,
+                    side: o.side,
+                    time: o.time,
+                    update_time: o.update_time,
+                }
+            })
+            .collect())
+    }
+
+    pub async fn get_futures_all_orders(
+        &self,
+        symbol: &str,
+        limit: usize,
+    ) -> Result<Vec<BinanceAllOrder>> {
+        self.get_futures_all_orders_page(symbol, limit, None).await
+    }
+
     async fn get_my_trades_page(
         &self,
         symbol: &str,
@@ -673,6 +744,98 @@ impl BinanceRestClient {
             cursor = next;
         }
 
+        Ok(out)
+    }
+
+    async fn get_futures_my_trades_page(
+        &self,
+        symbol: &str,
+        limit: usize,
+        from_id: Option<u64>,
+    ) -> Result<Vec<BinanceMyTrade>> {
+        self.check_rate_limit();
+        let limit = limit.clamp(1, 1000);
+        let query = match from_id {
+            Some(v) => format!("symbol={}&limit={}&fromId={}", symbol, limit, v),
+            None => format!("symbol={}&limit={}", symbol, limit),
+        };
+        let signed = self.sign_futures(&query);
+        let url = format!("{}/fapi/v1/userTrades?{}", self.futures_base_url, signed);
+        let resp = self
+            .http
+            .get(&url)
+            .header("X-MBX-APIKEY", &self.futures_api_key)
+            .send()
+            .await
+            .context("get_futures_my_trades HTTP failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!("Futures myTrades request failed: {}", body));
+        }
+        let rows: Vec<BinanceFuturesUserTrade> = resp.json().await?;
+        Ok(rows
+            .into_iter()
+            .map(|t| BinanceMyTrade {
+                symbol: t.symbol,
+                id: t.id,
+                order_id: t.order_id,
+                price: t.price,
+                qty: t.qty,
+                commission: t.commission,
+                commission_asset: t.commission_asset,
+                time: t.time,
+                is_buyer: t.buyer,
+                is_maker: t.maker,
+                realized_pnl: t.realized_pnl,
+            })
+            .collect())
+    }
+
+    pub async fn get_futures_my_trades_history(
+        &self,
+        symbol: &str,
+        max_total: usize,
+    ) -> Result<Vec<BinanceMyTrade>> {
+        let page_size = 1000usize;
+        let target = max_total.max(1);
+        let mut out = Vec::new();
+        let mut cursor: u64 = 0;
+        loop {
+            let page = self
+                .get_futures_my_trades_page(
+                    symbol,
+                    page_size.min(target.saturating_sub(out.len())),
+                    Some(cursor),
+                )
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            let fetched = page.len();
+            let mut max_trade_id = cursor;
+            for t in page {
+                max_trade_id = max_trade_id.max(t.id);
+                out.push(t);
+                if out.len() >= target {
+                    break;
+                }
+            }
+            if out.len() >= target || fetched < page_size {
+                break;
+            }
+            let next = max_trade_id.saturating_add(1);
+            if next <= cursor {
+                break;
+            }
+            cursor = next;
+        }
         Ok(out)
     }
 }

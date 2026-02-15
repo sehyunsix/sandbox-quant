@@ -77,6 +77,13 @@ pub struct OrderManager {
     last_price: f64,
 }
 
+fn storage_symbol(symbol: &str, market: MarketKind) -> String {
+    match market {
+        MarketKind::Spot => symbol.to_string(),
+        MarketKind::Futures => format!("{}#FUT", symbol),
+    }
+}
+
 fn floor_to_step(value: f64, step: f64) -> f64 {
     if !value.is_finite() || !step.is_finite() || step <= 0.0 {
         return 0.0;
@@ -367,27 +374,111 @@ impl OrderManager {
     /// Fetch order history from exchange and format rows for UI display.
     pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
         if self.market == MarketKind::Futures {
-            let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+            let fetch_started = Instant::now();
+            let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
+            let orders_result = self
+                .rest_client
+                .get_futures_all_orders(&self.symbol, limit)
+                .await;
+            let trades_result = self
+                .rest_client
+                .get_futures_my_trades_history(&self.symbol, limit.max(1))
+                .await;
+            let fetch_latency_ms = fetch_started.elapsed().as_millis() as u64;
+
+            if orders_result.is_err() && trades_result.is_err() {
+                let oe = orders_result.err().unwrap();
+                let te = trades_result.err().unwrap();
+                return Err(anyhow::anyhow!(
+                    "futures order history fetch failed: allOrders={} | userTrades={}",
+                    oe,
+                    te
+                ));
+            }
+
+            let mut orders = orders_result.unwrap_or_default();
+            let trades = trades_result.unwrap_or_default();
+            orders.sort_by_key(|o| o.update_time.max(o.time));
+
+            let storage_key = storage_symbol(&self.symbol, self.market);
+            if let Err(e) = order_store::persist_order_snapshot(&storage_key, &orders, &trades) {
+                tracing::warn!(error = %e, "Failed to persist futures order snapshot to sqlite");
+            }
+
+            let mut history = Vec::new();
+            let mut fills = Vec::new();
+            for t in &trades {
+                let side = if t.is_buyer { "BUY" } else { "SELL" };
+                fills.push(OrderHistoryFill {
+                    timestamp_ms: t.time,
+                    side: if t.is_buyer {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    },
+                    price: t.price,
+                });
+                history.push(format_order_history_row(
+                    t.time,
+                    "FILLED",
+                    side,
+                    t.qty,
+                    t.price,
+                    &format!("order#{}#T{} [FUT]", t.order_id, t.id),
+                ));
+            }
+            for o in &orders {
+                if o.executed_qty <= 0.0 {
+                    history.push(format_order_history_row(
+                        o.update_time.max(o.time),
+                        &o.status,
+                        &o.side,
+                        display_qty_for_history(&o.status, o.orig_qty, o.executed_qty),
+                        if o.executed_qty > 0.0 {
+                            o.cummulative_quote_qty / o.executed_qty
+                        } else {
+                            o.price
+                        },
+                        &o.client_order_id,
+                    ));
+                }
+            }
+
+            let mut stats = OrderHistoryStats::default();
+            for t in &trades {
+                if t.realized_pnl > 0.0 {
+                    stats.win_count += 1;
+                    stats.trade_count += 1;
+                } else if t.realized_pnl < 0.0 {
+                    stats.lose_count += 1;
+                    stats.trade_count += 1;
+                }
+                stats.realized_pnl += t.realized_pnl;
+            }
+            let estimated_total_pnl_usdt = Some(stats.realized_pnl);
+            let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
+            let latest_trade_event = trades.iter().map(|t| t.time).max();
             return Ok(OrderHistorySnapshot {
-                rows: Vec::new(),
-                stats: OrderHistoryStats::default(),
+                rows: history,
+                stats,
                 strategy_stats: HashMap::new(),
-                fills: Vec::new(),
+                fills,
                 open_qty: 0.0,
                 open_entry_price: 0.0,
-                estimated_total_pnl_usdt: Some(0.0),
+                estimated_total_pnl_usdt,
                 trade_data_complete: true,
-                fetched_at_ms: now_ms,
-                fetch_latency_ms: 0,
-                latest_event_ms: None,
+                fetched_at_ms,
+                fetch_latency_ms,
+                latest_event_ms: latest_order_event.max(latest_trade_event),
             });
         }
 
         let fetch_started = Instant::now();
         let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
         let orders_result = self.rest_client.get_all_orders(&self.symbol, limit).await;
-        let last_trade_id = order_store::load_last_trade_id(&self.symbol).ok().flatten();
-        let persisted_trade_count = order_store::load_trade_count(&self.symbol).unwrap_or(0);
+        let storage_key = storage_symbol(&self.symbol, self.market);
+        let last_trade_id = order_store::load_last_trade_id(&storage_key).ok().flatten();
+        let persisted_trade_count = order_store::load_trade_count(&storage_key).unwrap_or(0);
         let need_backfill = persisted_trade_count < limit;
         let trades_result = match (need_backfill, last_trade_id) {
             (true, _) => {
@@ -436,11 +527,11 @@ impl OrderManager {
         let mut trades = recent_trades.clone();
         orders.sort_by_key(|o| o.update_time.max(o.time));
 
-        if let Err(e) = order_store::persist_order_snapshot(&self.symbol, &orders, &recent_trades) {
+        if let Err(e) = order_store::persist_order_snapshot(&storage_key, &orders, &recent_trades) {
             tracing::warn!(error = %e, "Failed to persist order snapshot to sqlite");
         }
         let mut persisted_source_by_order_id: HashMap<u64, String> = HashMap::new();
-        match order_store::load_persisted_trades(&self.symbol) {
+        match order_store::load_persisted_trades(&storage_key) {
             Ok(saved) => {
                 if !saved.is_empty() {
                     trades = saved.iter().map(|r| r.trade.clone()).collect();

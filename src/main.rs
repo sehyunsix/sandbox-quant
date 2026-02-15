@@ -723,6 +723,18 @@ async fn main() -> Result<()> {
                 }
                 if app_state.history_popup_open {
                     match key.code {
+                        KeyCode::Char('d') | KeyCode::Char('D') => {
+                            app_state.history_bucket = order_store::HistoryBucket::Day;
+                            app_state.refresh_history_rows();
+                        }
+                        KeyCode::Char('h') | KeyCode::Char('H') => {
+                            app_state.history_bucket = order_store::HistoryBucket::Hour;
+                            app_state.refresh_history_rows();
+                        }
+                        KeyCode::Char('m') | KeyCode::Char('M') => {
+                            app_state.history_bucket = order_store::HistoryBucket::Month;
+                            app_state.refresh_history_rows();
+                        }
                         KeyCode::Esc | KeyCode::Char('i') | KeyCode::Char('I') | KeyCode::Enter => {
                             app_state.history_popup_open = false;
                         }

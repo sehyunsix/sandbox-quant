@@ -9,6 +9,21 @@ where
     s.parse::<f64>().map_err(serde::de::Error::custom)
 }
 
+pub fn string_or_number_to_f64_default<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(deserializer)?;
+    match v {
+        serde_json::Value::Null => Ok(0.0),
+        serde_json::Value::String(s) => s.parse::<f64>().map_err(serde::de::Error::custom),
+        serde_json::Value::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| serde::de::Error::custom("invalid number")),
+        _ => Err(serde::de::Error::custom("invalid numeric value")),
+    }
+}
+
 /// Binance trade stream event (symbol@trade).
 #[derive(Debug, Deserialize)]
 pub struct BinanceTradeEvent {
@@ -99,6 +114,8 @@ pub struct BinanceMyTrade {
     pub time: u64,
     pub is_buyer: bool,
     pub is_maker: bool,
+    #[serde(default, deserialize_with = "string_or_number_to_f64_default")]
+    pub realized_pnl: f64,
 }
 
 /// Binance API error response.
@@ -148,6 +165,52 @@ pub struct BinanceFuturesOrderResponse {
     pub status: String,
     pub r#type: String,
     pub side: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceFuturesAllOrder {
+    pub symbol: String,
+    pub order_id: u64,
+    pub client_order_id: String,
+    #[serde(deserialize_with = "string_or_number_to_f64_default")]
+    pub price: f64,
+    #[serde(deserialize_with = "string_or_number_to_f64_default")]
+    pub orig_qty: f64,
+    #[serde(deserialize_with = "string_or_number_to_f64_default")]
+    pub executed_qty: f64,
+    #[serde(default, deserialize_with = "string_or_number_to_f64_default")]
+    pub cum_quote: f64,
+    #[serde(default, deserialize_with = "string_or_number_to_f64_default")]
+    pub avg_price: f64,
+    pub status: String,
+    pub r#type: String,
+    pub side: String,
+    pub time: u64,
+    pub update_time: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceFuturesUserTrade {
+    pub symbol: String,
+    pub id: u64,
+    pub order_id: u64,
+    #[serde(deserialize_with = "string_or_number_to_f64_default")]
+    pub price: f64,
+    #[serde(deserialize_with = "string_or_number_to_f64_default")]
+    pub qty: f64,
+    #[serde(default, deserialize_with = "string_or_number_to_f64_default")]
+    pub commission: f64,
+    #[serde(default)]
+    pub commission_asset: String,
+    pub time: u64,
+    #[serde(default)]
+    pub buyer: bool,
+    #[serde(default)]
+    pub maker: bool,
+    #[serde(default, deserialize_with = "string_or_number_to_f64_default")]
+    pub realized_pnl: f64,
 }
 
 /// Binance futures account info (GET /fapi/v2/account).
