@@ -18,6 +18,8 @@ pub struct PositionPanel<'a> {
     position: &'a Position,
     current_price: Option<f64>,
     balances: &'a HashMap<String, f64>,
+    initial_equity_usdt: Option<f64>,
+    current_equity_usdt: Option<f64>,
     history_trade_count: u32,
     history_realized_pnl: f64,
 }
@@ -27,6 +29,8 @@ impl<'a> PositionPanel<'a> {
         position: &'a Position,
         current_price: Option<f64>,
         balances: &'a HashMap<String, f64>,
+        initial_equity_usdt: Option<f64>,
+        current_equity_usdt: Option<f64>,
         history_trade_count: u32,
         history_realized_pnl: f64,
     ) -> Self {
@@ -34,6 +38,8 @@ impl<'a> PositionPanel<'a> {
             position,
             current_price,
             balances,
+            initial_equity_usdt,
+            current_equity_usdt,
             history_trade_count,
             history_realized_pnl,
         }
@@ -70,6 +76,17 @@ impl Widget for PositionPanel<'_> {
 
         let usdt_bal = self.balances.get("USDT").copied().unwrap_or(0.0);
         let btc_bal = self.balances.get("BTC").copied().unwrap_or(0.0);
+        let equity_text = self
+            .current_equity_usdt
+            .map(|v| format!("{:.2}", v))
+            .unwrap_or_else(|| "---".to_string());
+        let equity_delta = match (self.current_equity_usdt, self.initial_equity_usdt) {
+            (Some(cur), Some(init)) => Some(cur - init),
+            _ => None,
+        };
+        let equity_delta_text = equity_delta
+            .map(|v| format!("{:+.2}", v))
+            .unwrap_or_else(|| "---".to_string());
 
         // Always prefer persisted history stats so a fresh fill does not make
         // the panel appear "reset" to session-local counters.
@@ -99,6 +116,21 @@ impl Widget for PositionPanel<'_> {
                 Span::styled(
                     format!("{:.5}", btc_bal),
                     Style::default().fg(Color::Yellow),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Eq$:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(equity_text, Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::styled("EqΔ:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    equity_delta_text,
+                    Style::default().fg(
+                        equity_delta
+                            .map(pnl_color)
+                            .unwrap_or(Color::White),
+                    ),
                 ),
             ]),
             Line::from(Span::styled(

@@ -41,6 +41,8 @@ pub struct AppState {
     pub tick_count: u64,
     pub log_messages: Vec<String>,
     pub balances: HashMap<String, f64>,
+    pub initial_equity_usdt: Option<f64>,
+    pub current_equity_usdt: Option<f64>,
     pub fill_markers: Vec<FillMarker>,
     pub history_trade_count: u32,
     pub history_win_count: u32,
@@ -90,6 +92,8 @@ impl AppState {
             tick_count: 0,
             log_messages: Vec::new(),
             balances: HashMap::new(),
+            initial_equity_usdt: None,
+            current_equity_usdt: None,
             fill_markers: Vec::new(),
             history_trade_count: 0,
             history_win_count: 0,
@@ -128,6 +132,18 @@ impl AppState {
         self.log_messages.push(msg);
         if self.log_messages.len() > MAX_LOG_MESSAGES {
             self.log_messages.remove(0);
+        }
+    }
+
+    fn refresh_equity_usdt(&mut self) {
+        let usdt = self.balances.get("USDT").copied().unwrap_or(0.0);
+        let btc = self.balances.get("BTC").copied().unwrap_or(0.0);
+        if let Some(price) = self.last_price() {
+            let total = usdt + btc * price;
+            self.current_equity_usdt = Some(total);
+            if self.initial_equity_usdt.is_none() {
+                self.initial_equity_usdt = Some(total);
+            }
         }
     }
 
@@ -224,6 +240,7 @@ impl AppState {
                 }
 
                 self.position.update_unrealized_pnl(tick.price);
+                self.refresh_equity_usdt();
             }
             AppEvent::StrategySignal(ref signal) => {
                 self.last_signal = Some(signal.clone());
@@ -326,6 +343,7 @@ impl AppState {
             }
             AppEvent::BalanceUpdate(balances) => {
                 self.balances = balances;
+                self.refresh_equity_usdt();
             }
             AppEvent::OrderHistoryUpdate(snapshot) => {
                 let mut open = Vec::new();
@@ -437,6 +455,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.position,
             current_price,
             &state.balances,
+            state.initial_equity_usdt,
+            state.current_equity_usdt,
             state.history_trade_count,
             state.history_realized_pnl,
         ),
