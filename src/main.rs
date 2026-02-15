@@ -652,6 +652,7 @@ async fn main() -> Result<()> {
                                     app_state.history_estimated_total_pnl_usdt = Some(0.0);
                                     app_state.strategy_stats.clear();
                                     app_state.history_fills.clear();
+                                    app_state.trade_stats_reset_warned = false;
                                     let _ = ws_symbol_tx.send(current_symbol.clone());
                                     switch_timeframe(
                                         &current_symbol,

@@ -58,6 +58,7 @@ pub struct AppState {
     pub last_order_history_update_ms: Option<u64>,
     pub last_order_history_event_ms: Option<u64>,
     pub last_order_history_latency_ms: Option<u64>,
+    pub trade_stats_reset_warned: bool,
     pub symbol_selector_open: bool,
     pub symbol_selector_index: usize,
     pub symbol_items: Vec<String>,
@@ -111,6 +112,7 @@ impl AppState {
             last_order_history_update_ms: None,
             last_order_history_event_ms: None,
             last_order_history_latency_ms: None,
+            trade_stats_reset_warned: false,
             symbol_selector_open: false,
             symbol_selector_index: 0,
             symbol_items: Vec::new(),
@@ -391,11 +393,15 @@ impl AppState {
                     let stats_looks_reset = snapshot.stats.trade_count == 0
                         && (self.history_trade_count > 0 || !self.history_fills.is_empty());
                     if stats_looks_reset {
-                        self.push_log(
-                            "[WARN] Ignored transient trade stats reset from order-history sync"
-                                .to_string(),
-                        );
+                        if !self.trade_stats_reset_warned {
+                            self.push_log(
+                                "[WARN] Ignored transient trade stats reset from order-history sync"
+                                    .to_string(),
+                            );
+                            self.trade_stats_reset_warned = true;
+                        }
                     } else {
+                        self.trade_stats_reset_warned = false;
                         self.history_trade_count = snapshot.stats.trade_count;
                         self.history_win_count = snapshot.stats.win_count;
                         self.history_lose_count = snapshot.stats.lose_count;
