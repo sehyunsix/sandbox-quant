@@ -80,11 +80,11 @@ impl Widget for PositionPanel<'_> {
             .current_equity_usdt
             .map(|v| format!("{:.2}", v))
             .unwrap_or_else(|| "---".to_string());
-        let total_pnl = match (self.current_equity_usdt, self.initial_equity_usdt) {
+        let equity_delta = match (self.current_equity_usdt, self.initial_equity_usdt) {
             (Some(cur), Some(init)) => Some(cur - init),
             _ => None,
         };
-        let equity_delta_text = total_pnl
+        let equity_delta_text = equity_delta
             .map(|v| format!("{:+.2}", v))
             .unwrap_or_else(|| "---".to_string());
         let equity_roi_pct = match (self.current_equity_usdt, self.initial_equity_usdt) {
@@ -94,10 +94,6 @@ impl Widget for PositionPanel<'_> {
         let equity_roi_text = equity_roi_pct
             .map(|v| format!("{:+.2}%", v))
             .unwrap_or_else(|| "---".to_string());
-        let total_pnl_text = total_pnl
-            .map(|v| format!("{:+.2}", v))
-            .unwrap_or_else(|| "---".to_string());
-
         // Always prefer persisted history stats so a fresh fill does not make
         // the panel appear "reset" to session-local counters.
         let display_realized_pnl = if self.history_trade_count > 0 {
@@ -110,6 +106,8 @@ impl Widget for PositionPanel<'_> {
         } else {
             self.position.trade_count
         };
+        let total_pnl = display_realized_pnl + self.position.unrealized_pnl;
+        let total_pnl_text = format!("{:+.4}", total_pnl);
 
         let lines = vec![
             Line::from(vec![
@@ -137,7 +135,7 @@ impl Widget for PositionPanel<'_> {
                 Span::styled(
                     equity_delta_text,
                     Style::default().fg(
-                        total_pnl
+                        equity_delta
                             .map(pnl_color)
                             .unwrap_or(Color::White),
                     ),
@@ -147,11 +145,7 @@ impl Widget for PositionPanel<'_> {
                 Span::styled("TotalPnL:", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!(" {}", total_pnl_text),
-                    Style::default().fg(
-                        total_pnl
-                            .map(pnl_color)
-                            .unwrap_or(Color::White),
-                    ),
+                    Style::default().fg(pnl_color(total_pnl)),
                 ),
             ]),
             Line::from(vec![
