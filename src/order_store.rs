@@ -198,3 +198,17 @@ pub fn load_last_trade_id(symbol: &str) -> Result<Option<u64>> {
     let max_id = stmt.query_row([symbol], |row| row.get::<_, Option<i64>>(0))?;
     Ok(max_id.map(|v| v as u64))
 }
+
+pub fn load_trade_count(symbol: &str) -> Result<usize> {
+    std::fs::create_dir_all("data")?;
+    let conn = Connection::open("data/order_history.sqlite")?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT COUNT(*)
+        FROM order_history_trades
+        WHERE symbol = ?1
+        "#,
+    )?;
+    let count = stmt.query_row([symbol], |row| row.get::<_, i64>(0))?;
+    Ok(count.max(0) as usize)
+}

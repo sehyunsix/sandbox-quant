@@ -55,7 +55,6 @@ pub struct OrderHistoryFill {
     pub timestamp_ms: u64,
     pub side: OrderSide,
     pub price: f64,
-    pub qty: f64,
 }
 
 pub struct OrderManager {
@@ -325,12 +324,18 @@ impl OrderManager {
         let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
         let orders_result = self.rest_client.get_all_orders(&self.symbol, limit).await;
         let last_trade_id = order_store::load_last_trade_id(&self.symbol).ok().flatten();
-        let trades_result = match last_trade_id {
-            Some(last_id) => self
+        let persisted_trade_count = order_store::load_trade_count(&self.symbol).unwrap_or(0);
+        let need_backfill = persisted_trade_count < limit;
+        let trades_result = match (need_backfill, last_trade_id) {
+            (true, _) => self
+                .rest_client
+                .get_my_trades_history(&self.symbol, limit.max(1))
+                .await,
+            (false, Some(last_id)) => self
                 .rest_client
                 .get_my_trades_since(&self.symbol, last_id.saturating_add(1), 10)
                 .await,
-            None => self
+            (false, None) => self
                 .rest_client
                 .get_my_trades_history(&self.symbol, limit.max(1))
                 .await,
@@ -430,7 +435,6 @@ impl OrderManager {
                             OrderSide::Sell
                         },
                         price: t.price,
-                        qty: t.qty,
                     });
                     format_trade_history_row(
                         t,
@@ -467,7 +471,6 @@ impl OrderManager {
                                 OrderSide::Sell
                             },
                             price: t.price,
-                            qty: t.qty,
                         });
                         history.push(format_order_history_row(
                             t.time,
@@ -514,7 +517,6 @@ impl OrderManager {
                             OrderSide::Sell
                         },
                         price: t.price,
-                        qty: t.qty,
                     });
                     history.push(format_trade_history_row(
                         t,

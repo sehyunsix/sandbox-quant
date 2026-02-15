@@ -13,7 +13,6 @@ pub struct FillMarker {
     pub candle_index: usize,
     pub price: f64,
     pub side: OrderSide,
-    pub qty: f64,
 }
 
 pub struct PriceChart<'a> {
@@ -218,11 +217,10 @@ impl Widget for PriceChart<'_> {
                 OrderSide::Buy => ('B', Color::Green),
                 OrderSide::Sell => ('S', Color::Red),
             };
-            let label = format!("{}{:.4}", side_ch, marker.qty);
             buf.set_string(
                 x,
                 y,
-                label,
+                side_ch.to_string(),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             );
         }
