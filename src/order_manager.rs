@@ -77,6 +77,19 @@ pub struct OrderManager {
     last_price: f64,
 }
 
+fn floor_to_step(value: f64, step: f64) -> f64 {
+    if !value.is_finite() || !step.is_finite() || step <= 0.0 {
+        return 0.0;
+    }
+    let units = (value / step).floor();
+    let floored = units * step;
+    if floored < 0.0 {
+        0.0
+    } else {
+        floored
+    }
+}
+
 fn display_qty_for_history(status: &str, orig_qty: f64, executed_qty: f64) -> f64 {
     match status {
         "FILLED" | "PARTIALLY_FILLED" => executed_qty,
@@ -617,12 +630,10 @@ impl OrderManager {
         }
 
         // Calculate quantity based on side
-        let qty = match side {
+        let raw_qty = match side {
             OrderSide::Buy => {
                 // Calculate BTC qty from USDT amount
-                let raw_qty = self.order_amount_usdt / self.last_price;
-                // Round to 5 decimal places (BTCUSDT step size)
-                (raw_qty * 100_000.0).floor() / 100_000.0
+                self.order_amount_usdt / self.last_price
             }
             OrderSide::Sell => {
                 if self.market == MarketKind::Spot {
@@ -633,22 +644,50 @@ impl OrderManager {
                             reason: "No position to sell".to_string(),
                         }));
                     }
-                    // Round position qty to 5 decimal places
-                    (self.position.qty * 100_000.0).floor() / 100_000.0
+                    self.position.qty
                 } else {
                     // Futures: SELL may open/increase short, use notional sizing.
-                    let raw_qty = self.order_amount_usdt / self.last_price;
-                    (raw_qty * 100_000.0).floor() / 100_000.0
+                    self.order_amount_usdt / self.last_price
                 }
             }
         };
+
+        let rules = if self.market == MarketKind::Futures {
+            self.rest_client
+                .get_futures_symbol_order_rules(&self.symbol)
+                .await?
+        } else {
+            self.rest_client
+                .get_spot_symbol_order_rules(&self.symbol)
+                .await?
+        };
+
+        let qty = floor_to_step(raw_qty, rules.step_size);
 
         if qty <= 0.0 {
             return Ok(Some(OrderUpdate::Rejected {
                 client_order_id: "n/a".to_string(),
                 reason: format!(
-                    "Calculated qty too small ({}USDT / {:.2} = {:.8} BTC)",
-                    self.order_amount_usdt, self.last_price, qty
+                    "Calculated qty too small after step normalization (raw {:.8}, step {:.8})",
+                    raw_qty, rules.step_size
+                ),
+            }));
+        }
+        if qty < rules.min_qty {
+            return Ok(Some(OrderUpdate::Rejected {
+                client_order_id: "n/a".to_string(),
+                reason: format!(
+                    "Qty below minQty (qty {:.8} < min {:.8}, step {:.8})",
+                    qty, rules.min_qty, rules.step_size
+                ),
+            }));
+        }
+        if rules.max_qty > 0.0 && qty > rules.max_qty {
+            return Ok(Some(OrderUpdate::Rejected {
+                client_order_id: "n/a".to_string(),
+                reason: format!(
+                    "Qty above maxQty (qty {:.8} > max {:.8})",
+                    qty, rules.max_qty
                 ),
             }));
         }
@@ -818,7 +857,7 @@ impl OrderManager {
 
 #[cfg(test)]
 mod tests {
-    use super::display_qty_for_history;
+    use super::{display_qty_for_history, floor_to_step};
     use crate::model::order::OrderStatus;
 
     #[test]
@@ -875,5 +914,12 @@ mod tests {
         assert!((display_qty_for_history("NEW", 1.0, 0.4) - 1.0).abs() < f64::EPSILON);
         assert!((display_qty_for_history("CANCELED", 1.0, 0.4) - 1.0).abs() < f64::EPSILON);
         assert!((display_qty_for_history("REJECTED", 1.0, 0.0) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn quantity_is_floored_to_exchange_step() {
+        assert!((floor_to_step(0.123456, 0.001) - 0.123).abs() < 1e-12);
+        assert!((floor_to_step(0.123456, 0.0001) - 0.1234).abs() < 1e-12);
+        assert!((floor_to_step(0.0009, 0.001) - 0.0).abs() < 1e-12);
     }
 }

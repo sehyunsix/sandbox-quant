@@ -13,6 +13,14 @@ use super::types::{
     BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub struct SymbolOrderRules {
+    pub min_qty: f64,
+    pub max_qty: f64,
+    pub step_size: f64,
+    pub min_notional: Option<f64>,
+}
+
 pub struct BinanceRestClient {
     http: reqwest::Client,
     base_url: String,
@@ -333,6 +341,41 @@ impl BinanceRestClient {
         })
     }
 
+    pub async fn get_spot_symbol_order_rules(&self, symbol: &str) -> Result<SymbolOrderRules> {
+        let url = format!("{}/api/v3/exchangeInfo?symbol={}", self.base_url, symbol);
+        let payload: serde_json::Value = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("get_spot_symbol_order_rules HTTP failed")?
+            .error_for_status()
+            .context("get_spot_symbol_order_rules returned error status")?
+            .json()
+            .await
+            .context("get_spot_symbol_order_rules JSON parse failed")?;
+        parse_symbol_order_rules_from_exchange_info(&payload, symbol, true)
+    }
+
+    pub async fn get_futures_symbol_order_rules(&self, symbol: &str) -> Result<SymbolOrderRules> {
+        let url = format!(
+            "{}/fapi/v1/exchangeInfo?symbol={}",
+            self.futures_base_url, symbol
+        );
+        let payload: serde_json::Value = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("get_futures_symbol_order_rules HTTP failed")?
+            .error_for_status()
+            .context("get_futures_symbol_order_rules returned error status")?
+            .json()
+            .await
+            .context("get_futures_symbol_order_rules JSON parse failed")?;
+        parse_symbol_order_rules_from_exchange_info(&payload, symbol, false)
+    }
+
     /// Fetch historical kline (candlestick) OHLC data.
     /// Returns `Vec<Candle>` oldest first.
     pub async fn get_klines(
@@ -634,9 +677,73 @@ impl BinanceRestClient {
     }
 }
 
+fn parse_symbol_order_rules_from_exchange_info(
+    payload: &serde_json::Value,
+    symbol: &str,
+    prefer_market_lot_size: bool,
+) -> Result<SymbolOrderRules> {
+    let symbols = payload
+        .get("symbols")
+        .and_then(|v| v.as_array())
+        .context("exchangeInfo missing symbols")?;
+    let symbol_row = symbols
+        .iter()
+        .find(|row| row.get("symbol").and_then(|v| v.as_str()) == Some(symbol))
+        .with_context(|| format!("exchangeInfo symbol not found: {}", symbol))?;
+    let filters = symbol_row
+        .get("filters")
+        .and_then(|v| v.as_array())
+        .context("exchangeInfo symbol missing filters")?;
+
+    let lot_primary = if prefer_market_lot_size {
+        find_filter(filters, "MARKET_LOT_SIZE").or_else(|| find_filter(filters, "LOT_SIZE"))
+    } else {
+        find_filter(filters, "LOT_SIZE").or_else(|| find_filter(filters, "MARKET_LOT_SIZE"))
+    }
+    .context("exchangeInfo missing LOT_SIZE/MARKET_LOT_SIZE")?;
+
+    let min_qty = json_str_to_f64(lot_primary, "minQty")?;
+    let max_qty = json_str_to_f64(lot_primary, "maxQty")?;
+    let step_size = json_str_to_f64(lot_primary, "stepSize")?;
+    if step_size <= 0.0 {
+        return Err(anyhow::anyhow!("invalid stepSize for symbol {}", symbol));
+    }
+
+    let min_notional = find_filter(filters, "MIN_NOTIONAL")
+        .and_then(|f| f.get("notional").or_else(|| f.get("minNotional")))
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<f64>().ok());
+
+    Ok(SymbolOrderRules {
+        min_qty,
+        max_qty,
+        step_size,
+        min_notional,
+    })
+}
+
+fn find_filter<'a>(
+    filters: &'a [serde_json::Value],
+    filter_type: &str,
+) -> Option<&'a serde_json::Value> {
+    filters
+        .iter()
+        .find(|f| f.get("filterType").and_then(|v| v.as_str()) == Some(filter_type))
+}
+
+fn json_str_to_f64(row: &serde_json::Value, key: &str) -> Result<f64> {
+    let s = row
+        .get(key)
+        .and_then(|v| v.as_str())
+        .with_context(|| format!("missing field {}", key))?;
+    s.parse::<f64>()
+        .with_context(|| format!("invalid {} value {}", key, s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn hmac_signing_produces_hex_signature() {
@@ -702,5 +809,40 @@ mod tests {
             result.is_ok(),
             "check_rate_limit should recover from poison"
         );
+    }
+
+    #[test]
+    fn parse_symbol_rules_prefers_market_lot_size_for_spot() {
+        let payload = json!({
+            "symbols": [{
+                "symbol": "BTCUSDT",
+                "filters": [
+                    {"filterType":"LOT_SIZE","minQty":"0.00100000","maxQty":"100.00000000","stepSize":"0.00100000"},
+                    {"filterType":"MARKET_LOT_SIZE","minQty":"0.00001000","maxQty":"50.00000000","stepSize":"0.00001000"},
+                    {"filterType":"MIN_NOTIONAL","minNotional":"5.00000000"}
+                ]
+            }]
+        });
+        let rules = parse_symbol_order_rules_from_exchange_info(&payload, "BTCUSDT", true).unwrap();
+        assert!((rules.step_size - 0.00001).abs() < 1e-12);
+        assert!((rules.min_qty - 0.00001).abs() < 1e-12);
+        assert_eq!(rules.min_notional, Some(5.0));
+    }
+
+    #[test]
+    fn parse_symbol_rules_uses_lot_size_for_futures() {
+        let payload = json!({
+            "symbols": [{
+                "symbol": "ETHUSDT",
+                "filters": [
+                    {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"10000","stepSize":"0.001"},
+                    {"filterType":"MARKET_LOT_SIZE","minQty":"0.01","maxQty":"1000","stepSize":"0.01"}
+                ]
+            }]
+        });
+        let rules =
+            parse_symbol_order_rules_from_exchange_info(&payload, "ETHUSDT", false).unwrap();
+        assert!((rules.step_size - 0.001).abs() < 1e-12);
+        assert!((rules.min_qty - 0.001).abs() < 1e-12);
     }
 }
