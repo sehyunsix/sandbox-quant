@@ -3,6 +3,12 @@ use rusqlite::{params, Connection};
 
 use crate::binance::types::{BinanceAllOrder, BinanceMyTrade};
 
+#[derive(Debug, Clone)]
+pub struct PersistedTrade {
+    pub trade: BinanceMyTrade,
+    pub source: String,
+}
+
 pub fn persist_order_snapshot(
     symbol: &str,
     orders: &[BinanceAllOrder],
@@ -137,4 +143,44 @@ fn source_label_from_client_order_id(client_order_id: &str) -> &'static str {
     } else {
         "UNKNOWN"
     }
+}
+
+pub fn load_persisted_trades(symbol: &str) -> Result<Vec<PersistedTrade>> {
+    std::fs::create_dir_all("data")?;
+    let conn = Connection::open("data/order_history.sqlite")?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT trade_id, order_id, side, qty, price, event_time_ms, source
+        FROM order_history_trades
+        WHERE symbol = ?1
+        ORDER BY event_time_ms ASC, trade_id ASC
+        "#,
+    )?;
+
+    let rows = stmt.query_map([symbol], |row| {
+        let side: String = row.get(2)?;
+        let is_buyer = side.eq_ignore_ascii_case("BUY");
+        let trade = BinanceMyTrade {
+            symbol: symbol.to_string(),
+            id: row.get::<_, i64>(0)? as u64,
+            order_id: row.get::<_, i64>(1)? as u64,
+            price: row.get(4)?,
+            qty: row.get(3)?,
+            commission: 0.0,
+            commission_asset: String::new(),
+            time: row.get::<_, i64>(5)? as u64,
+            is_buyer,
+            is_maker: false,
+        };
+        Ok(PersistedTrade {
+            trade,
+            source: row.get(6)?,
+        })
+    })?;
+
+    let mut trades = Vec::new();
+    for row in rows {
+        trades.push(row?);
+    }
+    Ok(trades)
 }

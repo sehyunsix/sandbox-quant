@@ -71,12 +71,14 @@ impl Widget for PositionPanel<'_> {
         let usdt_bal = self.balances.get("USDT").copied().unwrap_or(0.0);
         let btc_bal = self.balances.get("BTC").copied().unwrap_or(0.0);
 
-        let display_realized_pnl = if self.position.trade_count == 0 && self.history_trade_count > 0 {
+        // Always prefer persisted history stats so a fresh fill does not make
+        // the panel appear "reset" to session-local counters.
+        let display_realized_pnl = if self.history_trade_count > 0 {
             self.history_realized_pnl
         } else {
             self.position.realized_pnl
         };
-        let display_trade_count = if self.position.trade_count == 0 && self.history_trade_count > 0 {
+        let display_trade_count = if self.history_trade_count > 0 {
             self.history_trade_count
         } else {
             self.position.trade_count

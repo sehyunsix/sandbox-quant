@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use chrono::TimeZone;
@@ -43,7 +44,9 @@ pub struct OrderHistorySnapshot {
     pub stats: OrderHistoryStats,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub fills: Vec<OrderHistoryFill>,
+    pub trade_data_complete: bool,
     pub fetched_at_ms: u64,
+    pub fetch_latency_ms: u64,
     pub latest_event_ms: Option<u64>,
 }
 
@@ -317,9 +320,12 @@ impl OrderManager {
 
     /// Fetch order history from exchange and format rows for UI display.
     pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
+        let fetch_started = Instant::now();
         let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
         let orders_result = self.rest_client.get_all_orders(&self.symbol, limit).await;
         let trades_result = self.rest_client.get_my_trades(&self.symbol, limit).await;
+        let fetch_latency_ms = fetch_started.elapsed().as_millis() as u64;
+        let trade_data_complete = trades_result.is_ok();
 
         if orders_result.is_err() && trades_result.is_err() {
             let oe = orders_result.err().unwrap();
@@ -338,22 +344,40 @@ impl OrderManager {
                 Vec::new()
             }
         };
-        let trades = match trades_result {
+        let recent_trades = match trades_result {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to fetch myTrades; falling back to order-only history");
                 Vec::new()
             }
         };
+        let mut trades = recent_trades.clone();
         orders.sort_by_key(|o| o.update_time.max(o.time));
+
+        if let Err(e) = order_store::persist_order_snapshot(&self.symbol, &orders, &recent_trades) {
+            tracing::warn!(error = %e, "Failed to persist order snapshot to sqlite");
+        }
+        let mut persisted_source_by_order_id: HashMap<u64, String> = HashMap::new();
+        match order_store::load_persisted_trades(&self.symbol) {
+            Ok(saved) => {
+                if !saved.is_empty() {
+                    trades = saved.iter().map(|r| r.trade.clone()).collect();
+                    for row in saved {
+                        persisted_source_by_order_id
+                            .entry(row.trade.order_id)
+                            .or_insert(row.source);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load persisted trades; using recent API trades");
+            }
+        }
+
         let stats = compute_trade_stats(trades.clone());
         let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
         let latest_trade_event = trades.iter().map(|t| t.time).max();
         let latest_event_ms = latest_order_event.max(latest_trade_event);
-
-        if let Err(e) = order_store::persist_order_snapshot(&self.symbol, &orders, &trades) {
-            tracing::warn!(error = %e, "Failed to persist order snapshot to sqlite");
-        }
 
         let mut trades_by_order_id: HashMap<u64, Vec<BinanceMyTrade>> = HashMap::new();
         for trade in &trades {
@@ -372,6 +396,9 @@ impl OrderManager {
                 o.order_id,
                 source_label_from_client_order_id(&o.client_order_id).to_string(),
             );
+        }
+        for (order_id, source) in persisted_source_by_order_id {
+            order_source_by_id.entry(order_id).or_insert(source);
         }
         let strategy_stats = compute_trade_stats_by_source(trades.clone(), &order_source_by_id);
 
@@ -407,7 +434,9 @@ impl OrderManager {
                 stats,
                 strategy_stats,
                 fills,
+                trade_data_complete,
                 fetched_at_ms,
+                fetch_latency_ms,
                 latest_event_ms,
             });
         }
@@ -488,7 +517,9 @@ impl OrderManager {
             stats,
             strategy_stats,
             fills,
+            trade_data_complete,
             fetched_at_ms,
+            fetch_latency_ms,
             latest_event_ms,
         })
     }

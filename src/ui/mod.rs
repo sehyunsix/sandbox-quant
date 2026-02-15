@@ -145,6 +145,17 @@ impl AppState {
                 return Some(self.candles.len());
             }
         }
+        // Fallback: if timestamp is newer than the latest finalized candle range
+        // (e.g. coarse timeframe like 1M and no in-progress bucket), pin to nearest past candle.
+        if let Some((idx, _)) = self
+            .candles
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, c)| c.open_time <= timestamp_ms)
+        {
+            return Some(idx);
+        }
         None
     }
 
@@ -317,8 +328,6 @@ impl AppState {
                 self.balances = balances;
             }
             AppEvent::OrderHistoryUpdate(snapshot) => {
-                self.history_fills = snapshot.fills.clone();
-                self.rebuild_fill_markers_from_history(&snapshot.fills);
                 let mut open = Vec::new();
                 let mut filled = Vec::new();
 
@@ -342,16 +351,29 @@ impl AppState {
 
                 self.open_order_history = open;
                 self.filled_order_history = filled;
-                self.history_trade_count = snapshot.stats.trade_count;
-                self.history_win_count = snapshot.stats.win_count;
-                self.history_lose_count = snapshot.stats.lose_count;
-                self.history_realized_pnl = snapshot.stats.realized_pnl;
-                self.strategy_stats = snapshot.strategy_stats;
+                if snapshot.trade_data_complete {
+                    let stats_looks_reset = snapshot.stats.trade_count == 0
+                        && (self.history_trade_count > 0 || !self.history_fills.is_empty());
+                    if stats_looks_reset {
+                        self.push_log(
+                            "[WARN] Ignored transient trade stats reset from order-history sync"
+                                .to_string(),
+                        );
+                    } else {
+                        self.history_trade_count = snapshot.stats.trade_count;
+                        self.history_win_count = snapshot.stats.win_count;
+                        self.history_lose_count = snapshot.stats.lose_count;
+                        self.history_realized_pnl = snapshot.stats.realized_pnl;
+                        self.strategy_stats = snapshot.strategy_stats;
+                    }
+                    if !snapshot.fills.is_empty() || self.history_fills.is_empty() {
+                        self.history_fills = snapshot.fills.clone();
+                        self.rebuild_fill_markers_from_history(&snapshot.fills);
+                    }
+                }
                 self.last_order_history_update_ms = Some(snapshot.fetched_at_ms);
                 self.last_order_history_event_ms = snapshot.latest_event_ms;
-                self.last_order_history_latency_ms = snapshot
-                    .latest_event_ms
-                    .map(|ts| snapshot.fetched_at_ms.saturating_sub(ts));
+                self.last_order_history_latency_ms = Some(snapshot.fetch_latency_ms);
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -495,7 +517,7 @@ fn render_selector_popup(
     };
     let available_height = area.height.saturating_sub(2).max(1);
     let desired_height = if stats.is_some() {
-        items.len() as u16 + 6
+        items.len() as u16 + 7
     } else {
         items.len() as u16 + 4
     };
@@ -558,6 +580,25 @@ fn render_selector_popup(
         })
         .collect();
     lines.append(&mut item_lines);
+    if let (Some(stats_map), Some(t)) = (stats, total_stats.as_ref()) {
+        let mut strategy_sum = OrderHistoryStats::default();
+        for item in items {
+            if let Some(s) = strategy_stats_for_item(stats_map, item) {
+                strategy_sum.trade_count += s.trade_count;
+                strategy_sum.win_count += s.win_count;
+                strategy_sum.lose_count += s.lose_count;
+                strategy_sum.realized_pnl += s.realized_pnl;
+            }
+        }
+        let manual = subtract_stats(t, &strategy_sum);
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "  MANUAL(rest)       W:{:<3} L:{:<3} T:{:<3} PnL:{:.4}",
+                manual.win_count, manual.lose_count, manual.trade_count, manual.realized_pnl
+            ),
+            Style::default().fg(Color::LightBlue),
+        )]));
+    }
     if let Some(t) = total_stats {
         lines.push(Line::from(vec![Span::styled(
             format!(
@@ -592,4 +633,13 @@ fn strategy_stats_for_item<'a>(
             .get(tag)
             .or_else(|| stats_map.get(&tag.to_ascii_uppercase()))
     })
+}
+
+fn subtract_stats(total: &OrderHistoryStats, used: &OrderHistoryStats) -> OrderHistoryStats {
+    OrderHistoryStats {
+        trade_count: total.trade_count.saturating_sub(used.trade_count),
+        win_count: total.win_count.saturating_sub(used.win_count),
+        lose_count: total.lose_count.saturating_sub(used.lose_count),
+        realized_pnl: total.realized_pnl - used.realized_pnl,
+    }
 }
