@@ -43,6 +43,7 @@ pub struct AppState {
     pub balances: HashMap<String, f64>,
     pub initial_equity_usdt: Option<f64>,
     pub current_equity_usdt: Option<f64>,
+    pub history_estimated_total_pnl_usdt: Option<f64>,
     pub fill_markers: Vec<FillMarker>,
     pub history_trade_count: u32,
     pub history_win_count: u32,
@@ -94,6 +95,7 @@ impl AppState {
             balances: HashMap::new(),
             initial_equity_usdt: None,
             current_equity_usdt: None,
+            history_estimated_total_pnl_usdt: None,
             fill_markers: Vec::new(),
             history_trade_count: 0,
             history_win_count: 0,
@@ -138,11 +140,22 @@ impl AppState {
     fn refresh_equity_usdt(&mut self) {
         let usdt = self.balances.get("USDT").copied().unwrap_or(0.0);
         let btc = self.balances.get("BTC").copied().unwrap_or(0.0);
-        if let Some(price) = self.last_price() {
+        let mark_price = self
+            .last_price()
+            .or_else(|| (self.position.entry_price > 0.0).then_some(self.position.entry_price));
+        if let Some(price) = mark_price {
             let total = usdt + btc * price;
             self.current_equity_usdt = Some(total);
-            if self.initial_equity_usdt.is_none() {
-                self.initial_equity_usdt = Some(total);
+            self.recompute_initial_equity_from_history();
+        }
+    }
+
+    fn recompute_initial_equity_from_history(&mut self) {
+        if let Some(current) = self.current_equity_usdt {
+            if let Some(total_pnl) = self.history_estimated_total_pnl_usdt {
+                self.initial_equity_usdt = Some(current - total_pnl);
+            } else if self.history_trade_count == 0 && self.initial_equity_usdt.is_none() {
+                self.initial_equity_usdt = Some(current);
             }
         }
     }
@@ -267,6 +280,7 @@ impl AppState {
                         avg_price,
                     } => {
                         self.position.apply_fill(*side, fills);
+                        self.refresh_equity_usdt();
                         let candle_index = if self.current_candle.is_some() {
                             self.candles.len()
                         } else {
@@ -289,6 +303,7 @@ impl AppState {
                         client_order_id,
                         server_order_id,
                     } => {
+                        self.refresh_equity_usdt();
                         self.push_log(format!(
                             "Submitted {} (id: {})",
                             client_order_id, server_order_id
@@ -388,6 +403,8 @@ impl AppState {
                         self.history_fills = snapshot.fills.clone();
                         self.rebuild_fill_markers_from_history(&snapshot.fills);
                     }
+                    self.history_estimated_total_pnl_usdt = snapshot.estimated_total_pnl_usdt;
+                    self.recompute_initial_equity_from_history();
                 }
                 self.last_order_history_update_ms = Some(snapshot.fetched_at_ms);
                 self.last_order_history_event_ms = snapshot.latest_event_ms;

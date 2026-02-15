@@ -44,6 +44,7 @@ pub struct OrderHistorySnapshot {
     pub stats: OrderHistoryStats,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub fills: Vec<OrderHistoryFill>,
+    pub estimated_total_pnl_usdt: Option<f64>,
     pub trade_data_complete: bool,
     pub fetched_at_ms: u64,
     pub fetch_latency_ms: u64,
@@ -224,6 +225,20 @@ fn compute_trade_stats(mut trades: Vec<BinanceMyTrade>, symbol: &str) -> OrderHi
     stats
 }
 
+fn compute_trade_state(
+    mut trades: Vec<BinanceMyTrade>,
+    symbol: &str,
+) -> (OrderHistoryStats, LongPos) {
+    trades.sort_by_key(|t| (t.time, t.id));
+    let (base_asset, quote_asset) = split_symbol_assets(symbol);
+    let mut pos = LongPos::default();
+    let mut stats = OrderHistoryStats::default();
+    for t in trades {
+        apply_spot_trade_with_fee(&mut pos, &mut stats, &t, &base_asset, &quote_asset);
+    }
+    (stats, pos)
+}
+
 fn compute_trade_stats_by_source(
     mut trades: Vec<BinanceMyTrade>,
     order_source_by_id: &HashMap<u64, String>,
@@ -360,7 +375,12 @@ impl OrderManager {
             }
         }
 
-        let stats = compute_trade_stats(trades.clone(), &self.symbol);
+        let (stats, open_pos) = compute_trade_state(trades.clone(), &self.symbol);
+        let estimated_total_pnl_usdt = if self.last_price > 0.0 {
+            Some(stats.realized_pnl + (open_pos.qty * self.last_price - open_pos.cost_quote))
+        } else {
+            Some(stats.realized_pnl)
+        };
         let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
         let latest_trade_event = trades.iter().map(|t| t.time).max();
         let latest_event_ms = latest_order_event.max(latest_trade_event);
@@ -421,6 +441,7 @@ impl OrderManager {
                 stats,
                 strategy_stats,
                 fills,
+                estimated_total_pnl_usdt,
                 trade_data_complete,
                 fetched_at_ms,
                 fetch_latency_ms,
@@ -504,6 +525,7 @@ impl OrderManager {
             stats,
             strategy_stats,
             fills,
+            estimated_total_pnl_usdt,
             trade_data_complete,
             fetched_at_ms,
             fetch_latency_ms,

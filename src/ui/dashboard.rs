@@ -80,11 +80,21 @@ impl Widget for PositionPanel<'_> {
             .current_equity_usdt
             .map(|v| format!("{:.2}", v))
             .unwrap_or_else(|| "---".to_string());
-        let equity_delta = match (self.current_equity_usdt, self.initial_equity_usdt) {
+        let total_pnl = match (self.current_equity_usdt, self.initial_equity_usdt) {
             (Some(cur), Some(init)) => Some(cur - init),
             _ => None,
         };
-        let equity_delta_text = equity_delta
+        let equity_delta_text = total_pnl
+            .map(|v| format!("{:+.2}", v))
+            .unwrap_or_else(|| "---".to_string());
+        let equity_roi_pct = match (self.current_equity_usdt, self.initial_equity_usdt) {
+            (Some(cur), Some(init)) if init.abs() > f64::EPSILON => Some((cur - init) / init * 100.0),
+            _ => None,
+        };
+        let equity_roi_text = equity_roi_pct
+            .map(|v| format!("{:+.2}%", v))
+            .unwrap_or_else(|| "---".to_string());
+        let total_pnl_text = total_pnl
             .map(|v| format!("{:+.2}", v))
             .unwrap_or_else(|| "---".to_string());
 
@@ -127,7 +137,29 @@ impl Widget for PositionPanel<'_> {
                 Span::styled(
                     equity_delta_text,
                     Style::default().fg(
-                        equity_delta
+                        total_pnl
+                            .map(pnl_color)
+                            .unwrap_or(Color::White),
+                    ),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("TotalPnL:", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" {}", total_pnl_text),
+                    Style::default().fg(
+                        total_pnl
+                            .map(pnl_color)
+                            .unwrap_or(Color::White),
+                    ),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("EqROI:", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" {}", equity_roi_text),
+                    Style::default().fg(
+                        equity_roi_pct
                             .map(pnl_color)
                             .unwrap_or(Color::White),
                     ),
