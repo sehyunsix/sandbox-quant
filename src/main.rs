@@ -203,6 +203,8 @@ async fn main() -> Result<()> {
         &config.binance.futures_rest_base_url,
         &config.binance.api_key,
         &config.binance.api_secret,
+        &config.binance.futures_api_key,
+        &config.binance.futures_api_secret,
         config.binance.recv_window,
     ));
 

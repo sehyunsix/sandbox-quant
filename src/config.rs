@@ -29,6 +29,10 @@ pub struct BinanceConfig {
     pub api_key: String,
     #[serde(skip)]
     pub api_secret: String,
+    #[serde(skip)]
+    pub futures_api_key: String,
+    #[serde(skip)]
+    pub futures_api_secret: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,11 +55,11 @@ pub struct LoggingConfig {
 }
 
 fn default_futures_rest_base_url() -> String {
-    "https://fapi.binance.com".to_string()
+    "https://demo-fapi.binance.com".to_string()
 }
 
 fn default_futures_ws_base_url() -> String {
-    "wss://fstream.binance.com/ws".to_string()
+    "wss://fstream.binancefuture.com/ws".to_string()
 }
 
 /// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.
@@ -142,6 +146,10 @@ impl Config {
             .context("BINANCE_API_KEY not set in .env or environment")?;
         config.binance.api_secret = std::env::var("BINANCE_API_SECRET")
             .context("BINANCE_API_SECRET not set in .env or environment")?;
+        config.binance.futures_api_key = std::env::var("BINANCE_FUTURES_API_KEY")
+            .unwrap_or_else(|_| config.binance.api_key.clone());
+        config.binance.futures_api_secret = std::env::var("BINANCE_FUTURES_API_SECRET")
+            .unwrap_or_else(|_| config.binance.api_secret.clone());
 
         config
             .binance
@@ -162,8 +170,8 @@ mod tests {
 [binance]
 rest_base_url = "https://demo-api.binance.com"
 ws_base_url = "wss://demo-stream.binance.com/ws"
-futures_rest_base_url = "https://fapi.binance.com"
-futures_ws_base_url = "wss://fstream.binance.com/ws"
+futures_rest_base_url = "https://demo-fapi.binance.com"
+futures_ws_base_url = "wss://fstream.binancefuture.com/ws"
 symbol = "BTCUSDT"
 symbols = ["ETHUSDT", "BNBUSDT"]
 futures_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
@@ -211,6 +219,8 @@ level = "debug"
             kline_interval: "1m".to_string(),
             api_key: String::new(),
             api_secret: String::new(),
+            futures_api_key: String::new(),
+            futures_api_secret: String::new(),
         };
         assert_eq!(
             cfg.tradable_symbols(),
@@ -232,6 +242,8 @@ level = "debug"
             kline_interval: "1m".to_string(),
             api_key: String::new(),
             api_secret: String::new(),
+            futures_api_key: String::new(),
+            futures_api_secret: String::new(),
         };
         assert_eq!(
             cfg.tradable_instruments(),

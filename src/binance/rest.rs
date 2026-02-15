@@ -19,6 +19,8 @@ pub struct BinanceRestClient {
     futures_base_url: String,
     api_key: String,
     secret_key: String,
+    futures_api_key: String,
+    futures_secret_key: String,
     recv_window: u64,
     time_offset_ms: AtomicI64,
     // Simple rate limiter: request count in current minute window
@@ -32,6 +34,8 @@ impl BinanceRestClient {
         futures_base_url: &str,
         api_key: &str,
         secret_key: &str,
+        futures_api_key: &str,
+        futures_secret_key: &str,
         recv_window: u64,
     ) -> Self {
         Self {
@@ -40,6 +44,8 @@ impl BinanceRestClient {
             futures_base_url: futures_base_url.to_string(),
             api_key: api_key.to_string(),
             secret_key: secret_key.to_string(),
+            futures_api_key: futures_api_key.to_string(),
+            futures_secret_key: futures_secret_key.to_string(),
             recv_window,
             time_offset_ms: AtomicI64::new(0),
             request_count: AtomicU64::new(0),
@@ -47,7 +53,7 @@ impl BinanceRestClient {
         }
     }
 
-    fn sign(&self, query: &str) -> String {
+    fn sign_with_secret(&self, query: &str, secret_key: &str) -> String {
         let offset = self.time_offset_ms.load(Ordering::Relaxed);
         let timestamp = chrono::Utc::now().timestamp_millis() + offset;
         let full_query = if query.is_empty() {
@@ -59,10 +65,18 @@ impl BinanceRestClient {
             )
         };
         let mut mac =
-            Hmac::<Sha256>::new_from_slice(self.secret_key.as_bytes()).expect("HMAC key error");
+            Hmac::<Sha256>::new_from_slice(secret_key.as_bytes()).expect("HMAC key error");
         mac.update(full_query.as_bytes());
         let signature = hex::encode(mac.finalize().into_bytes());
         format!("{}&signature={}", full_query, signature)
+    }
+
+    fn sign(&self, query: &str) -> String {
+        self.sign_with_secret(query, &self.secret_key)
+    }
+
+    fn sign_futures(&self, query: &str) -> String {
+        self.sign_with_secret(query, &self.futures_secret_key)
     }
 
     async fn sync_time_offset(&self) -> Result<()> {
@@ -156,13 +170,13 @@ impl BinanceRestClient {
     pub async fn get_futures_account(&self) -> Result<BinanceFuturesAccountInfo> {
         self.check_rate_limit();
 
-        let signed = self.sign("");
+        let signed = self.sign_futures("");
         let url = format!("{}/fapi/v2/account?{}", self.futures_base_url, signed);
 
         let resp = self
             .http
             .get(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
+            .header("X-MBX-APIKEY", &self.futures_api_key)
             .send()
             .await
             .context("get_futures_account HTTP failed")?;
@@ -255,7 +269,7 @@ impl BinanceRestClient {
             quantity,
             client_order_id,
         );
-        let signed = self.sign(&query);
+        let signed = self.sign_futures(&query);
         let url = format!("{}/fapi/v1/order?{}", self.futures_base_url, signed);
 
         tracing::info!(
@@ -269,7 +283,7 @@ impl BinanceRestClient {
         let resp = self
             .http
             .post(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
+            .header("X-MBX-APIKEY", &self.futures_api_key)
             .send()
             .await
             .context("place_futures_market_order HTTP failed")?;
@@ -631,6 +645,8 @@ mod tests {
             "https://testnet.binancefuture.com",
             "test_key",
             "test_secret",
+            "test_fut_key",
+            "test_fut_secret",
             5000,
         );
         let signed = client.sign("symbol=BTCUSDT&side=BUY");
@@ -669,6 +685,8 @@ mod tests {
             "https://testnet.binancefuture.com",
             "test_key",
             "test_secret",
+            "test_fut_key",
+            "test_fut_secret",
             5000,
         );
 
