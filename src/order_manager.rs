@@ -131,85 +131,107 @@ fn format_trade_history_row(t: &BinanceMyTrade, source: &str) -> String {
     )
 }
 
-fn compute_trade_stats(mut trades: Vec<BinanceMyTrade>) -> OrderHistoryStats {
-    trades.sort_by_key(|t| (t.time, t.id));
-    let mut side: Option<OrderSide> = None;
-    let mut qty = 0.0_f64;
-    let mut entry_price = 0.0_f64;
-    let mut stats = OrderHistoryStats::default();
-
-    for t in trades {
-        let fill_side = if t.is_buyer {
-            OrderSide::Buy
-        } else {
-            OrderSide::Sell
-        };
-        let fill_qty = t.qty.max(0.0);
-        if fill_qty <= f64::EPSILON {
-            continue;
-        }
-        let fill_price = t.price;
-
-        match side {
-            None => {
-                side = Some(fill_side);
-                qty = fill_qty;
-                entry_price = fill_price;
-            }
-            Some(pos_side) if pos_side == fill_side => {
-                let total_cost = entry_price * qty + fill_price * fill_qty;
-                qty += fill_qty;
-                if qty > f64::EPSILON {
-                    entry_price = total_cost / qty;
-                }
-            }
-            Some(pos_side) => {
-                let close_qty = fill_qty.min(qty);
-                let pnl_delta = match pos_side {
-                    OrderSide::Buy => (fill_price - entry_price) * close_qty,
-                    OrderSide::Sell => (entry_price - fill_price) * close_qty,
-                };
-                if pnl_delta > 0.0 {
-                    stats.win_count += 1;
-                    stats.trade_count += 1;
-                } else if pnl_delta < 0.0 {
-                    stats.lose_count += 1;
-                    stats.trade_count += 1;
-                }
-                stats.realized_pnl += pnl_delta;
-
-                qty -= close_qty;
-                let remain_open_qty = fill_qty - close_qty;
-                if qty <= f64::EPSILON {
-                    side = None;
-                    qty = 0.0;
-                    entry_price = 0.0;
-                }
-                if remain_open_qty > f64::EPSILON {
-                    side = Some(fill_side);
-                    qty = remain_open_qty;
-                    entry_price = fill_price;
-                }
+fn split_symbol_assets(symbol: &str) -> (String, String) {
+    const QUOTE_SUFFIXES: [&str; 10] = [
+        "USDT", "USDC", "FDUSD", "BUSD", "TUSD", "TRY", "EUR", "BTC", "ETH", "BNB",
+    ];
+    for q in QUOTE_SUFFIXES {
+        if let Some(base) = symbol.strip_suffix(q) {
+            if !base.is_empty() {
+                return (base.to_string(), q.to_string());
             }
         }
     }
+    (symbol.to_string(), String::new())
+}
 
+#[derive(Clone, Copy, Default)]
+struct LongPos {
+    qty: f64,
+    cost_quote: f64,
+}
+
+fn apply_spot_trade_with_fee(
+    pos: &mut LongPos,
+    stats: &mut OrderHistoryStats,
+    t: &BinanceMyTrade,
+    base_asset: &str,
+    quote_asset: &str,
+) {
+    let qty = t.qty.max(0.0);
+    if qty <= f64::EPSILON {
+        return;
+    }
+    let fee_asset = t.commission_asset.as_str();
+    let fee_is_base = !base_asset.is_empty() && fee_asset.eq_ignore_ascii_case(base_asset);
+    let fee_is_quote = !quote_asset.is_empty() && fee_asset.eq_ignore_ascii_case(quote_asset);
+
+    if t.is_buyer {
+        let net_qty = (qty - if fee_is_base { t.commission.max(0.0) } else { 0.0 }).max(0.0);
+        if net_qty <= f64::EPSILON {
+            return;
+        }
+        let fee_quote = if fee_is_quote { t.commission.max(0.0) } else { 0.0 };
+        pos.qty += net_qty;
+        pos.cost_quote += qty * t.price + fee_quote;
+        return;
+    }
+
+    // Spot sell: close against existing long inventory.
+    if pos.qty <= f64::EPSILON {
+        return;
+    }
+    let close_qty = qty.min(pos.qty);
+    if close_qty <= f64::EPSILON {
+        return;
+    }
+    let avg_cost = pos.cost_quote / pos.qty.max(f64::EPSILON);
+    let fee_quote_total = if fee_is_quote {
+        t.commission.max(0.0)
+    } else if fee_is_base {
+        // If fee is charged in base on sell, approximate its quote impact at fill price.
+        t.commission.max(0.0) * t.price
+    } else {
+        0.0
+    };
+    let fee_quote = fee_quote_total * (close_qty / qty.max(f64::EPSILON));
+    let pnl_delta = (close_qty * t.price - fee_quote) - (avg_cost * close_qty);
+    if pnl_delta > 0.0 {
+        stats.win_count += 1;
+        stats.trade_count += 1;
+    } else if pnl_delta < 0.0 {
+        stats.lose_count += 1;
+        stats.trade_count += 1;
+    }
+    stats.realized_pnl += pnl_delta;
+
+    pos.qty -= close_qty;
+    pos.cost_quote -= avg_cost * close_qty;
+    if pos.qty <= f64::EPSILON {
+        pos.qty = 0.0;
+        pos.cost_quote = 0.0;
+    }
+}
+
+fn compute_trade_stats(mut trades: Vec<BinanceMyTrade>, symbol: &str) -> OrderHistoryStats {
+    trades.sort_by_key(|t| (t.time, t.id));
+    let (base_asset, quote_asset) = split_symbol_assets(symbol);
+    let mut pos = LongPos::default();
+    let mut stats = OrderHistoryStats::default();
+    for t in trades {
+        apply_spot_trade_with_fee(&mut pos, &mut stats, &t, &base_asset, &quote_asset);
+    }
     stats
 }
 
 fn compute_trade_stats_by_source(
     mut trades: Vec<BinanceMyTrade>,
     order_source_by_id: &HashMap<u64, String>,
+    symbol: &str,
 ) -> HashMap<String, OrderHistoryStats> {
-    #[derive(Clone, Copy, Default)]
-    struct SourcePos {
-        side: Option<OrderSide>,
-        qty: f64,
-        entry_price: f64,
-    }
-
     trades.sort_by_key(|t| (t.time, t.id));
-    let mut pos_by_source: HashMap<String, SourcePos> = HashMap::new();
+    let (base_asset, quote_asset) = split_symbol_assets(symbol);
+    let mut pos_by_source: HashMap<String, LongPos> = HashMap::new();
     let mut stats_by_source: HashMap<String, OrderHistoryStats> = HashMap::new();
 
     for t in trades {
@@ -217,61 +239,9 @@ fn compute_trade_stats_by_source(
             .get(&t.order_id)
             .cloned()
             .unwrap_or_else(|| "UNKNOWN".to_string());
-        let fill_side = if t.is_buyer {
-            OrderSide::Buy
-        } else {
-            OrderSide::Sell
-        };
-        let fill_qty = t.qty.max(0.0);
-        if fill_qty <= f64::EPSILON {
-            continue;
-        }
-
         let pos = pos_by_source.entry(source.clone()).or_default();
         let stats = stats_by_source.entry(source).or_default();
-
-        match pos.side {
-            None => {
-                pos.side = Some(fill_side);
-                pos.qty = fill_qty;
-                pos.entry_price = t.price;
-            }
-            Some(pos_side) if pos_side == fill_side => {
-                let total_cost = pos.entry_price * pos.qty + t.price * fill_qty;
-                pos.qty += fill_qty;
-                if pos.qty > f64::EPSILON {
-                    pos.entry_price = total_cost / pos.qty;
-                }
-            }
-            Some(pos_side) => {
-                let close_qty = fill_qty.min(pos.qty);
-                let pnl_delta = match pos_side {
-                    OrderSide::Buy => (t.price - pos.entry_price) * close_qty,
-                    OrderSide::Sell => (pos.entry_price - t.price) * close_qty,
-                };
-                if pnl_delta > 0.0 {
-                    stats.win_count += 1;
-                    stats.trade_count += 1;
-                } else if pnl_delta < 0.0 {
-                    stats.lose_count += 1;
-                    stats.trade_count += 1;
-                }
-                stats.realized_pnl += pnl_delta;
-
-                pos.qty -= close_qty;
-                let remain = fill_qty - close_qty;
-                if pos.qty <= f64::EPSILON {
-                    pos.side = None;
-                    pos.qty = 0.0;
-                    pos.entry_price = 0.0;
-                }
-                if remain > f64::EPSILON {
-                    pos.side = Some(fill_side);
-                    pos.qty = remain;
-                    pos.entry_price = t.price;
-                }
-            }
-        }
+        apply_spot_trade_with_fee(pos, stats, &t, &base_asset, &quote_asset);
     }
 
     stats_by_source
@@ -390,7 +360,7 @@ impl OrderManager {
             }
         }
 
-        let stats = compute_trade_stats(trades.clone());
+        let stats = compute_trade_stats(trades.clone(), &self.symbol);
         let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
         let latest_trade_event = trades.iter().map(|t| t.time).max();
         let latest_event_ms = latest_order_event.max(latest_trade_event);
@@ -416,7 +386,8 @@ impl OrderManager {
         for (order_id, source) in persisted_source_by_order_id {
             order_source_by_id.entry(order_id).or_insert(source);
         }
-        let strategy_stats = compute_trade_stats_by_source(trades.clone(), &order_source_by_id);
+        let strategy_stats =
+            compute_trade_stats_by_source(trades.clone(), &order_source_by_id, &self.symbol);
 
         let mut history = Vec::new();
         let mut fills = Vec::new();

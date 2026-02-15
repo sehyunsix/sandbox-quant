@@ -40,6 +40,8 @@ pub fn persist_order_snapshot(
             side TEXT NOT NULL,
             qty REAL NOT NULL,
             price REAL NOT NULL,
+            commission REAL NOT NULL DEFAULT 0.0,
+            commission_asset TEXT NOT NULL DEFAULT '',
             event_time_ms INTEGER NOT NULL,
             source TEXT NOT NULL,
             updated_at_ms INTEGER NOT NULL,
@@ -47,6 +49,18 @@ pub fn persist_order_snapshot(
         );
         "#,
     )?;
+    // Backward-compatible schema upgrades for existing DB files.
+    for ddl in [
+        "ALTER TABLE order_history_trades ADD COLUMN commission REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE order_history_trades ADD COLUMN commission_asset TEXT NOT NULL DEFAULT ''",
+    ] {
+        if let Err(e) = conn.execute(ddl, []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(e.into());
+            }
+        }
+    }
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let tx = conn.transaction()?;
@@ -99,13 +113,15 @@ pub fn persist_order_snapshot(
         tx.execute(
             r#"
             INSERT INTO order_history_trades (
-                symbol, trade_id, order_id, side, qty, price, event_time_ms, source, updated_at_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, source, updated_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(symbol, trade_id) DO UPDATE SET
                 order_id = excluded.order_id,
                 side = excluded.side,
                 qty = excluded.qty,
                 price = excluded.price,
+                commission = excluded.commission,
+                commission_asset = excluded.commission_asset,
                 event_time_ms = excluded.event_time_ms,
                 source = excluded.source,
                 updated_at_ms = excluded.updated_at_ms
@@ -117,6 +133,8 @@ pub fn persist_order_snapshot(
                 if t.is_buyer { "BUY" } else { "SELL" },
                 t.qty,
                 t.price,
+                t.commission,
+                t.commission_asset,
                 t.time as i64,
                 source_by_order_id
                     .get(&t.order_id)
@@ -150,7 +168,7 @@ pub fn load_persisted_trades(symbol: &str) -> Result<Vec<PersistedTrade>> {
     let conn = Connection::open("data/order_history.sqlite")?;
     let mut stmt = conn.prepare(
         r#"
-        SELECT trade_id, order_id, side, qty, price, event_time_ms, source
+        SELECT trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, source
         FROM order_history_trades
         WHERE symbol = ?1
         ORDER BY event_time_ms ASC, trade_id ASC
@@ -166,15 +184,15 @@ pub fn load_persisted_trades(symbol: &str) -> Result<Vec<PersistedTrade>> {
             order_id: row.get::<_, i64>(1)? as u64,
             price: row.get(4)?,
             qty: row.get(3)?,
-            commission: 0.0,
-            commission_asset: String::new(),
-            time: row.get::<_, i64>(5)? as u64,
+            commission: row.get(5)?,
+            commission_asset: row.get(6)?,
+            time: row.get::<_, i64>(7)? as u64,
             is_buyer,
             is_maker: false,
         };
         Ok(PersistedTrade {
             trade,
-            source: row.get(6)?,
+            source: row.get(8)?,
         })
     })?;
 
