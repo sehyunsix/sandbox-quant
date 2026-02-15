@@ -150,13 +150,50 @@ impl AppState {
     pub fn refresh_history_rows(&mut self) {
         match order_store::load_daily_realized_returns(400) {
             Ok(rows) => {
-                let mut lines = Vec::with_capacity(rows.len() + 1);
-                lines.push("Ticker           Date         RealizedROI   RealizedPnL".to_string());
+                use std::collections::{BTreeMap, BTreeSet};
+
+                let mut date_set: BTreeSet<String> = BTreeSet::new();
+                let mut ticker_map: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
                 for row in rows {
-                    lines.push(format!(
-                        "{:<16} {:<12} {:>10.2}% {:>12.4}",
-                        row.symbol, row.date, row.realized_return_pct, row.realized_pnl
-                    ));
+                    date_set.insert(row.date.clone());
+                    ticker_map
+                        .entry(row.symbol.clone())
+                        .or_default()
+                        .insert(row.date, row.realized_return_pct);
+                }
+
+                // Keep recent dates only to avoid horizontal overflow in terminal.
+                let mut dates: Vec<String> = date_set.into_iter().collect();
+                dates.sort();
+                dates.reverse();
+                const MAX_DATE_COLS: usize = 6;
+                if dates.len() > MAX_DATE_COLS {
+                    dates.truncate(MAX_DATE_COLS);
+                }
+
+                let mut lines = Vec::new();
+                if dates.is_empty() {
+                    lines.push("Ticker            (no daily realized roi data)".to_string());
+                    self.history_rows = lines;
+                    return;
+                }
+
+                let mut header = format!("{:<14}", "Ticker");
+                for d in &dates {
+                    header.push_str(&format!(" {:>10}", d));
+                }
+                lines.push(header);
+
+                for (ticker, by_date) in ticker_map {
+                    let mut line = format!("{:<14}", ticker);
+                    for d in &dates {
+                        let cell = by_date
+                            .get(d)
+                            .map(|v| format!("{:.2}%", v))
+                            .unwrap_or_else(|| "-".to_string());
+                        line.push_str(&format!(" {:>10}", cell));
+                    }
+                    lines.push(line);
                 }
                 self.history_rows = lines;
             }
