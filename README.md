@@ -6,6 +6,8 @@ It provides real-time market streaming, strategy-driven order execution, cumulat
 
 ## Main Features
 
+![cargo run multi terminal snapshot](docs/assets/cargo-run-multi-terminal-snapshot.png)
+
 - Real-time market + strategy loop
   - Streams Binance Spot Testnet trades through WebSocket.
   - Runs MA crossover logic and executes orders via REST.
@@ -27,6 +29,27 @@ It provides real-time market streaming, strategy-driven order execution, cumulat
 - Operational robustness
   - Handles Binance time drift errors (`-1021`) with time sync + retry.
   - Reduces high request-weight behavior to avoid rate-limit pressure.
+
+### Trading UI GIF
+
+If `docs/assets/trading-ui-demo.gif` exists, it will render below:
+
+![Trading UI Demo](docs/assets/trading-ui-demo.gif)
+
+To create it locally on macOS:
+
+1. Record a short screen clip while running:
+   ```bash
+   cargo run --bin sandbox-quant
+   ```
+   Save the clip as `docs/assets/trading-ui-demo.mp4`.
+
+2. Convert MP4 to GIF:
+   ```bash
+   ffmpeg -i docs/assets/trading-ui-demo.mp4 \
+     -vf \"fps=12,scale=1280:-1:flags=lanczos\" \
+     -loop 0 docs/assets/trading-ui-demo.gif
+   ```
 
 ## Quick Start
 
