@@ -695,19 +695,21 @@ fn parse_symbol_order_rules_from_exchange_info(
         .and_then(|v| v.as_array())
         .context("exchangeInfo symbol missing filters")?;
 
-    let lot_primary = if prefer_market_lot_size {
-        find_filter(filters, "MARKET_LOT_SIZE").or_else(|| find_filter(filters, "LOT_SIZE"))
+    let primary_type = if prefer_market_lot_size {
+        "MARKET_LOT_SIZE"
     } else {
-        find_filter(filters, "LOT_SIZE").or_else(|| find_filter(filters, "MARKET_LOT_SIZE"))
-    }
-    .context("exchangeInfo missing LOT_SIZE/MARKET_LOT_SIZE")?;
-
-    let min_qty = json_str_to_f64(lot_primary, "minQty")?;
-    let max_qty = json_str_to_f64(lot_primary, "maxQty")?;
-    let step_size = json_str_to_f64(lot_primary, "stepSize")?;
-    if step_size <= 0.0 {
-        return Err(anyhow::anyhow!("invalid stepSize for symbol {}", symbol));
-    }
+        "LOT_SIZE"
+    };
+    let fallback_type = if prefer_market_lot_size {
+        "LOT_SIZE"
+    } else {
+        "MARKET_LOT_SIZE"
+    };
+    let parsed = find_filter(filters, primary_type)
+        .and_then(parse_lot_filter_values)
+        .or_else(|| find_filter(filters, fallback_type).and_then(parse_lot_filter_values))
+        .context("exchangeInfo missing valid LOT_SIZE/MARKET_LOT_SIZE")?;
+    let (min_qty, max_qty, step_size) = parsed;
 
     let min_notional = find_filter(filters, "MIN_NOTIONAL")
         .and_then(|f| f.get("notional").or_else(|| f.get("minNotional")))
@@ -729,6 +731,16 @@ fn find_filter<'a>(
     filters
         .iter()
         .find(|f| f.get("filterType").and_then(|v| v.as_str()) == Some(filter_type))
+}
+
+fn parse_lot_filter_values(filter: &serde_json::Value) -> Option<(f64, f64, f64)> {
+    let min_qty = json_str_to_f64(filter, "minQty").ok()?;
+    let max_qty = json_str_to_f64(filter, "maxQty").ok()?;
+    let step_size = json_str_to_f64(filter, "stepSize").ok()?;
+    if step_size <= 0.0 {
+        return None;
+    }
+    Some((min_qty, max_qty, step_size))
 }
 
 fn json_str_to_f64(row: &serde_json::Value, key: &str) -> Result<f64> {
@@ -844,5 +856,20 @@ mod tests {
             parse_symbol_order_rules_from_exchange_info(&payload, "ETHUSDT", false).unwrap();
         assert!((rules.step_size - 0.001).abs() < 1e-12);
         assert!((rules.min_qty - 0.001).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parse_symbol_rules_fallback_when_market_lot_size_is_invalid() {
+        let payload = json!({
+            "symbols": [{
+                "symbol": "BTCUSDT",
+                "filters": [
+                    {"filterType":"LOT_SIZE","minQty":"0.00001000","maxQty":"50.00000000","stepSize":"0.00001000"},
+                    {"filterType":"MARKET_LOT_SIZE","minQty":"0.00001000","maxQty":"50.00000000","stepSize":"0.00000000"}
+                ]
+            }]
+        });
+        let rules = parse_symbol_order_rules_from_exchange_info(&payload, "BTCUSDT", true).unwrap();
+        assert!((rules.step_size - 0.00001).abs() < 1e-12);
     }
 }
