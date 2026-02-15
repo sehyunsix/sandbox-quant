@@ -741,14 +741,17 @@ impl OrderManager {
             }
             OrderSide::Sell => {
                 if self.market == MarketKind::Spot {
-                    // Spot: sell only what we have.
-                    if self.position.is_flat() {
+                    // Spot: sell from actual wallet balance for the symbol's base asset.
+                    // Internal position state may be empty after restart/symbol switch.
+                    let (base_asset, _) = split_symbol_assets(&self.symbol);
+                    let base_free = self.balances.get(base_asset.as_str()).copied().unwrap_or(0.0);
+                    if base_free <= f64::EPSILON {
                         return Ok(Some(OrderUpdate::Rejected {
                             client_order_id: "n/a".to_string(),
-                            reason: "No position to sell".to_string(),
+                            reason: format!("No {} balance to sell", base_asset),
                         }));
                     }
-                    self.position.qty
+                    base_free
                 } else {
                     // Futures: SELL may open/increase short, use notional sizing.
                     self.order_amount_usdt / self.last_price
