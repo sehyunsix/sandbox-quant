@@ -184,3 +184,17 @@ pub fn load_persisted_trades(symbol: &str) -> Result<Vec<PersistedTrade>> {
     }
     Ok(trades)
 }
+
+pub fn load_last_trade_id(symbol: &str) -> Result<Option<u64>> {
+    std::fs::create_dir_all("data")?;
+    let conn = Connection::open("data/order_history.sqlite")?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT MAX(trade_id)
+        FROM order_history_trades
+        WHERE symbol = ?1
+        "#,
+    )?;
+    let max_id = stmt.query_row([symbol], |row| row.get::<_, Option<i64>>(0))?;
+    Ok(max_id.map(|v| v as u64))
+}

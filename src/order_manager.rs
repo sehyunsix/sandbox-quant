@@ -55,6 +55,7 @@ pub struct OrderHistoryFill {
     pub timestamp_ms: u64,
     pub side: OrderSide,
     pub price: f64,
+    pub qty: f64,
 }
 
 pub struct OrderManager {
@@ -323,7 +324,17 @@ impl OrderManager {
         let fetch_started = Instant::now();
         let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
         let orders_result = self.rest_client.get_all_orders(&self.symbol, limit).await;
-        let trades_result = self.rest_client.get_my_trades(&self.symbol, limit).await;
+        let last_trade_id = order_store::load_last_trade_id(&self.symbol).ok().flatten();
+        let trades_result = match last_trade_id {
+            Some(last_id) => self
+                .rest_client
+                .get_my_trades_since(&self.symbol, last_id.saturating_add(1), 10)
+                .await,
+            None => self
+                .rest_client
+                .get_my_trades_history(&self.symbol, limit.max(1))
+                .await,
+        };
         let fetch_latency_ms = fetch_started.elapsed().as_millis() as u64;
         let trade_data_complete = trades_result.is_ok();
 
@@ -419,6 +430,7 @@ impl OrderManager {
                             OrderSide::Sell
                         },
                         price: t.price,
+                        qty: t.qty,
                     });
                     format_trade_history_row(
                         t,
@@ -455,6 +467,7 @@ impl OrderManager {
                                 OrderSide::Sell
                             },
                             price: t.price,
+                            qty: t.qty,
                         });
                         history.push(format_order_history_row(
                             t.time,
@@ -501,6 +514,7 @@ impl OrderManager {
                             OrderSide::Sell
                         },
                         price: t.price,
+                        qty: t.qty,
                     });
                     history.push(format_trade_history_row(
                         t,

@@ -348,12 +348,19 @@ impl BinanceRestClient {
         self.get_all_orders_page(symbol, limit, None).await
     }
 
-    /// Fetch recent personal trades for a symbol.
-    pub async fn get_my_trades(&self, symbol: &str, limit: usize) -> Result<Vec<BinanceMyTrade>> {
+    async fn get_my_trades_page(
+        &self,
+        symbol: &str,
+        limit: usize,
+        from_id: Option<u64>,
+    ) -> Result<Vec<BinanceMyTrade>> {
         self.check_rate_limit();
 
         let limit = limit.clamp(1, 1000);
-        let query = format!("symbol={}&limit={}", symbol, limit);
+        let query = match from_id {
+            Some(v) => format!("symbol={}&limit={}&fromId={}", symbol, limit, v),
+            None => format!("symbol={}&limit={}", symbol, limit),
+        };
         for attempt in 0..=1 {
             let signed = self.sign(&query);
             let url = format!("{}/api/v3/myTrades?{}", self.base_url, signed);
@@ -387,6 +394,90 @@ impl BinanceRestClient {
         }
 
         Err(anyhow::anyhow!("My trades request failed after retry"))
+    }
+
+    /// Fetch recent personal trades for a symbol.
+    pub async fn get_my_trades(&self, symbol: &str, limit: usize) -> Result<Vec<BinanceMyTrade>> {
+        self.get_my_trades_page(symbol, limit, None).await
+    }
+
+    /// Fetch all personal trades from the oldest side (fromId=0), up to `max_total`.
+    pub async fn get_my_trades_history(
+        &self,
+        symbol: &str,
+        max_total: usize,
+    ) -> Result<Vec<BinanceMyTrade>> {
+        let page_size = 1000usize;
+        let target = max_total.max(1);
+        let mut out = Vec::new();
+        let mut cursor: u64 = 0;
+
+        loop {
+            let page = self
+                .get_my_trades_page(symbol, page_size.min(target.saturating_sub(out.len())), Some(cursor))
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            let fetched = page.len();
+            let mut max_trade_id = cursor;
+            for t in page {
+                max_trade_id = max_trade_id.max(t.id);
+                out.push(t);
+                if out.len() >= target {
+                    break;
+                }
+            }
+            if out.len() >= target || fetched < page_size {
+                break;
+            }
+            let next = max_trade_id.saturating_add(1);
+            if next <= cursor {
+                break;
+            }
+            cursor = next;
+        }
+
+        Ok(out)
+    }
+
+    /// Fetch new personal trades since `from_id` (inclusive), paging forward.
+    pub async fn get_my_trades_since(
+        &self,
+        symbol: &str,
+        from_id: u64,
+        max_pages: usize,
+    ) -> Result<Vec<BinanceMyTrade>> {
+        let page_size = 1000usize;
+        let mut out = Vec::new();
+        let mut cursor = from_id;
+        let mut pages = 0usize;
+
+        while pages < max_pages.max(1) {
+            let page = self
+                .get_my_trades_page(symbol, page_size, Some(cursor))
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            pages += 1;
+            let fetched = page.len();
+            let mut max_trade_id = cursor;
+            for t in page {
+                max_trade_id = max_trade_id.max(t.id);
+                out.push(t);
+            }
+            if fetched < page_size {
+                break;
+            }
+            let next = max_trade_id.saturating_add(1);
+            if next <= cursor {
+                break;
+            }
+            cursor = next;
+        }
+
+        Ok(out)
     }
 }
 

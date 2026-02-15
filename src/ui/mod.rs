@@ -167,6 +167,7 @@ impl AppState {
                     candle_index,
                     price: fill.price,
                     side: fill.side,
+                    qty: fill.qty,
                 });
             }
         }
@@ -259,6 +260,7 @@ impl AppState {
                             candle_index,
                             price: *avg_price,
                             side: *side,
+                            qty: fills.iter().map(|f| f.qty).sum(),
                         });
                         if self.fill_markers.len() > MAX_FILL_MARKERS {
                             self.fill_markers.remove(0);
