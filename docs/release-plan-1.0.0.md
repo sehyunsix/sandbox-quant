@@ -67,7 +67,7 @@
 
 ### Release Exit Criteria
 - [x] Multi-strategy scheduling is deterministic under fixed seed/input.
-- [ ] No order accepted when global or symbol risk limit is exceeded.
+- [x] No order accepted when global or symbol risk limit is exceeded.
 
 ---
 
