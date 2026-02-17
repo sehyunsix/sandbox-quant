@@ -75,6 +75,15 @@ fn strategy_preset_to_index(preset: StrategyPreset) -> usize {
     }
 }
 
+fn strategy_preset_from_label(label: &str) -> Option<StrategyPreset> {
+    match label {
+        "MA(Config)" => Some(StrategyPreset::Config),
+        "MA(Fast 5/20)" => Some(StrategyPreset::Fast),
+        "MA(Slow 20/60)" => Some(StrategyPreset::Slow),
+        _ => None,
+    }
+}
+
 fn strategy_worker_id(preset: StrategyPreset, api_symbol: &str, market: MarketKind) -> String {
     let market_tag = match market {
         MarketKind::Spot => "spot",
@@ -786,14 +795,41 @@ async fn main() -> Result<()> {
                 }
                 if app_state.v2_grid_open {
                     match key.code {
-                        KeyCode::Char('f') | KeyCode::Char('F') => {
-                            app_state.v2_state.focus.symbol = Some(app_state.symbol.clone());
-                            app_state.v2_state.focus.strategy_id =
-                                Some(app_state.strategy_label.clone());
-                            app_state.v2_grid_open = false;
-                            app_state.focus_popup_open = true;
+                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                            app_state.v2_grid_strategy_index =
+                                app_state.v2_grid_strategy_index.saturating_sub(1);
                         }
-                        KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('G') | KeyCode::Enter => {
+                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                            app_state.v2_grid_strategy_index = (app_state.v2_grid_strategy_index
+                                + 1)
+                            .min(app_state.strategy_items.len().saturating_sub(1));
+                        }
+                        KeyCode::Enter | KeyCode::Char('f') | KeyCode::Char('F') => {
+                            if let Some(item) = app_state
+                                .strategy_items
+                                .get(app_state.v2_grid_strategy_index)
+                                .cloned()
+                            {
+                                app_state.v2_state.focus.symbol = Some(app_state.symbol.clone());
+                                app_state.v2_state.focus.strategy_id = Some(item.clone());
+                                if let Some(next_preset) = strategy_preset_from_label(&item) {
+                                    if next_preset != current_preset {
+                                        current_preset = next_preset;
+                                        app_state.strategy_label = current_preset.label().to_string();
+                                        app_state.fast_sma = None;
+                                        app_state.slow_sma = None;
+                                        let _ = strategy_preset_tx.send(current_preset);
+                                        app_state.push_log(format!(
+                                            "Strategy selected from grid: {}",
+                                            current_preset.label()
+                                        ));
+                                    }
+                                }
+                                app_state.v2_grid_open = false;
+                                app_state.focus_popup_open = true;
+                            }
+                        }
+                        KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('G') => {
                             app_state.v2_grid_open = false;
                         }
                         _ => {}
@@ -870,6 +906,11 @@ async fn main() -> Result<()> {
                         app_state.history_popup_open = true;
                     }
                     KeyCode::Char('g') | KeyCode::Char('G') => {
+                        app_state.v2_grid_strategy_index = app_state
+                            .strategy_items
+                            .iter()
+                            .position(|item| item == &app_state.strategy_label)
+                            .unwrap_or(0);
                         app_state.v2_grid_open = true;
                     }
                     KeyCode::Char('f') | KeyCode::Char('F') => {
