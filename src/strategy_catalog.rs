@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StrategyProfile {
     pub label: String,
     pub source_tag: String,
@@ -65,8 +67,40 @@ impl StrategyCatalog {
         self.profiles.get(index)
     }
 
+    pub fn get_by_source_tag(&self, source_tag: &str) -> Option<&StrategyProfile> {
+        self.profiles.iter().find(|p| p.source_tag == source_tag)
+    }
+
+    pub fn profiles(&self) -> &[StrategyProfile] {
+        &self.profiles
+    }
+
     pub fn index_of_label(&self, label: &str) -> Option<usize> {
         self.profiles.iter().position(|p| p.label == label)
+    }
+
+    pub fn from_profiles(
+        profiles: Vec<StrategyProfile>,
+        config_fast: usize,
+        config_slow: usize,
+        min_ticks_between_signals: u64,
+    ) -> Self {
+        if profiles.is_empty() {
+            return Self::new(config_fast, config_slow, min_ticks_between_signals);
+        }
+        let next_custom_id = profiles
+            .iter()
+            .filter_map(|profile| {
+                let tag = profile.source_tag.strip_prefix('c')?;
+                tag.parse::<u32>().ok()
+            })
+            .max()
+            .map(|id| id + 1)
+            .unwrap_or(1);
+        Self {
+            profiles,
+            next_custom_id,
+        }
     }
 
     pub fn add_custom_from_index(&mut self, base_index: usize) -> StrategyProfile {

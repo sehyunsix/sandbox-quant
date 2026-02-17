@@ -17,6 +17,7 @@ use sandbox_quant::order_store;
 use sandbox_quant::runtime::strategy_registry::StrategyWorkerRegistry;
 use sandbox_quant::strategy::ma_crossover::MaCrossover;
 use sandbox_quant::strategy_catalog::{StrategyCatalog, StrategyProfile};
+use sandbox_quant::strategy_session;
 use sandbox_quant::ui;
 use sandbox_quant::ui::AppState;
 
@@ -91,6 +92,19 @@ fn parse_instrument_label(label: &str) -> (String, MarketKind) {
     (trimmed.to_ascii_uppercase(), MarketKind::Spot)
 }
 
+fn persist_strategy_session_state(
+    app_state: &mut AppState,
+    strategy_catalog: &StrategyCatalog,
+    current_strategy_profile: &StrategyProfile,
+) {
+    if let Err(e) = strategy_session::persist_strategy_session(
+        strategy_catalog,
+        &current_strategy_profile.source_tag,
+    ) {
+        app_state.push_log(format!("[WARN] Failed to save strategy session: {}", e));
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider (required by rustls 0.23+)
@@ -149,9 +163,25 @@ async fn main() -> Result<()> {
         config.strategy.slow_period,
         config.strategy.min_ticks_between_signals,
     );
-    let initial_strategy_profile = strategy_catalog
-        .get(0)
-        .cloned()
+    let mut restored_selected_source_tag: Option<String> = None;
+    match strategy_session::load_strategy_session(
+        config.strategy.fast_period,
+        config.strategy.slow_period,
+        config.strategy.min_ticks_between_signals,
+    ) {
+        Ok(Some(restored)) => {
+            strategy_catalog = restored.catalog;
+            restored_selected_source_tag = restored.selected_source_tag;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to load persisted strategy session");
+        }
+    }
+    let initial_strategy_profile = restored_selected_source_tag
+        .as_deref()
+        .and_then(|source_tag| strategy_catalog.get_by_source_tag(source_tag).cloned())
+        .or_else(|| strategy_catalog.get(0).cloned())
         .expect("strategy catalog must include default profile");
     let (strategy_profile_tx, mut strategy_profile_rx) =
         watch::channel(initial_strategy_profile.clone());
@@ -699,6 +729,11 @@ async fn main() -> Result<()> {
                                         "Strategy selected: {}",
                                         next_profile.label
                                     ));
+                                    persist_strategy_session_state(
+                                        &mut app_state,
+                                        &strategy_catalog,
+                                        &current_strategy_profile,
+                                    );
                                 }
                             }
                             app_state.strategy_selector_open = false;
@@ -804,6 +839,11 @@ async fn main() -> Result<()> {
                                     let _ = strategy_profile_tx.send(updated.clone());
                                 }
                                 app_state.push_log(format!("Strategy config saved: {}", updated.label));
+                                persist_strategy_session_state(
+                                    &mut app_state,
+                                    &strategy_catalog,
+                                    &current_strategy_profile,
+                                );
                             }
                             app_state.strategy_editor_open = false;
                         }
@@ -841,6 +881,11 @@ async fn main() -> Result<()> {
                                 "Grid strategy registered: {}",
                                 created.label
                             ));
+                            persist_strategy_session_state(
+                                &mut app_state,
+                                &strategy_catalog,
+                                &current_strategy_profile,
+                            );
                         }
                         KeyCode::Char('c') | KeyCode::Char('C') => {
                             if let Some(selected_label) = app_state
@@ -883,6 +928,11 @@ async fn main() -> Result<()> {
                                             "Strategy selected from grid: {}",
                                             next_profile.label
                                         ));
+                                        persist_strategy_session_state(
+                                            &mut app_state,
+                                            &strategy_catalog,
+                                            &current_strategy_profile,
+                                        );
                                     }
                                 }
                                 app_state.v2_grid_open = false;
@@ -994,6 +1044,13 @@ async fn main() -> Result<()> {
         if *shutdown_rx.borrow() {
             break;
         }
+    }
+
+    if let Err(e) = strategy_session::persist_strategy_session(
+        &strategy_catalog,
+        &current_strategy_profile.source_tag,
+    ) {
+        tracing::warn!(error = %e, "Failed to persist strategy session during shutdown");
     }
 
     ratatui::restore();
