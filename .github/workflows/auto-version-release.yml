@@ -38,7 +38,7 @@ jobs:
           RANGE="${{ github.event.before }}..${{ github.sha }}"
           MESSAGES="$(git log --format=%B ${RANGE} || true)"
           LEVEL="patch"
-          if echo "$MESSAGES" | grep -Eiq "(^|[[:space:]])#major([[:space:]]|$)|BREAKING CHANGE"; then
+          if echo "$MESSAGES" | grep -Eiq "(^|[[:space:]])#major([[:space:]]|$)|BREAKING CHANGE|^feat\(break\):|^feat\(breaking\):|^feat!:"; then
             LEVEL="major"
           elif echo "$MESSAGES" | grep -Eiq "(^|[[:space:]])#minor([[:space:]]|$)|^feat(\([^)]+\))?:"; then
             LEVEL="minor"
