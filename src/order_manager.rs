@@ -86,32 +86,6 @@ fn storage_symbol(symbol: &str, market: MarketKind) -> String {
     }
 }
 
-fn floor_to_step(value: f64, step: f64) -> f64 {
-    if !value.is_finite() || !step.is_finite() || step <= 0.0 {
-        return 0.0;
-    }
-    let units = (value / step).floor();
-    let floored = units * step;
-    if floored < 0.0 {
-        0.0
-    } else {
-        floored
-    }
-}
-
-fn ceil_to_step(value: f64, step: f64) -> f64 {
-    if !value.is_finite() || !step.is_finite() || step <= 0.0 {
-        return 0.0;
-    }
-    let units = (value / step).ceil();
-    let ceiled = units * step;
-    if ceiled < 0.0 {
-        0.0
-    } else {
-        ceiled
-    }
-}
-
 fn display_qty_for_history(status: &str, orig_qty: f64, executed_qty: f64) -> f64 {
     match status {
         "FILLED" | "PARTIALLY_FILLED" => executed_qty,
@@ -266,17 +240,6 @@ fn apply_spot_trade_with_fee(
         pos.qty = 0.0;
         pos.cost_quote = 0.0;
     }
-}
-
-fn compute_trade_stats(mut trades: Vec<BinanceMyTrade>, symbol: &str) -> OrderHistoryStats {
-    trades.sort_by_key(|t| (t.time, t.id));
-    let (base_asset, quote_asset) = split_symbol_assets(symbol);
-    let mut pos = LongPos::default();
-    let mut stats = OrderHistoryStats::default();
-    for t in trades {
-        apply_spot_trade_with_fee(&mut pos, &mut stats, &t, &base_asset, &quote_asset);
-    }
-    stats
 }
 
 fn compute_trade_state(
@@ -917,7 +880,7 @@ impl OrderManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{ceil_to_step, display_qty_for_history, floor_to_step, split_symbol_assets};
+    use super::{display_qty_for_history, split_symbol_assets};
     use crate::model::order::OrderStatus;
 
     #[test]
@@ -974,20 +937,6 @@ mod tests {
         assert!((display_qty_for_history("NEW", 1.0, 0.4) - 1.0).abs() < f64::EPSILON);
         assert!((display_qty_for_history("CANCELED", 1.0, 0.4) - 1.0).abs() < f64::EPSILON);
         assert!((display_qty_for_history("REJECTED", 1.0, 0.0) - 1.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn quantity_is_floored_to_exchange_step() {
-        assert!((floor_to_step(0.123456, 0.001) - 0.123).abs() < 1e-12);
-        assert!((floor_to_step(0.123456, 0.0001) - 0.1234).abs() < 1e-12);
-        assert!((floor_to_step(0.0009, 0.001) - 0.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn quantity_is_ceiled_to_exchange_step() {
-        assert!((ceil_to_step(0.123001, 0.001) - 0.124).abs() < 1e-12);
-        assert!((ceil_to_step(0.123456, 0.0001) - 0.1235).abs() < 1e-12);
-        assert!((ceil_to_step(0.0, 0.001) - 0.0).abs() < 1e-12);
     }
 
     #[test]
