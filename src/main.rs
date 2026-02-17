@@ -14,6 +14,7 @@ use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
 use sandbox_quant::order_manager::{MarketKind, OrderManager};
 use sandbox_quant::order_store;
+use sandbox_quant::runtime::strategy_registry::StrategyWorkerRegistry;
 use sandbox_quant::strategy::ma_crossover::MaCrossover;
 use sandbox_quant::ui;
 use sandbox_quant::ui::AppState;
@@ -72,6 +73,14 @@ fn strategy_preset_to_index(preset: StrategyPreset) -> usize {
         StrategyPreset::Fast => 1,
         StrategyPreset::Slow => 2,
     }
+}
+
+fn strategy_worker_id(preset: StrategyPreset, api_symbol: &str, market: MarketKind) -> String {
+    let market_tag = match market {
+        MarketKind::Spot => "spot",
+        MarketKind::Futures => "futures",
+    };
+    format!("{}:{}:{}", preset.source_tag(), api_symbol, market_tag)
 }
 
 fn switch_timeframe(
@@ -286,7 +295,7 @@ async fn main() -> Result<()> {
             active_preset.periods(&strat_config);
         let mut strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
         let mut current_symbol = strat_symbol_rx.borrow().clone();
-        let (current_api_symbol, mut current_market) = parse_instrument_label(&current_symbol);
+        let (mut current_api_symbol, mut current_market) = parse_instrument_label(&current_symbol);
         let mut order_mgr = OrderManager::new(
             strat_rest.clone(),
             &current_api_symbol,
@@ -294,6 +303,10 @@ async fn main() -> Result<()> {
             strat_config.strategy.order_amount_usdt,
             &strat_config.risk,
         );
+        let mut worker_registry = StrategyWorkerRegistry::default();
+        let mut worker_id = strategy_worker_id(active_preset, &current_api_symbol, current_market);
+        let (worker_tick_tx, mut worker_tick_rx) = mpsc::channel::<Tick>(256);
+        worker_registry.register(worker_id.clone(), current_api_symbol.clone(), worker_tick_tx);
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
 
@@ -379,11 +392,20 @@ async fn main() -> Result<()> {
                     let _ = strat_app_tx
                         .send(AppEvent::MarketTick(tick.clone()))
                         .await;
+                    worker_registry.dispatch_tick(tick);
+                }
+                result = worker_tick_rx.recv() => {
+                    let tick = match result {
+                        Some(t) => t,
+                        None => {
+                            tracing::warn!("Worker tick channel closed; skipping tick");
+                            continue;
+                        }
+                    };
 
-                    // Always run strategy to keep SMA state updated, but skip orders if paused
+                    // Always run strategy to keep SMA state updated, but skip orders if paused.
                     let signal = strategy.on_tick(&tick);
 
-                    // Send SMA state to UI on every tick
                     let _ = strat_app_tx
                         .send(AppEvent::StrategyState {
                             fast_sma: strategy.fast_sma_value(),
@@ -391,17 +413,14 @@ async fn main() -> Result<()> {
                         })
                         .await;
 
-                    // Update unrealized PnL
                     order_mgr.update_unrealized_pnl(tick.price);
 
-                    // Only submit strategy orders when enabled
                     let enabled = *strat_enabled_rx.borrow();
                     if signal != Signal::Hold && enabled {
                         let _ = strat_app_tx
                             .send(AppEvent::StrategySignal(signal.clone()))
                             .await;
 
-                        // Submit order
                         match order_mgr.submit_order(signal, active_preset.source_tag()).await {
                             Ok(Some(ref update)) => {
                                 let _ = strat_app_tx
@@ -423,7 +442,6 @@ async fn main() -> Result<()> {
                                             .await;
                                     }
                                 }
-                                // Send updated balances to UI after fill
                                 if matches!(
                                     update,
                                     sandbox_quant::order_manager::OrderUpdate::Filled { .. }
@@ -509,6 +527,7 @@ async fn main() -> Result<()> {
                 _ = strat_symbol_rx.changed() => {
                     current_symbol = strat_symbol_rx.borrow().clone();
                     let (api_symbol, market) = parse_instrument_label(&current_symbol);
+                    current_api_symbol = api_symbol.clone();
                     current_market = market;
                     order_mgr = OrderManager::new(
                         strat_rest.clone(),
@@ -517,6 +536,15 @@ async fn main() -> Result<()> {
                         strat_config.strategy.order_amount_usdt,
                         &strat_config.risk,
                     );
+                    worker_registry.unregister(&worker_id);
+                    let (next_worker_tick_tx, next_worker_tick_rx) = mpsc::channel::<Tick>(256);
+                    worker_id = strategy_worker_id(active_preset, &current_api_symbol, current_market);
+                    worker_registry.register(
+                        worker_id.clone(),
+                        current_api_symbol.clone(),
+                        next_worker_tick_tx,
+                    );
+                    worker_tick_rx = next_worker_tick_rx;
                     strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
                     let _ = strat_app_tx
                         .send(AppEvent::LogMessage(format!("Switched symbol to {}", current_symbol)))
@@ -554,6 +582,15 @@ async fn main() -> Result<()> {
                     active_preset = *strategy_preset_rx.borrow();
                     (fast_period, slow_period, min_ticks) = active_preset.periods(&strat_config);
                     strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
+                    worker_registry.unregister(&worker_id);
+                    let (next_worker_tick_tx, next_worker_tick_rx) = mpsc::channel::<Tick>(256);
+                    worker_id = strategy_worker_id(active_preset, &current_api_symbol, current_market);
+                    worker_registry.register(
+                        worker_id.clone(),
+                        current_api_symbol.clone(),
+                        next_worker_tick_tx,
+                    );
+                    worker_tick_rx = next_worker_tick_rx;
                     let _ = strat_app_tx
                         .send(AppEvent::LogMessage(format!(
                             "Strategy switched: {} ({}/{})",

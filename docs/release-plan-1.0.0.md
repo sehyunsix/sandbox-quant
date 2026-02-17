@@ -52,8 +52,8 @@
 - Apply strategy-level and symbol-level limits.
 
 ### Build Checklist
-- [ ] Introduce strategy worker registry (`strategy_id` keyed).
-- [ ] Add per-symbol execution channels and shared risk queue.
+- [x] Introduce strategy worker registry (`strategy_id` keyed).
+- [x] Add per-symbol execution channels and shared risk queue.
 - [x] Implement per-strategy cooldown / max-active-orders.
 - [x] Implement per-symbol exposure limits (USDT notionals).
 - [x] Add global API budget accounting by endpoint group.

@@ -266,6 +266,7 @@ impl BinanceWsClient {
         match serde_json::from_str::<BinanceTradeEvent>(text) {
             Ok(event) => {
                 let tick = Tick {
+                    symbol: event.symbol,
                     price: event.price,
                     qty: event.qty,
                     timestamp_ms: event.event_time,
