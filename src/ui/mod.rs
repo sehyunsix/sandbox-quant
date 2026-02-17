@@ -1,5 +1,6 @@
 pub mod chart;
 pub mod dashboard;
+pub mod app_state_v2;
 
 use std::collections::HashMap;
 

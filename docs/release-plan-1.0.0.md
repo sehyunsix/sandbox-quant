@@ -79,7 +79,7 @@
 - Add dynamic pane resizing with terminal compatibility fallbacks.
 
 ### Build Checklist
-- [ ] Create `AppStateV2` (`portfolio`, `assets`, `strategies`, `matrix`, `focus`).
+- [x] Create `AppStateV2` (`portfolio`, `assets`, `strategies`, `matrix`, `focus`).
 - [ ] Implement `Asset Table`, `Strategy Table`, `Risk/Rate Heatmap`, `Rejection Stream`.
 - [ ] Implement Focus drill-down reusing chart/position/history widgets.
 - [ ] Add resize controls (`Ctrl+D`, fallback `[`, `]`, resize mode).
