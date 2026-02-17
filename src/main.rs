@@ -775,8 +775,24 @@ async fn main() -> Result<()> {
                     }
                     continue;
                 }
+                if app_state.focus_popup_open {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Enter => {
+                            app_state.focus_popup_open = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 if app_state.v2_grid_open {
                     match key.code {
+                        KeyCode::Char('f') | KeyCode::Char('F') => {
+                            app_state.v2_state.focus.symbol = Some(app_state.symbol.clone());
+                            app_state.v2_state.focus.strategy_id =
+                                Some(app_state.strategy_label.clone());
+                            app_state.v2_grid_open = false;
+                            app_state.focus_popup_open = true;
+                        }
                         KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('G') | KeyCode::Enter => {
                             app_state.v2_grid_open = false;
                         }
@@ -855,6 +871,11 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Char('g') | KeyCode::Char('G') => {
                         app_state.v2_grid_open = true;
+                    }
+                    KeyCode::Char('f') | KeyCode::Char('F') => {
+                        app_state.v2_state.focus.symbol = Some(app_state.symbol.clone());
+                        app_state.v2_state.focus.strategy_id = Some(app_state.strategy_label.clone());
+                        app_state.focus_popup_open = true;
                     }
                     _ => {}
                 }

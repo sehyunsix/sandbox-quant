@@ -49,3 +49,20 @@ fn app_state_updates_risk_rate_snapshots() {
     assert_eq!(s.rate_budget_account.used, 1);
     assert_eq!(s.rate_budget_market_data.limit, 40);
 }
+
+#[test]
+/// Verifies focus drill-down state is sticky across event redraws:
+/// once focus is selected, unrelated events must not reset symbol/strategy focus.
+fn app_state_preserves_focus_state_across_events() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    s.v2_state.focus.symbol = Some("ETHUSDT".to_string());
+    s.v2_state.focus.strategy_id = Some("MA(Fast 5/20)".to_string());
+
+    s.apply(AppEvent::LogMessage("heartbeat".to_string()));
+
+    assert_eq!(s.v2_state.focus.symbol.as_deref(), Some("ETHUSDT"));
+    assert_eq!(
+        s.v2_state.focus.strategy_id.as_deref(),
+        Some("MA(Fast 5/20)")
+    );
+}

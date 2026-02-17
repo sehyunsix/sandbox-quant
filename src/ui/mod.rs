@@ -71,6 +71,7 @@ pub struct AppState {
     pub strategy_items: Vec<String>,
     pub account_popup_open: bool,
     pub history_popup_open: bool,
+    pub focus_popup_open: bool,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
     pub last_applied_fee: String,
@@ -139,6 +140,7 @@ impl AppState {
             ],
             account_popup_open: false,
             history_popup_open: false,
+            focus_popup_open: false,
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
             last_applied_fee: "---".to_string(),
@@ -309,6 +311,7 @@ impl AppState {
     }
 
     pub fn apply(&mut self, event: AppEvent) {
+        let prev_focus = self.v2_state.focus.clone();
         match event {
             AppEvent::MarketTick(tick) => {
                 self.tick_count += 1;
@@ -562,7 +565,14 @@ impl AppState {
                 self.push_log(format!("[ERR] {}", msg));
             }
         }
-        self.v2_state = AppStateV2::from_legacy(self);
+        let mut next = AppStateV2::from_legacy(self);
+        if prev_focus.symbol.is_some() {
+            next.focus.symbol = prev_focus.symbol;
+        }
+        if prev_focus.strategy_id.is_some() {
+            next.focus.strategy_id = prev_focus.strategy_id;
+        }
+        self.v2_state = next;
     }
 }
 
@@ -681,9 +691,107 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         render_account_popup(frame, &state.balances);
     } else if state.history_popup_open {
         render_history_popup(frame, &state.history_rows, state.history_bucket);
+    } else if state.focus_popup_open {
+        render_focus_popup(frame, state);
     } else if state.v2_grid_open {
         render_v2_grid_popup(frame, state);
     }
+}
+
+fn render_focus_popup(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2).max(70),
+        height: area.height.saturating_sub(2).max(22),
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Focus View (V2 Drill-down) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(8),
+            Constraint::Length(7),
+        ])
+        .split(inner);
+
+    let focus_symbol = state
+        .v2_state
+        .focus
+        .symbol
+        .as_deref()
+        .unwrap_or(&state.symbol);
+    let focus_strategy = state
+        .v2_state
+        .focus
+        .strategy_id
+        .as_deref()
+        .unwrap_or(&state.strategy_label);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("Symbol: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    focus_symbol,
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  Strategy: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    focus_strategy,
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(Span::styled(
+                "Reuse legacy chart/position/history widgets. Press [F]/[Esc] to close.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]),
+        rows[0],
+    );
+
+    let main_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(48), Constraint::Length(28)])
+        .split(rows[1]);
+
+    frame.render_widget(
+        PriceChart::new(&state.candles, focus_symbol)
+            .current_candle(state.current_candle.as_ref())
+            .fill_markers(&state.fill_markers)
+            .fast_sma(state.fast_sma)
+            .slow_sma(state.slow_sma),
+        main_cols[0],
+    );
+    frame.render_widget(
+        PositionPanel::new(
+            &state.position,
+            state.last_price(),
+            &state.balances,
+            state.initial_equity_usdt,
+            state.current_equity_usdt,
+            state.history_trade_count,
+            state.history_realized_pnl,
+            &state.last_applied_fee,
+        ),
+        main_cols[1],
+    );
+
+    frame.render_widget(
+        OrderHistoryPanel::new(&state.open_order_history, &state.filled_order_history),
+        rows[2],
+    );
 }
 
 fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
