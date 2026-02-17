@@ -36,3 +36,32 @@ fn render_focus_popup_when_enabled() {
         "focus popup title should be present in frame buffer"
     );
 }
+
+#[test]
+/// Verifies grid strategy selection surface:
+/// grid popup should render strategy rows and show selector marker for the current index.
+fn render_grid_popup_with_strategy_selector() {
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.v2_grid_open = true;
+    state.v2_grid_strategy_index = 1;
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(
+        text.contains("Portfolio Grid (V2)"),
+        "grid popup title should be present"
+    );
+    assert!(
+        text.contains("MA(Fast 5/20)"),
+        "strategy table should include selectable configured strategies"
+    );
+    assert!(
+        text.contains("Use [J/K] to select"),
+        "grid strategy navigation hint should be visible"
+    );
+}

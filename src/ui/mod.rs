@@ -72,6 +72,7 @@ pub struct AppState {
     pub account_popup_open: bool,
     pub history_popup_open: bool,
     pub focus_popup_open: bool,
+    pub v2_grid_strategy_index: usize,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
     pub last_applied_fee: String,
@@ -141,6 +142,7 @@ impl AppState {
             account_popup_open: false,
             history_popup_open: false,
             focus_popup_open: false,
+            v2_grid_strategy_index: 0,
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
             last_applied_fee: "---".to_string(),
@@ -842,12 +844,41 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         "Strategy Table",
         Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
     ))];
-    for s in &state.v2_state.strategies {
-        strategy_lines.push(Line::from(format!(
-            "{}  W:{} L:{} T:{}  PnL:{:+.4}",
-            s.strategy_id, s.win_count, s.lose_count, s.trade_count, s.realized_pnl_usdt
+    for (idx, item) in state.strategy_items.iter().enumerate() {
+        let stats = strategy_stats_for_item(&state.strategy_stats, item);
+        let line = if let Some(s) = stats {
+            format!(
+                "{}  W:{} L:{} T:{}  PnL:{:+.4}",
+                item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
+            )
+        } else {
+            format!("{}  W:0 L:0 T:0  PnL:{:+.4}", item, 0.0)
+        };
+        let (prefix, style) = if idx == state.v2_grid_strategy_index {
+            (
+                "▶ ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            ("  ", Style::default().fg(Color::White))
+        };
+        strategy_lines.push(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(Color::Yellow)),
+            Span::styled(line, style),
+        ]));
+    }
+    if state.strategy_items.is_empty() {
+        strategy_lines.push(Line::from(Span::styled(
+            "(no strategies configured)",
+            Style::default().fg(Color::DarkGray),
         )));
     }
+    strategy_lines.push(Line::from(Span::styled(
+        "Use [J/K] to select, [Enter/F] focus+run, [G/Esc] close.",
+        Style::default().fg(Color::DarkGray),
+    )));
     frame.render_widget(Paragraph::new(strategy_lines), chunks[1]);
 
     let heat = format!(
