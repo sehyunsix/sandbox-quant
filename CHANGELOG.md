@@ -1,3 +1,7 @@
+## v0.2.18 - 2026-02-17
+
+- fix(ci): treat feat(break) as major bump trigger (f8b1080)
+
 ## v0.2.17 - 2026-02-17
 
 - fix(ci): treat feat commits as minor version bump (980a971)
