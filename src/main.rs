@@ -311,6 +311,24 @@ async fn main() -> Result<()> {
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
 
+        let emit_rate_snapshot = |tx: &mpsc::Sender<AppEvent>, mgr: &OrderManager| {
+            let tx = tx.clone();
+            let global = mgr.rate_budget_snapshot();
+            let orders = mgr.orders_rate_budget_snapshot();
+            let account = mgr.account_rate_budget_snapshot();
+            let market_data = mgr.market_data_rate_budget_snapshot();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(AppEvent::RiskRateSnapshot {
+                        global,
+                        orders,
+                        account,
+                        market_data,
+                    })
+                    .await;
+            });
+        };
+
         // Fetch initial balances
         match order_mgr.refresh_balances().await {
             Ok(balances) => {
@@ -350,6 +368,7 @@ async fn main() -> Result<()> {
                     .await;
             }
         }
+        emit_rate_snapshot(&strat_app_tx, &order_mgr);
 
         let _ = strat_app_tx
             .send(AppEvent::LogMessage(format!(
@@ -415,6 +434,7 @@ async fn main() -> Result<()> {
                         .await;
 
                     order_mgr.update_unrealized_pnl(tick.price);
+                    emit_rate_snapshot(&strat_app_tx, &order_mgr);
 
                     let enabled = *strat_enabled_rx.borrow();
                     if signal != Signal::Hold && enabled {
@@ -468,6 +488,7 @@ async fn main() -> Result<()> {
                                     .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
                                     .await;
                             }
+                            emit_rate_snapshot(&strat_app_tx, &order_mgr);
                         }
                         Ok(None) => {}
                         Err(e) => {
@@ -495,6 +516,7 @@ async fn main() -> Result<()> {
                                 .await;
                         }
                     }
+                    emit_rate_snapshot(&strat_app_tx, &order_mgr);
                 }
                 _ = strat_symbol_rx.changed() => {
                     current_symbol = strat_symbol_rx.borrow().clone();
@@ -549,6 +571,7 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
+                    emit_rate_snapshot(&strat_app_tx, &order_mgr);
                 }
                 _ = strategy_preset_rx.changed() => {
                     active_preset = *strategy_preset_rx.borrow();
@@ -752,6 +775,15 @@ async fn main() -> Result<()> {
                     }
                     continue;
                 }
+                if app_state.v2_grid_open {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('G') | KeyCode::Enter => {
+                            app_state.v2_grid_open = false;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => {
                         tracing::info!("User quit");
@@ -820,6 +852,9 @@ async fn main() -> Result<()> {
                     KeyCode::Char('i') | KeyCode::Char('I') => {
                         app_state.refresh_history_rows();
                         app_state.history_popup_open = true;
+                    }
+                    KeyCode::Char('g') | KeyCode::Char('G') => {
+                        app_state.v2_grid_open = true;
                     }
                     _ => {}
                 }

@@ -80,7 +80,7 @@
 
 ### Build Checklist
 - [x] Create `AppStateV2` (`portfolio`, `assets`, `strategies`, `matrix`, `focus`).
-- [ ] Implement `Asset Table`, `Strategy Table`, `Risk/Rate Heatmap`, `Rejection Stream`.
+- [x] Implement `Asset Table`, `Strategy Table`, `Risk/Rate Heatmap`, `Rejection Stream`.
 - [ ] Implement Focus drill-down reusing chart/position/history widgets.
 - [ ] Add resize controls (`Ctrl+D`, fallback `[`, `]`, resize mode).
 - [ ] Add keymap override config (`ui.keymap.*`).

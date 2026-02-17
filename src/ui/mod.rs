@@ -17,7 +17,9 @@ use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
 use crate::order_store;
+use crate::risk_module::RateBudgetSnapshot;
 
+use app_state_v2::AppStateV2;
 use chart::{FillMarker, PriceChart};
 use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
 
@@ -72,6 +74,12 @@ pub struct AppState {
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
     pub last_applied_fee: String,
+    pub v2_grid_open: bool,
+    pub v2_state: AppStateV2,
+    pub rate_budget_global: RateBudgetSnapshot,
+    pub rate_budget_orders: RateBudgetSnapshot,
+    pub rate_budget_account: RateBudgetSnapshot,
+    pub rate_budget_market_data: RateBudgetSnapshot,
 }
 
 impl AppState {
@@ -134,6 +142,28 @@ impl AppState {
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
             last_applied_fee: "---".to_string(),
+            v2_grid_open: false,
+            v2_state: AppStateV2::new(),
+            rate_budget_global: RateBudgetSnapshot {
+                used: 0,
+                limit: 0,
+                reset_in_ms: 0,
+            },
+            rate_budget_orders: RateBudgetSnapshot {
+                used: 0,
+                limit: 0,
+                reset_in_ms: 0,
+            },
+            rate_budget_account: RateBudgetSnapshot {
+                used: 0,
+                limit: 0,
+                reset_in_ms: 0,
+            },
+            rate_budget_market_data: RateBudgetSnapshot {
+                used: 0,
+                limit: 0,
+                reset_in_ms: 0,
+            },
         }
     }
 
@@ -514,6 +544,17 @@ impl AppState {
                 self.last_order_history_latency_ms = Some(snapshot.fetch_latency_ms);
                 self.refresh_history_rows();
             }
+            AppEvent::RiskRateSnapshot {
+                global,
+                orders,
+                account,
+                market_data,
+            } => {
+                self.rate_budget_global = global;
+                self.rate_budget_orders = orders;
+                self.rate_budget_account = account;
+                self.rate_budget_market_data = market_data;
+            }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
             }
@@ -521,6 +562,7 @@ impl AppState {
                 self.push_log(format!("[ERR] {}", msg));
             }
         }
+        self.v2_state = AppStateV2::from_legacy(self);
     }
 }
 
@@ -639,7 +681,113 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         render_account_popup(frame, &state.balances);
     } else if state.history_popup_open {
         render_history_popup(frame, &state.history_rows, state.history_bucket);
+    } else if state.v2_grid_open {
+        render_v2_grid_popup(frame, state);
     }
+}
+
+fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2).max(60),
+        height: area.height.saturating_sub(2).max(20),
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Portfolio Grid (V2) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5),
+            Constraint::Length(6),
+            Constraint::Length(5),
+            Constraint::Min(4),
+        ])
+        .split(inner);
+
+    let mut asset_lines = vec![Line::from(Span::styled(
+        "Asset Table",
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    ))];
+    for a in &state.v2_state.assets {
+        asset_lines.push(Line::from(format!(
+            "{}  px={} qty={:.5}  rlz={:+.4}  unrlz={:+.4}",
+            a.symbol,
+            a.last_price
+                .map(|v| format!("{:.2}", v))
+                .unwrap_or_else(|| "---".to_string()),
+            a.position_qty,
+            a.realized_pnl_usdt,
+            a.unrealized_pnl_usdt
+        )));
+    }
+    frame.render_widget(Paragraph::new(asset_lines), chunks[0]);
+
+    let mut strategy_lines = vec![Line::from(Span::styled(
+        "Strategy Table",
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    ))];
+    for s in &state.v2_state.strategies {
+        strategy_lines.push(Line::from(format!(
+            "{}  W:{} L:{} T:{}  PnL:{:+.4}",
+            s.strategy_id, s.win_count, s.lose_count, s.trade_count, s.realized_pnl_usdt
+        )));
+    }
+    frame.render_widget(Paragraph::new(strategy_lines), chunks[1]);
+
+    let heat = format!(
+        "Risk/Rate Heatmap  global {}/{} | orders {}/{} | account {}/{} | mkt {}/{}",
+        state.rate_budget_global.used,
+        state.rate_budget_global.limit,
+        state.rate_budget_orders.used,
+        state.rate_budget_orders.limit,
+        state.rate_budget_account.used,
+        state.rate_budget_account.limit,
+        state.rate_budget_market_data.used,
+        state.rate_budget_market_data.limit
+    );
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Risk/Rate Heatmap",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(heat),
+        ]),
+        chunks[2],
+    );
+
+    let mut rejection_lines = vec![Line::from(Span::styled(
+        "Rejection Stream",
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    ))];
+    let recent_rejections: Vec<&String> = state
+        .log_messages
+        .iter()
+        .filter(|m| m.contains("[ERR] Rejected"))
+        .rev()
+        .take(20)
+        .collect();
+    for msg in recent_rejections.into_iter().rev() {
+        rejection_lines.push(Line::from(Span::styled(
+            msg.as_str(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    if rejection_lines.len() == 1 {
+        rejection_lines.push(Line::from(Span::styled(
+            "(no rejections yet)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    frame.render_widget(Paragraph::new(rejection_lines), chunks[3]);
 }
 
 fn render_account_popup(frame: &mut Frame, balances: &HashMap<String, f64>) {
