@@ -2,6 +2,12 @@
 name = "sandbox-quant"
 version = "0.2.9"
 edition = "2021"
+description = "Terminal-based multi-strategy crypto trading sandbox with centralized risk controls"
+repository = "https://github.com/sehyunsix/sandbox-quant"
+readme = "README.md"
+documentation = "https://docs.rs/sandbox-quant"
+keywords = ["trading", "binance", "terminal", "risk", "quant"]
+categories = ["command-line-utilities", "finance"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

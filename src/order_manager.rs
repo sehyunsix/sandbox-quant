@@ -747,7 +747,7 @@ impl OrderManager {
     /// # Caution
     /// - Spot sell requires base-asset balance (e.g. `ETH` for `ETHUSDT`).
     /// - If balances are stale, you may see "No position to sell" or
-    ///   "Insufficient <asset>" even though exchange state changed recently.
+    ///   `"Insufficient <asset>"` even though exchange state changed recently.
     /// - This method returns transport/runtime errors as `Err(_)`; business
     ///   rejections are encoded in `OrderUpdate::Rejected`.
     pub async fn submit_order(
