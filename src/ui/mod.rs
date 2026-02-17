@@ -72,6 +72,12 @@ pub struct AppState {
     pub account_popup_open: bool,
     pub history_popup_open: bool,
     pub focus_popup_open: bool,
+    pub strategy_editor_open: bool,
+    pub strategy_editor_index: usize,
+    pub strategy_editor_field: usize,
+    pub strategy_editor_fast: usize,
+    pub strategy_editor_slow: usize,
+    pub strategy_editor_cooldown: u64,
     pub v2_grid_strategy_index: usize,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
@@ -142,6 +148,12 @@ impl AppState {
             account_popup_open: false,
             history_popup_open: false,
             focus_popup_open: false,
+            strategy_editor_open: false,
+            strategy_editor_index: 0,
+            strategy_editor_field: 0,
+            strategy_editor_fast: 5,
+            strategy_editor_slow: 20,
+            strategy_editor_cooldown: 1,
             v2_grid_strategy_index: 0,
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
@@ -695,6 +707,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         render_history_popup(frame, &state.history_rows, state.history_bucket);
     } else if state.focus_popup_open {
         render_focus_popup(frame, state);
+    } else if state.strategy_editor_open {
+        render_strategy_editor_popup(frame, state);
     } else if state.v2_grid_open {
         render_v2_grid_popup(frame, state);
     }
@@ -876,7 +890,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         )));
     }
     strategy_lines.push(Line::from(Span::styled(
-        "Use [J/K] to select, [Enter/F] focus+run, [G/Esc] close.",
+        "Use [N] new, [C] config, [J/K] select, [Enter/F] focus+run, [G/Esc] close.",
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(Paragraph::new(strategy_lines), chunks[1]);
@@ -927,6 +941,68 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         )));
     }
     frame.render_widget(Paragraph::new(rejection_lines), chunks[3]);
+}
+
+fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 8,
+        y: area.y + 4,
+        width: area.width.saturating_sub(16).max(50),
+        height: area.height.saturating_sub(8).max(12),
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Strategy Config ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let selected_name = state
+        .strategy_items
+        .get(state.strategy_editor_index)
+        .map(String::as_str)
+        .unwrap_or("Unknown");
+    let rows = [
+        ("Fast Period", state.strategy_editor_fast.to_string()),
+        ("Slow Period", state.strategy_editor_slow.to_string()),
+        ("Cooldown Tick", state.strategy_editor_cooldown.to_string()),
+    ];
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Target: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                selected_name,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Use [J/K] field, [H/L] value, [Enter] save, [Esc] cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    for (idx, (name, value)) in rows.iter().enumerate() {
+        let marker = if idx == state.strategy_editor_field {
+            "▶ "
+        } else {
+            "  "
+        };
+        let style = if idx == state.strategy_editor_field {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(marker, Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{:<14}", name), style),
+            Span::styled(value, style),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_account_popup(frame: &mut Frame, balances: &HashMap<String, f64>) {
@@ -1159,17 +1235,30 @@ fn strategy_stats_for_item<'a>(
     if let Some(s) = stats_map.get(item) {
         return Some(s);
     }
-    let source_tag = match item {
-        "MA(Config)" => Some("cfg"),
-        "MA(Fast 5/20)" => Some("fst"),
-        "MA(Slow 20/60)" => Some("slw"),
-        _ => None,
-    };
+    let source_tag = source_tag_for_strategy_item(item);
     source_tag.and_then(|tag| {
         stats_map
-            .get(tag)
+            .get(&tag)
             .or_else(|| stats_map.get(&tag.to_ascii_uppercase()))
     })
+}
+
+fn source_tag_for_strategy_item(item: &str) -> Option<String> {
+    match item {
+        "MA(Config)" => return Some("cfg".to_string()),
+        "MA(Fast 5/20)" => return Some("fst".to_string()),
+        "MA(Slow 20/60)" => return Some("slw".to_string()),
+        _ => {}
+    }
+    if let Some((_, tail)) = item.rsplit_once('[') {
+        if let Some(tag) = tail.strip_suffix(']') {
+            let tag = tag.trim();
+            if !tag.is_empty() {
+                return Some(tag.to_ascii_lowercase());
+            }
+        }
+    }
+    None
 }
 
 fn subtract_stats(total: &OrderHistoryStats, used: &OrderHistoryStats) -> OrderHistoryStats {

@@ -223,7 +223,7 @@ pub fn persist_order_snapshot(
         )?;
         source_by_order_id.insert(
             o.order_id,
-            source_label_from_client_order_id(&o.client_order_id).to_string(),
+            source_label_from_client_order_id(&o.client_order_id),
         );
     }
 
@@ -269,17 +269,29 @@ pub fn persist_order_snapshot(
     Ok(())
 }
 
-fn source_label_from_client_order_id(client_order_id: &str) -> &'static str {
+fn source_label_from_client_order_id(client_order_id: &str) -> String {
     if client_order_id.contains("-mnl-") {
-        "MANUAL"
+        "MANUAL".to_string()
     } else if client_order_id.contains("-cfg-") {
-        "MA(Config)"
+        "MA(Config)".to_string()
     } else if client_order_id.contains("-fst-") {
-        "MA(Fast 5/20)"
+        "MA(Fast 5/20)".to_string()
     } else if client_order_id.contains("-slw-") {
-        "MA(Slow 20/60)"
+        "MA(Slow 20/60)".to_string()
+    } else if let Some(source_tag) = parse_source_tag_from_client_order_id(client_order_id) {
+        source_tag.to_ascii_lowercase()
     } else {
-        "UNKNOWN"
+        "UNKNOWN".to_string()
+    }
+}
+
+fn parse_source_tag_from_client_order_id(client_order_id: &str) -> Option<&str> {
+    let body = client_order_id.strip_prefix("sq-")?;
+    let (source_tag, _) = body.split_once('-')?;
+    if source_tag.is_empty() {
+        None
+    } else {
+        Some(source_tag)
     }
 }
 
