@@ -1,3 +1,7 @@
+## v0.2.17 - 2026-02-17
+
+- fix(ci): treat feat commits as minor version bump (980a971)
+
 ## v0.2.16 - 2026-02-17
 
 - test(risk): verify rejection when global or symbol limits are exceeded (6d0cc37)
