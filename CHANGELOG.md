@@ -1,3 +1,7 @@
+## v0.2.7 - 2026-02-17
+
+- refactor(order): remove duplicated risk helpers after module split (95343a0)
+
 ## v0.2.6 - 2026-02-17
 
 - refactor(risk): extract risk module from order manager (6ac11df)
