@@ -62,8 +62,8 @@
 ### Validation Checklist
 - [ ] Simulated concurrent intents do not violate global limits.
 - [ ] 10 symbols x 3 strategies run without deadlock/starvation.
-- [ ] Rate budget throttling prevents limit burst failures.
-- [ ] `cargo test -q` passes.
+- [x] Rate budget throttling prevents limit burst failures.
+- [x] `cargo test -q` passes.
 
 ### Release Exit Criteria
 - [ ] Multi-strategy scheduling is deterministic under fixed seed/input.
