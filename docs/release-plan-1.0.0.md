@@ -60,14 +60,14 @@
 - [x] Persist strategy+symbol scoped stats for restart recovery.
 
 ### Validation Checklist
-- [ ] Simulated concurrent intents do not violate global limits.
-- [ ] 10 symbols x 3 strategies run without deadlock/starvation.
-- [ ] Rate budget throttling prevents limit burst failures.
-- [ ] `cargo test -q` passes.
+- [x] Simulated concurrent intents do not violate global limits.
+- [x] 10 symbols x 3 strategies run without deadlock/starvation.
+- [x] Rate budget throttling prevents limit burst failures.
+- [x] `cargo test -q` passes.
 
 ### Release Exit Criteria
-- [ ] Multi-strategy scheduling is deterministic under fixed seed/input.
-- [ ] No order accepted when global or symbol risk limit is exceeded.
+- [x] Multi-strategy scheduling is deterministic under fixed seed/input.
+- [x] No order accepted when global or symbol risk limit is exceeded.
 
 ---
 

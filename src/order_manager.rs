@@ -582,6 +582,13 @@ impl OrderManager {
         None
     }
 
+    /// Return whether a hypothetical fill would exceed symbol exposure limit.
+    ///
+    /// This is intended for validation and tests; it does not mutate state.
+    pub fn would_exceed_symbol_exposure_limit(&self, side: OrderSide, qty: f64) -> bool {
+        self.evaluate_symbol_exposure_limit(side, qty).is_some()
+    }
+
     /// Fetch account balances from Binance and update internal state.
     ///
     /// Returns the map `asset -> free` for assets with non-zero total (spot) or
