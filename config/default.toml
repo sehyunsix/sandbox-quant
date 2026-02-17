@@ -17,6 +17,13 @@ min_ticks_between_signals = 50
 
 [risk]
 global_rate_limit_per_minute = 600
+default_strategy_cooldown_ms = 3000
+default_strategy_max_active_orders = 1
+
+[[risk.strategy_limits]]
+source_tag = "mnl"
+cooldown_ms = 0
+max_active_orders = 2
 
 [ui]
 refresh_rate_ms = 100

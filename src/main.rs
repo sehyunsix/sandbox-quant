@@ -292,7 +292,7 @@ async fn main() -> Result<()> {
             &current_api_symbol,
             current_market,
             strat_config.strategy.order_amount_usdt,
-            strat_config.risk.global_rate_limit_per_minute,
+            &strat_config.risk,
         );
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
@@ -515,7 +515,7 @@ async fn main() -> Result<()> {
                         &api_symbol,
                         current_market,
                         strat_config.strategy.order_amount_usdt,
-                        strat_config.risk.global_rate_limit_per_minute,
+                        &strat_config.risk,
                     );
                     strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
                     let _ = strat_app_tx

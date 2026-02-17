@@ -7,6 +7,7 @@ use chrono::TimeZone;
 
 use crate::binance::rest::BinanceRestClient;
 use crate::binance::types::{BinanceMyTrade, BinanceOrderResponse};
+use crate::config::RiskConfig;
 use crate::model::order::{Fill, Order, OrderSide, OrderStatus, OrderType};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
@@ -77,6 +78,16 @@ pub struct OrderManager {
     balances: HashMap<String, f64>,
     last_price: f64,
     risk_module: RiskModule,
+    default_strategy_cooldown_ms: u64,
+    default_strategy_max_active_orders: u32,
+    strategy_limits_by_tag: HashMap<String, StrategyExecutionLimit>,
+    last_strategy_submit_ms: HashMap<String, u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StrategyExecutionLimit {
+    cooldown_ms: u64,
+    max_active_orders: u32,
 }
 
 fn storage_symbol(symbol: &str, market: MarketKind) -> String {
@@ -293,8 +304,29 @@ impl OrderManager {
         symbol: &str,
         market: MarketKind,
         order_amount_usdt: f64,
-        global_rate_limit_per_minute: u32,
+        risk_config: &RiskConfig,
     ) -> Self {
+        let mut strategy_limits_by_tag = HashMap::new();
+        let default_strategy_cooldown_ms = risk_config.default_strategy_cooldown_ms;
+        let default_strategy_max_active_orders = risk_config.default_strategy_max_active_orders.max(1);
+        for profile in &risk_config.strategy_limits {
+            let source_tag = profile.source_tag.trim().to_ascii_lowercase();
+            if source_tag.is_empty() {
+                continue;
+            }
+            strategy_limits_by_tag.insert(
+                source_tag,
+                StrategyExecutionLimit {
+                    cooldown_ms: profile
+                        .cooldown_ms
+                        .unwrap_or(default_strategy_cooldown_ms),
+                    max_active_orders: profile
+                        .max_active_orders
+                        .unwrap_or(default_strategy_max_active_orders)
+                        .max(1),
+                },
+            );
+        }
         Self {
             rest_client: rest_client.clone(),
             active_orders: HashMap::new(),
@@ -304,7 +336,14 @@ impl OrderManager {
             order_amount_usdt,
             balances: HashMap::new(),
             last_price: 0.0,
-            risk_module: RiskModule::new(rest_client.clone(), global_rate_limit_per_minute),
+            risk_module: RiskModule::new(
+                rest_client.clone(),
+                risk_config.global_rate_limit_per_minute,
+            ),
+            default_strategy_cooldown_ms,
+            default_strategy_max_active_orders,
+            strategy_limits_by_tag,
+            last_strategy_submit_ms: HashMap::new(),
         }
     }
 
@@ -339,6 +378,69 @@ impl OrderManager {
     /// Intended for UI display and observability.
     pub fn rate_budget_snapshot(&self) -> RateBudgetSnapshot {
         self.risk_module.rate_budget_snapshot()
+    }
+
+    fn strategy_limits_for(&self, source_tag: &str) -> StrategyExecutionLimit {
+        self.strategy_limits_by_tag
+            .get(source_tag)
+            .copied()
+            .unwrap_or(StrategyExecutionLimit {
+                cooldown_ms: self.default_strategy_cooldown_ms,
+                max_active_orders: self.default_strategy_max_active_orders,
+            })
+    }
+
+    fn active_order_count_for_source(&self, source_tag: &str) -> u32 {
+        let prefix = format!("sq-{}-", source_tag);
+        self.active_orders
+            .values()
+            .filter(|o| !o.status.is_terminal() && o.client_order_id.starts_with(&prefix))
+            .count() as u32
+    }
+
+    fn evaluate_strategy_limits(
+        &self,
+        source_tag: &str,
+        created_at_ms: u64,
+    ) -> Option<(String, String)> {
+        let limits = self.strategy_limits_for(source_tag);
+        let active_count = self.active_order_count_for_source(source_tag);
+        if active_count >= limits.max_active_orders {
+            return Some((
+                RejectionReasonCode::RiskStrategyMaxActiveOrdersExceeded
+                    .as_str()
+                    .to_string(),
+                format!(
+                    "Strategy '{}' active order limit exceeded (active {}, limit {})",
+                    source_tag, active_count, limits.max_active_orders
+                ),
+            ));
+        }
+
+        if limits.cooldown_ms > 0 {
+            if let Some(last_submit_ms) = self.last_strategy_submit_ms.get(source_tag) {
+                let elapsed = created_at_ms.saturating_sub(*last_submit_ms);
+                if elapsed < limits.cooldown_ms {
+                    let remaining = limits.cooldown_ms - elapsed;
+                    return Some((
+                        RejectionReasonCode::RiskStrategyCooldownActive
+                            .as_str()
+                            .to_string(),
+                        format!(
+                            "Strategy '{}' cooldown active ({}ms remaining)",
+                            source_tag, remaining
+                        ),
+                    ));
+                }
+            }
+        }
+
+        None
+    }
+
+    fn mark_strategy_submit(&mut self, source_tag: &str, created_at_ms: u64) {
+        self.last_strategy_submit_ms
+            .insert(source_tag.to_string(), created_at_ms);
     }
 
     /// Fetch account balances from Binance and update internal state.
@@ -760,9 +862,10 @@ impl OrderManager {
             Signal::Sell => OrderSide::Sell,
             Signal::Hold => return Ok(None),
         };
+        let source_tag = source_tag.to_ascii_lowercase();
         let intent = OrderIntent {
             intent_id: format!("intent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-            source_tag: source_tag.to_ascii_lowercase(),
+            source_tag: source_tag.clone(),
             symbol: self.symbol.clone(),
             market: self.market,
             side,
@@ -770,6 +873,16 @@ impl OrderManager {
             last_price: self.last_price,
             created_at_ms: chrono::Utc::now().timestamp_millis() as u64,
         };
+        if let Some((reason_code, reason)) =
+            self.evaluate_strategy_limits(&intent.source_tag, intent.created_at_ms)
+        {
+            return Ok(Some(OrderUpdate::Rejected {
+                intent_id: intent.intent_id.clone(),
+                client_order_id: "n/a".to_string(),
+                reason_code,
+                reason,
+            }));
+        }
         let decision = self
             .risk_module
             .evaluate_intent(&intent, &self.balances)
@@ -797,6 +910,7 @@ impl OrderManager {
             }));
         }
         let qty = decision.normalized_qty;
+        self.mark_strategy_submit(&intent.source_tag, intent.created_at_ms);
 
         let client_order_id = format!(
             "sq-{}-{}",
@@ -944,8 +1058,36 @@ impl OrderManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_qty_for_history, split_symbol_assets};
-    use crate::model::order::OrderStatus;
+    use super::{display_qty_for_history, split_symbol_assets, OrderManager};
+    use crate::binance::rest::BinanceRestClient;
+    use crate::config::RiskConfig;
+    use crate::model::order::{Order, OrderSide, OrderStatus, OrderType};
+    use std::sync::Arc;
+
+    fn build_test_order_manager() -> OrderManager {
+        let rest = Arc::new(BinanceRestClient::new(
+            "https://demo-api.binance.com",
+            "https://demo-fapi.binance.com",
+            "k",
+            "s",
+            "fk",
+            "fs",
+            5000,
+        ));
+        let risk = RiskConfig {
+            global_rate_limit_per_minute: 600,
+            default_strategy_cooldown_ms: 3_000,
+            default_strategy_max_active_orders: 1,
+            strategy_limits: vec![],
+        };
+        OrderManager::new(
+            rest,
+            "BTCUSDT",
+            crate::order_manager::MarketKind::Spot,
+            10.0,
+            &risk,
+        )
+    }
 
     #[test]
     fn valid_state_transitions() {
@@ -1021,5 +1163,47 @@ mod tests {
             split_symbol_assets("FOOBAR"),
             ("FOOBAR".to_string(), String::new())
         );
+    }
+
+    #[test]
+    fn strategy_limit_rejects_when_active_orders_reach_limit() {
+        let mut mgr = build_test_order_manager();
+        let client_order_id = "sq-cfg-abcdef12".to_string();
+        mgr.active_orders.insert(
+            client_order_id.clone(),
+            Order {
+                client_order_id,
+                server_order_id: None,
+                symbol: "BTCUSDT".to_string(),
+                side: OrderSide::Buy,
+                order_type: OrderType::Market,
+                quantity: 0.1,
+                price: None,
+                status: OrderStatus::Submitted,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                fills: vec![],
+            },
+        );
+
+        let rejected = mgr
+            .evaluate_strategy_limits("cfg", chrono::Utc::now().timestamp_millis() as u64)
+            .expect("must be rejected");
+        assert_eq!(
+            rejected.0,
+            "risk.strategy_max_active_orders_exceeded".to_string()
+        );
+    }
+
+    #[test]
+    fn strategy_limit_rejects_during_cooldown_window() {
+        let mut mgr = build_test_order_manager();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        mgr.mark_strategy_submit("cfg", now);
+
+        let rejected = mgr
+            .evaluate_strategy_limits("cfg", now + 500)
+            .expect("must be rejected");
+        assert_eq!(rejected.0, "risk.strategy_cooldown_active".to_string());
     }
 }

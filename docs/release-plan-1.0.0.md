@@ -54,7 +54,7 @@
 ### Build Checklist
 - [ ] Introduce strategy worker registry (`strategy_id` keyed).
 - [ ] Add per-symbol execution channels and shared risk queue.
-- [ ] Implement per-strategy cooldown / max-active-orders.
+- [x] Implement per-strategy cooldown / max-active-orders.
 - [ ] Implement per-symbol exposure limits (USDT notionals).
 - [ ] Add global API budget accounting by endpoint group.
 - [ ] Persist strategy+symbol scoped stats for restart recovery.
@@ -123,4 +123,3 @@
 - [ ] `1.0.0` migration guide published.
 - [ ] On-call/ops checklist signed off.
 - [ ] Tag + changelog + release artifact verified.
-
