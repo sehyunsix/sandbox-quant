@@ -36,6 +36,11 @@ symbol = "BTCUSDT"
 market = "futures"
 max_exposure_usdt = 150.0
 
+[risk.endpoint_rate_limits]
+orders_per_minute = 240
+account_per_minute = 180
+market_data_per_minute = 360
+
 [ui]
 refresh_rate_ms = 100
 price_history_len = 120

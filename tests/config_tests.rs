@@ -36,6 +36,11 @@ symbol = "BTCUSDT"
 market = "spot"
 max_exposure_usdt = 300.0
 
+[risk.endpoint_rate_limits]
+orders_per_minute = 240
+account_per_minute = 180
+market_data_per_minute = 360
+
 [ui]
 refresh_rate_ms = 100
 price_history_len = 120
@@ -67,6 +72,9 @@ level = "debug"
     assert!(
         (config.risk.symbol_exposure_limits[0].max_exposure_usdt - 300.0).abs() < f64::EPSILON
     );
+    assert_eq!(config.risk.endpoint_rate_limits.orders_per_minute, 240);
+    assert_eq!(config.risk.endpoint_rate_limits.account_per_minute, 180);
+    assert_eq!(config.risk.endpoint_rate_limits.market_data_per_minute, 360);
     assert_eq!(config.ui.price_history_len, 120);
 }
 

@@ -12,7 +12,10 @@ use crate::model::order::{Fill, Order, OrderSide, OrderStatus, OrderType};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_store;
-use crate::risk_module::{OrderIntent, RateBudgetSnapshot, RejectionReasonCode, RiskModule};
+use crate::risk_module::{
+    ApiEndpointGroup, EndpointRateLimits, OrderIntent, RateBudgetSnapshot, RejectionReasonCode,
+    RiskModule,
+};
 
 pub use crate::risk_module::MarketKind;
 
@@ -380,6 +383,13 @@ impl OrderManager {
             risk_module: RiskModule::new(
                 rest_client.clone(),
                 risk_config.global_rate_limit_per_minute,
+                EndpointRateLimits {
+                    orders_per_minute: risk_config.endpoint_rate_limits.orders_per_minute,
+                    account_per_minute: risk_config.endpoint_rate_limits.account_per_minute,
+                    market_data_per_minute: risk_config
+                        .endpoint_rate_limits
+                        .market_data_per_minute,
+                },
             ),
             default_strategy_cooldown_ms,
             default_strategy_max_active_orders,
@@ -546,6 +556,14 @@ impl OrderManager {
     /// # Caution
     /// Network/API failures return `Err(_)` and leave previous cache untouched.
     pub async fn refresh_balances(&mut self) -> Result<HashMap<String, f64>> {
+        if !self
+            .risk_module
+            .reserve_endpoint_budget(ApiEndpointGroup::Account)
+        {
+            return Err(anyhow::anyhow!(
+                "Account endpoint budget exceeded; try again after reset"
+            ));
+        }
         if self.market == MarketKind::Futures {
             let account = self.rest_client.get_futures_account().await?;
             self.balances.clear();
@@ -576,7 +594,15 @@ impl OrderManager {
     ///
     /// # Caution
     /// `trade_data_complete = false` means derived PnL may be partial.
-    pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
+    pub async fn refresh_order_history(&mut self, limit: usize) -> Result<OrderHistorySnapshot> {
+        if !self
+            .risk_module
+            .reserve_endpoint_budget(ApiEndpointGroup::Orders)
+        {
+            return Err(anyhow::anyhow!(
+                "Orders endpoint budget exceeded; try again after reset"
+            ));
+        }
         if self.market == MarketKind::Futures {
             let fetch_started = Instant::now();
             let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -1000,6 +1026,19 @@ impl OrderManager {
                 reason: "Global rate budget exceeded; try again after reset".to_string(),
             }));
         }
+        if !self
+            .risk_module
+            .reserve_endpoint_budget(ApiEndpointGroup::Orders)
+        {
+            return Ok(Some(OrderUpdate::Rejected {
+                intent_id: intent.intent_id.clone(),
+                client_order_id: "n/a".to_string(),
+                reason_code: RejectionReasonCode::RateEndpointBudgetExceeded
+                    .as_str()
+                    .to_string(),
+                reason: "Orders endpoint budget exceeded; try again after reset".to_string(),
+            }));
+        }
         let qty = decision.normalized_qty;
         if let Some((reason_code, reason)) = self.evaluate_symbol_exposure_limit(side, qty) {
             return Ok(Some(OrderUpdate::Rejected {
@@ -1159,7 +1198,7 @@ impl OrderManager {
 mod tests {
     use super::{display_qty_for_history, split_symbol_assets, OrderManager};
     use crate::binance::rest::BinanceRestClient;
-    use crate::config::{RiskConfig, SymbolExposureLimitConfig};
+    use crate::config::{EndpointRateLimitConfig, RiskConfig, SymbolExposureLimitConfig};
     use crate::model::order::{Order, OrderSide, OrderStatus, OrderType};
     use std::sync::Arc;
 
@@ -1184,6 +1223,11 @@ mod tests {
                 market: Some("spot".to_string()),
                 max_exposure_usdt: 150.0,
             }],
+            endpoint_rate_limits: EndpointRateLimitConfig {
+                orders_per_minute: 240,
+                account_per_minute: 180,
+                market_data_per_minute: 360,
+            },
         };
         OrderManager::new(
             rest,
