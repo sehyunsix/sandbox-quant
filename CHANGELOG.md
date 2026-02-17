@@ -1,3 +1,7 @@
+## v0.2.9 - 2026-02-17
+
+- docs: expand risk/order manager docstrings with usage and cautions (1dae5af)
+
 ## v0.2.8 - 2026-02-17
 
 - docs: add browser docs portal and enrich risk/order docstrings (73f069f)
