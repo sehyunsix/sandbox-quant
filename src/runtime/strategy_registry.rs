@@ -91,6 +91,8 @@ mod tests {
     }
 
     #[test]
+    /// Verifies symbol-based routing: only workers registered for the same symbol
+    /// should receive the dispatched tick.
     fn dispatches_only_to_matching_symbol_workers() {
         let mut registry = StrategyWorkerRegistry::default();
         let (btc_tx, mut btc_rx) = mpsc::channel(4);
@@ -104,6 +106,8 @@ mod tests {
     }
 
     #[test]
+    /// Verifies registry cleanup: once a worker is unregistered it must no
+    /// longer receive ticks for its former symbol.
     fn unregister_removes_worker_from_dispatch_path() {
         let mut registry = StrategyWorkerRegistry::default();
         let (btc_tx, mut btc_rx) = mpsc::channel(4);
