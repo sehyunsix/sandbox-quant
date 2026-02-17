@@ -1,3 +1,7 @@
+## v0.2.5 - 2026-02-17
+
+- ci(release): auto-update changelog history on version bump (703093f)
+
 ## v0.2.2 - 2026-02-17
 
 - chore(release): v0.2.2
