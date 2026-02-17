@@ -1,3 +1,9 @@
+## v0.4.0 - 2026-02-17
+
+- feat(ui): add focus drill-down popup with state persistence (f452396)
+- feat(ui): add V2 grid popup with risk-rate heatmap and rejection stream (6bf2653)
+- feat(ui): add AppStateV2 scaffold with legacy mapping tests (1bb8de2)
+
 ## v0.3.0 - 2026-02-17
 
 - release correction: normalize accidental v1.0.0 bump to v0.3.0
