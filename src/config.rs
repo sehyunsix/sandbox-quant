@@ -6,6 +6,8 @@ use std::path::Path;
 pub struct Config {
     pub binance: BinanceConfig,
     pub strategy: StrategyConfig,
+    #[serde(default)]
+    pub risk: RiskConfig,
     pub ui: UiConfig,
     pub logging: LoggingConfig,
 }
@@ -44,6 +46,20 @@ pub struct StrategyConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RiskConfig {
+    #[serde(default = "default_global_rate_limit_per_minute")]
+    pub global_rate_limit_per_minute: u32,
+}
+
+impl Default for RiskConfig {
+    fn default() -> Self {
+        Self {
+            global_rate_limit_per_minute: default_global_rate_limit_per_minute(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct UiConfig {
     pub refresh_rate_ms: u64,
     pub price_history_len: usize,
@@ -60,6 +76,10 @@ fn default_futures_rest_base_url() -> String {
 
 fn default_futures_ws_base_url() -> String {
     "wss://fstream.binancefuture.com/ws".to_string()
+}
+
+fn default_global_rate_limit_per_minute() -> u32 {
+    600
 }
 
 /// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.
@@ -184,6 +204,9 @@ slow_period = 30
 order_amount_usdt = 10.0
 min_ticks_between_signals = 50
 
+[risk]
+global_rate_limit_per_minute = 600
+
 [ui]
 refresh_rate_ms = 100
 price_history_len = 120
@@ -198,6 +221,7 @@ level = "debug"
         assert_eq!(config.strategy.fast_period, 10);
         assert_eq!(config.strategy.slow_period, 30);
         assert!((config.strategy.order_amount_usdt - 10.0).abs() < f64::EPSILON);
+        assert_eq!(config.risk.global_rate_limit_per_minute, 600);
         assert_eq!(config.ui.price_history_len, 120);
     }
 
