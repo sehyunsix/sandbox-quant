@@ -24,11 +24,17 @@ min_ticks_between_signals = 50
 global_rate_limit_per_minute = 600
 default_strategy_cooldown_ms = 3000
 default_strategy_max_active_orders = 1
+default_symbol_max_exposure_usdt = 200.0
 
 [[risk.strategy_limits]]
 source_tag = "mnl"
 cooldown_ms = 0
 max_active_orders = 2
+
+[[risk.symbol_exposure_limits]]
+symbol = "BTCUSDT"
+market = "spot"
+max_exposure_usdt = 300.0
 
 [ui]
 refresh_rate_ms = 100
@@ -47,10 +53,20 @@ level = "debug"
     assert_eq!(config.risk.global_rate_limit_per_minute, 600);
     assert_eq!(config.risk.default_strategy_cooldown_ms, 3000);
     assert_eq!(config.risk.default_strategy_max_active_orders, 1);
+    assert!((config.risk.default_symbol_max_exposure_usdt - 200.0).abs() < f64::EPSILON);
     assert_eq!(config.risk.strategy_limits.len(), 1);
     assert_eq!(config.risk.strategy_limits[0].source_tag, "mnl");
     assert_eq!(config.risk.strategy_limits[0].cooldown_ms, Some(0));
     assert_eq!(config.risk.strategy_limits[0].max_active_orders, Some(2));
+    assert_eq!(config.risk.symbol_exposure_limits.len(), 1);
+    assert_eq!(config.risk.symbol_exposure_limits[0].symbol, "BTCUSDT");
+    assert_eq!(
+        config.risk.symbol_exposure_limits[0].market.as_deref(),
+        Some("spot")
+    );
+    assert!(
+        (config.risk.symbol_exposure_limits[0].max_exposure_usdt - 300.0).abs() < f64::EPSILON
+    );
     assert_eq!(config.ui.price_history_len, 120);
 }
 

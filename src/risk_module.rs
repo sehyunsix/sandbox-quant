@@ -28,6 +28,7 @@ pub enum RejectionReasonCode {
     RiskInsufficientBaseBalance,
     RiskStrategyCooldownActive,
     RiskStrategyMaxActiveOrdersExceeded,
+    RiskSymbolExposureLimitExceeded,
     RateGlobalBudgetExceeded,
     BrokerSubmitFailed,
     RiskUnknown,
@@ -47,6 +48,7 @@ impl RejectionReasonCode {
             Self::RiskStrategyMaxActiveOrdersExceeded => {
                 "risk.strategy_max_active_orders_exceeded"
             }
+            Self::RiskSymbolExposureLimitExceeded => "risk.symbol_exposure_limit_exceeded",
             Self::RateGlobalBudgetExceeded => "rate.global_budget_exceeded",
             Self::BrokerSubmitFailed => "broker.submit_failed",
             Self::RiskUnknown => "risk.unknown",
