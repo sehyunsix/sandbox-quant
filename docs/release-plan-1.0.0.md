@@ -79,16 +79,16 @@
 - Add dynamic pane resizing with terminal compatibility fallbacks.
 
 ### Build Checklist
-- [ ] Create `AppStateV2` (`portfolio`, `assets`, `strategies`, `matrix`, `focus`).
-- [ ] Implement `Asset Table`, `Strategy Table`, `Risk/Rate Heatmap`, `Rejection Stream`.
-- [ ] Implement Focus drill-down reusing chart/position/history widgets.
+- [x] Create `AppStateV2` (`portfolio`, `assets`, `strategies`, `matrix`, `focus`).
+- [x] Implement `Asset Table`, `Strategy Table`, `Risk/Rate Heatmap`, `Rejection Stream`.
+- [x] Implement Focus drill-down reusing chart/position/history widgets.
 - [ ] Add resize controls (`Ctrl+D`, fallback `[`, `]`, resize mode).
 - [ ] Add keymap override config (`ui.keymap.*`).
 - [ ] Add panel state persistence across redraws/symbol switches.
 
 ### Validation Checklist
 - [ ] Grid refresh remains stable with high event throughput.
-- [ ] Focus enter/exit works without state loss.
+- [x] Focus enter/exit works without state loss.
 - [ ] Resize controls work across supported terminals (fallback verified).
 - [ ] `cargo test -q` passes.
 

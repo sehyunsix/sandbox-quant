@@ -471,6 +471,21 @@ impl OrderManager {
         self.risk_module.rate_budget_snapshot()
     }
 
+    pub fn orders_rate_budget_snapshot(&self) -> RateBudgetSnapshot {
+        self.risk_module
+            .endpoint_budget_snapshot(ApiEndpointGroup::Orders)
+    }
+
+    pub fn account_rate_budget_snapshot(&self) -> RateBudgetSnapshot {
+        self.risk_module
+            .endpoint_budget_snapshot(ApiEndpointGroup::Account)
+    }
+
+    pub fn market_data_rate_budget_snapshot(&self) -> RateBudgetSnapshot {
+        self.risk_module
+            .endpoint_budget_snapshot(ApiEndpointGroup::MarketData)
+    }
+
     fn strategy_limits_for(&self, source_tag: &str) -> StrategyExecutionLimit {
         self.strategy_limits_by_tag
             .get(source_tag)
