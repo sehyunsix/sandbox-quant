@@ -1,3 +1,10 @@
+## v0.2.16 - 2026-02-17
+
+- test(risk): verify rejection when global or symbol limits are exceeded (6d0cc37)
+- test(runtime): add concurrent limit and 10x3 dispatch validations (095a1ea)
+- test(risk): add endpoint/global budget throttling coverage (e779c0a)
+- feat(runtime): make worker dispatch deterministic and move tests to tests/ (0290ad2)
+
 ## v0.2.15 - 2026-02-17
 
 - docs(agent): require tests in tests/ and for every feature (ac96c16)
