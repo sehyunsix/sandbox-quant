@@ -57,7 +57,7 @@
 - [x] Implement per-strategy cooldown / max-active-orders.
 - [x] Implement per-symbol exposure limits (USDT notionals).
 - [x] Add global API budget accounting by endpoint group.
-- [ ] Persist strategy+symbol scoped stats for restart recovery.
+- [x] Persist strategy+symbol scoped stats for restart recovery.
 
 ### Validation Checklist
 - [ ] Simulated concurrent intents do not violate global limits.

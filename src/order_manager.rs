@@ -310,6 +310,44 @@ fn compute_trade_stats_by_source(
     stats_by_source
 }
 
+fn to_persistable_stats_map(
+    strategy_stats: &HashMap<String, OrderHistoryStats>,
+) -> HashMap<String, order_store::StrategyScopedStats> {
+    strategy_stats
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                order_store::StrategyScopedStats {
+                    trade_count: v.trade_count,
+                    win_count: v.win_count,
+                    lose_count: v.lose_count,
+                    realized_pnl: v.realized_pnl,
+                },
+            )
+        })
+        .collect()
+}
+
+fn from_persisted_stats_map(
+    persisted: HashMap<String, order_store::StrategyScopedStats>,
+) -> HashMap<String, OrderHistoryStats> {
+    persisted
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k,
+                OrderHistoryStats {
+                    trade_count: v.trade_count,
+                    win_count: v.win_count,
+                    lose_count: v.lose_count,
+                    realized_pnl: v.realized_pnl,
+                },
+            )
+        })
+        .collect()
+}
+
 impl OrderManager {
     /// Create a new order manager bound to a single symbol/market context.
     ///
@@ -688,10 +726,17 @@ impl OrderManager {
             let estimated_total_pnl_usdt = Some(stats.realized_pnl);
             let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
             let latest_trade_event = trades.iter().map(|t| t.time).max();
+            let strategy_stats = match order_store::load_strategy_symbol_stats(&storage_key) {
+                Ok(persisted) => from_persisted_stats_map(persisted),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to load persisted strategy stats (futures)");
+                    HashMap::new()
+                }
+            };
             return Ok(OrderHistorySnapshot {
                 rows: history,
                 stats,
-                strategy_stats: HashMap::new(),
+                strategy_stats,
                 fills,
                 open_qty: 0.0,
                 open_entry_price: 0.0,
@@ -808,8 +853,22 @@ impl OrderManager {
         for (order_id, source) in persisted_source_by_order_id {
             order_source_by_id.entry(order_id).or_insert(source);
         }
-        let strategy_stats =
+        let mut strategy_stats =
             compute_trade_stats_by_source(trades.clone(), &order_source_by_id, &self.symbol);
+        let persisted_stats = to_persistable_stats_map(&strategy_stats);
+        if let Err(e) = order_store::persist_strategy_symbol_stats(&storage_key, &persisted_stats) {
+            tracing::warn!(error = %e, "Failed to persist strategy+symbol scoped stats");
+        }
+        if strategy_stats.is_empty() {
+            match order_store::load_strategy_symbol_stats(&storage_key) {
+                Ok(persisted) => {
+                    strategy_stats = from_persisted_stats_map(persisted);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to load persisted strategy+symbol stats");
+                }
+            }
+        }
 
         let mut history = Vec::new();
         let mut fills = Vec::new();

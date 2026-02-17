@@ -18,6 +18,14 @@ pub struct DailyRealizedReturn {
     pub realized_return_pct: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct StrategyScopedStats {
+    pub trade_count: u32,
+    pub win_count: u32,
+    pub lose_count: u32,
+    pub realized_pnl: f64,
+}
+
 fn ensure_trade_schema(conn: &Connection) -> Result<()> {
     for ddl in [
         "ALTER TABLE order_history_trades ADD COLUMN commission REAL NOT NULL DEFAULT 0.0",
@@ -32,6 +40,94 @@ fn ensure_trade_schema(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn ensure_strategy_stats_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS strategy_symbol_stats (
+            symbol TEXT NOT NULL,
+            source TEXT NOT NULL,
+            trade_count INTEGER NOT NULL,
+            win_count INTEGER NOT NULL,
+            lose_count INTEGER NOT NULL,
+            realized_pnl REAL NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY(symbol, source)
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
+pub fn persist_strategy_symbol_stats(
+    symbol: &str,
+    stats: &HashMap<String, StrategyScopedStats>,
+) -> Result<()> {
+    std::fs::create_dir_all("data")?;
+    let mut conn = Connection::open("data/strategy_stats.sqlite")?;
+    ensure_strategy_stats_schema(&conn)?;
+    let tx = conn.transaction()?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    for (source, row) in stats {
+        tx.execute(
+            r#"
+            INSERT INTO strategy_symbol_stats (
+                symbol, source, trade_count, win_count, lose_count, realized_pnl, updated_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(symbol, source) DO UPDATE SET
+                trade_count = excluded.trade_count,
+                win_count = excluded.win_count,
+                lose_count = excluded.lose_count,
+                realized_pnl = excluded.realized_pnl,
+                updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                symbol,
+                source,
+                row.trade_count as i64,
+                row.win_count as i64,
+                row.lose_count as i64,
+                row.realized_pnl,
+                now_ms,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn load_strategy_symbol_stats(symbol: &str) -> Result<HashMap<String, StrategyScopedStats>> {
+    std::fs::create_dir_all("data")?;
+    let conn = Connection::open("data/strategy_stats.sqlite")?;
+    ensure_strategy_stats_schema(&conn)?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT source, trade_count, win_count, lose_count, realized_pnl
+        FROM strategy_symbol_stats
+        WHERE symbol = ?1
+        "#,
+    )?;
+
+    let rows = stmt.query_map([symbol], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            StrategyScopedStats {
+                trade_count: row.get::<_, i64>(1)?.max(0) as u32,
+                win_count: row.get::<_, i64>(2)?.max(0) as u32,
+                lose_count: row.get::<_, i64>(3)?.max(0) as u32,
+                realized_pnl: row.get::<_, f64>(4)?,
+            },
+        ))
+    })?;
+
+    let mut out = HashMap::new();
+    for row in rows {
+        let (source, stats) = row?;
+        out.insert(source, stats);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
