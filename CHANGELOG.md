@@ -1,3 +1,7 @@
+## v0.2.11 - 2026-02-17
+
+- chore(ci): harden cargo publish workflow (059f2a8)
+
 ## v0.2.10 - 2026-02-17
 
 - chore: adopt MIT license (b88e81b)
