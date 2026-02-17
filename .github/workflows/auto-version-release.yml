@@ -4,13 +4,20 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
   bump-release:
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    if: ${{ github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message || '', 'chore(release):') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -97,3 +104,48 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
+
+  publish-crate:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CRATE_VERSION="$(awk -F '\"' '/^version = \"/ {print $2; exit}' Cargo.toml)"
+          if [ "${TAG_VERSION}" != "${CRATE_VERSION}" ]; then
+            echo "Tag version (${TAG_VERSION}) does not match Cargo.toml (${CRATE_VERSION})."
+            exit 1
+          fi
+
+      - name: Skip if version already published
+        id: exists
+        run: |
+          set -euo pipefail
+          CRATE_NAME="$(awk -F '\"' '/^name = \"/ {print $2; exit}' Cargo.toml)"
+          CRATE_VERSION="$(awk -F '\"' '/^version = \"/ {print $2; exit}' Cargo.toml)"
+          if curl -fsSL "https://crates.io/api/v1/crates/${CRATE_NAME}/${CRATE_VERSION}" > /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Crate ${CRATE_NAME} ${CRATE_VERSION} already exists on crates.io. Skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cargo publish dry run
+        if: ${{ steps.exists.outputs.exists != 'true' }}
+        run: cargo publish --dry-run
+
+      - name: Publish to crates.io
+        if: ${{ steps.exists.outputs.exists != 'true' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
