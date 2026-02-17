@@ -66,3 +66,18 @@ fn app_state_preserves_focus_state_across_events() {
         Some("MA(Fast 5/20)")
     );
 }
+
+#[test]
+/// Verifies fallback focus reconstruction:
+/// if focus values are cleared, the next event-driven rebuild should restore
+/// current legacy symbol/strategy as drill-down focus defaults.
+fn app_state_restores_default_focus_when_missing() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    s.v2_state.focus.symbol = None;
+    s.v2_state.focus.strategy_id = None;
+
+    s.apply(AppEvent::LogMessage("refresh".to_string()));
+
+    assert_eq!(s.v2_state.focus.symbol.as_deref(), Some("BTCUSDT"));
+    assert_eq!(s.v2_state.focus.strategy_id.as_deref(), Some("MA(Config)"));
+}
