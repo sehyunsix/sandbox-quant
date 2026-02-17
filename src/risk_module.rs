@@ -28,7 +28,9 @@ pub enum RejectionReasonCode {
     RiskInsufficientBaseBalance,
     RiskStrategyCooldownActive,
     RiskStrategyMaxActiveOrdersExceeded,
+    RiskSymbolExposureLimitExceeded,
     RateGlobalBudgetExceeded,
+    RateEndpointBudgetExceeded,
     BrokerSubmitFailed,
     RiskUnknown,
 }
@@ -47,11 +49,37 @@ impl RejectionReasonCode {
             Self::RiskStrategyMaxActiveOrdersExceeded => {
                 "risk.strategy_max_active_orders_exceeded"
             }
+            Self::RiskSymbolExposureLimitExceeded => "risk.symbol_exposure_limit_exceeded",
             Self::RateGlobalBudgetExceeded => "rate.global_budget_exceeded",
+            Self::RateEndpointBudgetExceeded => "rate.endpoint_budget_exceeded",
             Self::BrokerSubmitFailed => "broker.submit_failed",
             Self::RiskUnknown => "risk.unknown",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiEndpointGroup {
+    Orders,
+    Account,
+    MarketData,
+}
+
+impl ApiEndpointGroup {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Orders => "orders",
+            Self::Account => "account",
+            Self::MarketData => "market_data",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EndpointRateLimits {
+    pub orders_per_minute: u32,
+    pub account_per_minute: u32,
+    pub market_data_per_minute: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +138,12 @@ pub struct RiskModule {
     rate_budget_window_started_at: Instant,
     rate_budget_used: u32,
     rate_budget_limit_per_minute: u32,
+    endpoint_budget_used_orders: u32,
+    endpoint_budget_used_account: u32,
+    endpoint_budget_used_market_data: u32,
+    endpoint_budget_limit_orders_per_minute: u32,
+    endpoint_budget_limit_account_per_minute: u32,
+    endpoint_budget_limit_market_data_per_minute: u32,
 }
 
 impl RiskModule {
@@ -117,12 +151,24 @@ impl RiskModule {
     ///
     /// `global_rate_limit_per_minute` is clamped to at least `1` to prevent an
     /// always-rejecting configuration.
-    pub fn new(rest_client: Arc<BinanceRestClient>, global_rate_limit_per_minute: u32) -> Self {
+    pub fn new(
+        rest_client: Arc<BinanceRestClient>,
+        global_rate_limit_per_minute: u32,
+        endpoint_limits: EndpointRateLimits,
+    ) -> Self {
         Self {
             rest_client,
             rate_budget_window_started_at: Instant::now(),
             rate_budget_used: 0,
             rate_budget_limit_per_minute: global_rate_limit_per_minute.max(1),
+            endpoint_budget_used_orders: 0,
+            endpoint_budget_used_account: 0,
+            endpoint_budget_used_market_data: 0,
+            endpoint_budget_limit_orders_per_minute: endpoint_limits.orders_per_minute.max(1),
+            endpoint_budget_limit_account_per_minute: endpoint_limits.account_per_minute.max(1),
+            endpoint_budget_limit_market_data_per_minute: endpoint_limits
+                .market_data_per_minute
+                .max(1),
         }
     }
 
@@ -154,15 +200,77 @@ impl RiskModule {
     /// Do not call this speculatively and then skip submission; doing so
     /// reduces usable throughput and can cause unnecessary rejections.
     pub fn reserve_rate_budget(&mut self) -> bool {
-        if self.rate_budget_window_started_at.elapsed() >= Duration::from_secs(60) {
-            self.rate_budget_window_started_at = Instant::now();
-            self.rate_budget_used = 0;
-        }
+        self.roll_budget_window_if_needed();
         if self.rate_budget_used >= self.rate_budget_limit_per_minute {
             return false;
         }
         self.rate_budget_used += 1;
         true
+    }
+
+    fn roll_budget_window_if_needed(&mut self) {
+        if self.rate_budget_window_started_at.elapsed() < Duration::from_secs(60) {
+            return;
+        }
+        self.rate_budget_window_started_at = Instant::now();
+        self.rate_budget_used = 0;
+        self.endpoint_budget_used_orders = 0;
+        self.endpoint_budget_used_account = 0;
+        self.endpoint_budget_used_market_data = 0;
+    }
+
+    pub fn reserve_endpoint_budget(&mut self, group: ApiEndpointGroup) -> bool {
+        self.roll_budget_window_if_needed();
+        match group {
+            ApiEndpointGroup::Orders => {
+                if self.endpoint_budget_used_orders >= self.endpoint_budget_limit_orders_per_minute
+                {
+                    return false;
+                }
+                self.endpoint_budget_used_orders += 1;
+            }
+            ApiEndpointGroup::Account => {
+                if self.endpoint_budget_used_account
+                    >= self.endpoint_budget_limit_account_per_minute
+                {
+                    return false;
+                }
+                self.endpoint_budget_used_account += 1;
+            }
+            ApiEndpointGroup::MarketData => {
+                if self.endpoint_budget_used_market_data
+                    >= self.endpoint_budget_limit_market_data_per_minute
+                {
+                    return false;
+                }
+                self.endpoint_budget_used_market_data += 1;
+            }
+        }
+        true
+    }
+
+    pub fn endpoint_budget_snapshot(&self, group: ApiEndpointGroup) -> RateBudgetSnapshot {
+        let elapsed = self.rate_budget_window_started_at.elapsed();
+        let reset = Duration::from_secs(60).saturating_sub(elapsed);
+        let (used, limit) = match group {
+            ApiEndpointGroup::Orders => (
+                self.endpoint_budget_used_orders,
+                self.endpoint_budget_limit_orders_per_minute,
+            ),
+            ApiEndpointGroup::Account => (
+                self.endpoint_budget_used_account,
+                self.endpoint_budget_limit_account_per_minute,
+            ),
+            ApiEndpointGroup::MarketData => (
+                self.endpoint_budget_used_market_data,
+                self.endpoint_budget_limit_market_data_per_minute,
+            ),
+        };
+        RateBudgetSnapshot {
+            used,
+            limit,
+            reset_in_ms: reset.as_millis() as u64,
+        }
     }
 
     /// Evaluate an order intent against risk rules and exchange filters.

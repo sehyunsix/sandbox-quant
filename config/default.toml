@@ -19,11 +19,27 @@ min_ticks_between_signals = 50
 global_rate_limit_per_minute = 600
 default_strategy_cooldown_ms = 3000
 default_strategy_max_active_orders = 1
+default_symbol_max_exposure_usdt = 200.0
 
 [[risk.strategy_limits]]
 source_tag = "mnl"
 cooldown_ms = 0
 max_active_orders = 2
+
+[[risk.symbol_exposure_limits]]
+symbol = "BTCUSDT"
+market = "spot"
+max_exposure_usdt = 300.0
+
+[[risk.symbol_exposure_limits]]
+symbol = "BTCUSDT"
+market = "futures"
+max_exposure_usdt = 150.0
+
+[risk.endpoint_rate_limits]
+orders_per_minute = 240
+account_per_minute = 180
+market_data_per_minute = 360
 
 [ui]
 refresh_rate_ms = 100

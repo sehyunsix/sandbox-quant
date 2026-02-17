@@ -4,6 +4,7 @@ use sandbox_quant::strategy::ma_crossover::MaCrossover;
 
 fn tick(price: f64) -> Tick {
     Tick {
+        symbol: "BTCUSDT".to_string(),
         price,
         qty: 1.0,
         timestamp_ms: 0,

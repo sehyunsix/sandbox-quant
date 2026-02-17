@@ -53,8 +53,14 @@ pub struct RiskConfig {
     pub default_strategy_cooldown_ms: u64,
     #[serde(default = "default_strategy_max_active_orders")]
     pub default_strategy_max_active_orders: u32,
+    #[serde(default = "default_symbol_max_exposure_usdt")]
+    pub default_symbol_max_exposure_usdt: f64,
     #[serde(default)]
     pub strategy_limits: Vec<StrategyLimitConfig>,
+    #[serde(default)]
+    pub symbol_exposure_limits: Vec<SymbolExposureLimitConfig>,
+    #[serde(default)]
+    pub endpoint_rate_limits: EndpointRateLimitConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,13 +70,43 @@ pub struct StrategyLimitConfig {
     pub max_active_orders: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct SymbolExposureLimitConfig {
+    pub symbol: String,
+    pub market: Option<String>,
+    pub max_exposure_usdt: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EndpointRateLimitConfig {
+    #[serde(default = "default_endpoint_orders_limit_per_minute")]
+    pub orders_per_minute: u32,
+    #[serde(default = "default_endpoint_account_limit_per_minute")]
+    pub account_per_minute: u32,
+    #[serde(default = "default_endpoint_market_data_limit_per_minute")]
+    pub market_data_per_minute: u32,
+}
+
+impl Default for EndpointRateLimitConfig {
+    fn default() -> Self {
+        Self {
+            orders_per_minute: default_endpoint_orders_limit_per_minute(),
+            account_per_minute: default_endpoint_account_limit_per_minute(),
+            market_data_per_minute: default_endpoint_market_data_limit_per_minute(),
+        }
+    }
+}
+
 impl Default for RiskConfig {
     fn default() -> Self {
         Self {
             global_rate_limit_per_minute: default_global_rate_limit_per_minute(),
             default_strategy_cooldown_ms: default_strategy_cooldown_ms(),
             default_strategy_max_active_orders: default_strategy_max_active_orders(),
+            default_symbol_max_exposure_usdt: default_symbol_max_exposure_usdt(),
             strategy_limits: Vec::new(),
+            symbol_exposure_limits: Vec::new(),
+            endpoint_rate_limits: EndpointRateLimitConfig::default(),
         }
     }
 }
@@ -104,6 +140,22 @@ fn default_strategy_cooldown_ms() -> u64 {
 
 fn default_strategy_max_active_orders() -> u32 {
     1
+}
+
+fn default_symbol_max_exposure_usdt() -> f64 {
+    200.0
+}
+
+fn default_endpoint_orders_limit_per_minute() -> u32 {
+    240
+}
+
+fn default_endpoint_account_limit_per_minute() -> u32 {
+    180
+}
+
+fn default_endpoint_market_data_limit_per_minute() -> u32 {
+    360
 }
 
 /// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.

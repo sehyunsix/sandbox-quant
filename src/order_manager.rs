@@ -12,7 +12,10 @@ use crate::model::order::{Fill, Order, OrderSide, OrderStatus, OrderType};
 use crate::model::position::Position;
 use crate::model::signal::Signal;
 use crate::order_store;
-use crate::risk_module::{OrderIntent, RateBudgetSnapshot, RejectionReasonCode, RiskModule};
+use crate::risk_module::{
+    ApiEndpointGroup, EndpointRateLimits, OrderIntent, RateBudgetSnapshot, RejectionReasonCode,
+    RiskModule,
+};
 
 pub use crate::risk_module::MarketKind;
 
@@ -82,12 +85,29 @@ pub struct OrderManager {
     default_strategy_max_active_orders: u32,
     strategy_limits_by_tag: HashMap<String, StrategyExecutionLimit>,
     last_strategy_submit_ms: HashMap<String, u64>,
+    default_symbol_max_exposure_usdt: f64,
+    symbol_exposure_limit_by_key: HashMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct StrategyExecutionLimit {
     cooldown_ms: u64,
     max_active_orders: u32,
+}
+
+fn normalize_market_label(market: MarketKind) -> &'static str {
+    match market {
+        MarketKind::Spot => "spot",
+        MarketKind::Futures => "futures",
+    }
+}
+
+fn symbol_limit_key(symbol: &str, market: MarketKind) -> String {
+    format!(
+        "{}:{}",
+        symbol.trim().to_ascii_uppercase(),
+        normalize_market_label(market)
+    )
 }
 
 fn storage_symbol(symbol: &str, market: MarketKind) -> String {
@@ -290,6 +310,44 @@ fn compute_trade_stats_by_source(
     stats_by_source
 }
 
+fn to_persistable_stats_map(
+    strategy_stats: &HashMap<String, OrderHistoryStats>,
+) -> HashMap<String, order_store::StrategyScopedStats> {
+    strategy_stats
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                order_store::StrategyScopedStats {
+                    trade_count: v.trade_count,
+                    win_count: v.win_count,
+                    lose_count: v.lose_count,
+                    realized_pnl: v.realized_pnl,
+                },
+            )
+        })
+        .collect()
+}
+
+fn from_persisted_stats_map(
+    persisted: HashMap<String, order_store::StrategyScopedStats>,
+) -> HashMap<String, OrderHistoryStats> {
+    persisted
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k,
+                OrderHistoryStats {
+                    trade_count: v.trade_count,
+                    win_count: v.win_count,
+                    lose_count: v.lose_count,
+                    realized_pnl: v.realized_pnl,
+                },
+            )
+        })
+        .collect()
+}
+
 impl OrderManager {
     /// Create a new order manager bound to a single symbol/market context.
     ///
@@ -307,8 +365,10 @@ impl OrderManager {
         risk_config: &RiskConfig,
     ) -> Self {
         let mut strategy_limits_by_tag = HashMap::new();
+        let mut symbol_exposure_limit_by_key = HashMap::new();
         let default_strategy_cooldown_ms = risk_config.default_strategy_cooldown_ms;
         let default_strategy_max_active_orders = risk_config.default_strategy_max_active_orders.max(1);
+        let default_symbol_max_exposure_usdt = risk_config.default_symbol_max_exposure_usdt.max(0.0);
         for profile in &risk_config.strategy_limits {
             let source_tag = profile.source_tag.trim().to_ascii_lowercase();
             if source_tag.is_empty() {
@@ -327,6 +387,28 @@ impl OrderManager {
                 },
             );
         }
+        for limit in &risk_config.symbol_exposure_limits {
+            let symbol = limit.symbol.trim().to_ascii_uppercase();
+            if symbol.is_empty() {
+                continue;
+            }
+            let market = match limit
+                .market
+                .as_deref()
+                .unwrap_or("spot")
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "spot" => MarketKind::Spot,
+                "futures" | "future" | "fut" => MarketKind::Futures,
+                _ => continue,
+            };
+            symbol_exposure_limit_by_key.insert(
+                symbol_limit_key(&symbol, market),
+                limit.max_exposure_usdt.max(0.0),
+            );
+        }
         Self {
             rest_client: rest_client.clone(),
             active_orders: HashMap::new(),
@@ -339,11 +421,20 @@ impl OrderManager {
             risk_module: RiskModule::new(
                 rest_client.clone(),
                 risk_config.global_rate_limit_per_minute,
+                EndpointRateLimits {
+                    orders_per_minute: risk_config.endpoint_rate_limits.orders_per_minute,
+                    account_per_minute: risk_config.endpoint_rate_limits.account_per_minute,
+                    market_data_per_minute: risk_config
+                        .endpoint_rate_limits
+                        .market_data_per_minute,
+                },
             ),
             default_strategy_cooldown_ms,
             default_strategy_max_active_orders,
             strategy_limits_by_tag,
             last_strategy_submit_ms: HashMap::new(),
+            default_symbol_max_exposure_usdt,
+            symbol_exposure_limit_by_key,
         }
     }
 
@@ -443,6 +534,54 @@ impl OrderManager {
             .insert(source_tag.to_string(), created_at_ms);
     }
 
+    fn max_symbol_exposure_usdt(&self) -> f64 {
+        self.symbol_exposure_limit_by_key
+            .get(&symbol_limit_key(&self.symbol, self.market))
+            .copied()
+            .unwrap_or(self.default_symbol_max_exposure_usdt)
+    }
+
+    fn projected_notional_after_fill(&self, side: OrderSide, qty: f64) -> (f64, f64) {
+        let price = self.last_price.max(0.0);
+        if price <= f64::EPSILON {
+            return (0.0, 0.0);
+        }
+        let current_qty_signed = match self.position.side {
+            Some(OrderSide::Buy) => self.position.qty,
+            Some(OrderSide::Sell) => -self.position.qty,
+            None => 0.0,
+        };
+        let delta = match side {
+            OrderSide::Buy => qty,
+            OrderSide::Sell => -qty,
+        };
+        let projected_qty_signed = current_qty_signed + delta;
+        (
+            current_qty_signed.abs() * price,
+            projected_qty_signed.abs() * price,
+        )
+    }
+
+    fn evaluate_symbol_exposure_limit(&self, side: OrderSide, qty: f64) -> Option<(String, String)> {
+        let max_exposure = self.max_symbol_exposure_usdt();
+        if max_exposure <= f64::EPSILON {
+            return None;
+        }
+        let (current_notional, projected_notional) = self.projected_notional_after_fill(side, qty);
+        if projected_notional > max_exposure && projected_notional > current_notional + f64::EPSILON {
+            return Some((
+                RejectionReasonCode::RiskSymbolExposureLimitExceeded
+                    .as_str()
+                    .to_string(),
+                format!(
+                    "Symbol exposure limit exceeded for {} ({:?}): projected {:.2} USDT > limit {:.2} USDT",
+                    self.symbol, self.market, projected_notional, max_exposure
+                ),
+            ));
+        }
+        None
+    }
+
     /// Fetch account balances from Binance and update internal state.
     ///
     /// Returns the map `asset -> free` for assets with non-zero total (spot) or
@@ -455,6 +594,14 @@ impl OrderManager {
     /// # Caution
     /// Network/API failures return `Err(_)` and leave previous cache untouched.
     pub async fn refresh_balances(&mut self) -> Result<HashMap<String, f64>> {
+        if !self
+            .risk_module
+            .reserve_endpoint_budget(ApiEndpointGroup::Account)
+        {
+            return Err(anyhow::anyhow!(
+                "Account endpoint budget exceeded; try again after reset"
+            ));
+        }
         if self.market == MarketKind::Futures {
             let account = self.rest_client.get_futures_account().await?;
             self.balances.clear();
@@ -485,7 +632,15 @@ impl OrderManager {
     ///
     /// # Caution
     /// `trade_data_complete = false` means derived PnL may be partial.
-    pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
+    pub async fn refresh_order_history(&mut self, limit: usize) -> Result<OrderHistorySnapshot> {
+        if !self
+            .risk_module
+            .reserve_endpoint_budget(ApiEndpointGroup::Orders)
+        {
+            return Err(anyhow::anyhow!(
+                "Orders endpoint budget exceeded; try again after reset"
+            ));
+        }
         if self.market == MarketKind::Futures {
             let fetch_started = Instant::now();
             let fetched_at_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -571,10 +726,17 @@ impl OrderManager {
             let estimated_total_pnl_usdt = Some(stats.realized_pnl);
             let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
             let latest_trade_event = trades.iter().map(|t| t.time).max();
+            let strategy_stats = match order_store::load_strategy_symbol_stats(&storage_key) {
+                Ok(persisted) => from_persisted_stats_map(persisted),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to load persisted strategy stats (futures)");
+                    HashMap::new()
+                }
+            };
             return Ok(OrderHistorySnapshot {
                 rows: history,
                 stats,
-                strategy_stats: HashMap::new(),
+                strategy_stats,
                 fills,
                 open_qty: 0.0,
                 open_entry_price: 0.0,
@@ -691,8 +853,22 @@ impl OrderManager {
         for (order_id, source) in persisted_source_by_order_id {
             order_source_by_id.entry(order_id).or_insert(source);
         }
-        let strategy_stats =
+        let mut strategy_stats =
             compute_trade_stats_by_source(trades.clone(), &order_source_by_id, &self.symbol);
+        let persisted_stats = to_persistable_stats_map(&strategy_stats);
+        if let Err(e) = order_store::persist_strategy_symbol_stats(&storage_key, &persisted_stats) {
+            tracing::warn!(error = %e, "Failed to persist strategy+symbol scoped stats");
+        }
+        if strategy_stats.is_empty() {
+            match order_store::load_strategy_symbol_stats(&storage_key) {
+                Ok(persisted) => {
+                    strategy_stats = from_persisted_stats_map(persisted);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to load persisted strategy+symbol stats");
+                }
+            }
+        }
 
         let mut history = Vec::new();
         let mut fills = Vec::new();
@@ -909,7 +1085,28 @@ impl OrderManager {
                 reason: "Global rate budget exceeded; try again after reset".to_string(),
             }));
         }
+        if !self
+            .risk_module
+            .reserve_endpoint_budget(ApiEndpointGroup::Orders)
+        {
+            return Ok(Some(OrderUpdate::Rejected {
+                intent_id: intent.intent_id.clone(),
+                client_order_id: "n/a".to_string(),
+                reason_code: RejectionReasonCode::RateEndpointBudgetExceeded
+                    .as_str()
+                    .to_string(),
+                reason: "Orders endpoint budget exceeded; try again after reset".to_string(),
+            }));
+        }
         let qty = decision.normalized_qty;
+        if let Some((reason_code, reason)) = self.evaluate_symbol_exposure_limit(side, qty) {
+            return Ok(Some(OrderUpdate::Rejected {
+                intent_id: intent.intent_id.clone(),
+                client_order_id: "n/a".to_string(),
+                reason_code,
+                reason,
+            }));
+        }
         self.mark_strategy_submit(&intent.source_tag, intent.created_at_ms);
 
         let client_order_id = format!(
@@ -1060,7 +1257,7 @@ impl OrderManager {
 mod tests {
     use super::{display_qty_for_history, split_symbol_assets, OrderManager};
     use crate::binance::rest::BinanceRestClient;
-    use crate::config::RiskConfig;
+    use crate::config::{EndpointRateLimitConfig, RiskConfig, SymbolExposureLimitConfig};
     use crate::model::order::{Order, OrderSide, OrderStatus, OrderType};
     use std::sync::Arc;
 
@@ -1078,7 +1275,18 @@ mod tests {
             global_rate_limit_per_minute: 600,
             default_strategy_cooldown_ms: 3_000,
             default_strategy_max_active_orders: 1,
+            default_symbol_max_exposure_usdt: 200.0,
             strategy_limits: vec![],
+            symbol_exposure_limits: vec![SymbolExposureLimitConfig {
+                symbol: "BTCUSDT".to_string(),
+                market: Some("spot".to_string()),
+                max_exposure_usdt: 150.0,
+            }],
+            endpoint_rate_limits: EndpointRateLimitConfig {
+                orders_per_minute: 240,
+                account_per_minute: 180,
+                market_data_per_minute: 360,
+            },
         };
         OrderManager::new(
             rest,
@@ -1205,5 +1413,28 @@ mod tests {
             .evaluate_strategy_limits("cfg", now + 500)
             .expect("must be rejected");
         assert_eq!(rejected.0, "risk.strategy_cooldown_active".to_string());
+    }
+
+    #[test]
+    fn symbol_exposure_limit_rejects_when_projected_notional_exceeds_limit() {
+        let mut mgr = build_test_order_manager();
+        mgr.last_price = 100.0;
+        // Buy 2.0 -> projected notional 200, but configured spot BTCUSDT limit is 150.
+        let rejected = mgr
+            .evaluate_symbol_exposure_limit(OrderSide::Buy, 2.0)
+            .expect("must be rejected");
+        assert_eq!(rejected.0, "risk.symbol_exposure_limit_exceeded".to_string());
+    }
+
+    #[test]
+    fn symbol_exposure_limit_allows_risk_reducing_order() {
+        let mut mgr = build_test_order_manager();
+        mgr.last_price = 100.0;
+        mgr.position.side = Some(OrderSide::Buy);
+        mgr.position.qty = 2.0; // current notional 200 > limit 150
+
+        // Sell reduces exposure to 100; should be allowed.
+        let rejected = mgr.evaluate_symbol_exposure_limit(OrderSide::Sell, 1.0);
+        assert!(rejected.is_none());
     }
 }
