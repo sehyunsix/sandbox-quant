@@ -22,6 +22,13 @@ min_ticks_between_signals = 50
 
 [risk]
 global_rate_limit_per_minute = 600
+default_strategy_cooldown_ms = 3000
+default_strategy_max_active_orders = 1
+
+[[risk.strategy_limits]]
+source_tag = "mnl"
+cooldown_ms = 0
+max_active_orders = 2
 
 [ui]
 refresh_rate_ms = 100
@@ -38,6 +45,12 @@ level = "debug"
     assert_eq!(config.strategy.slow_period, 30);
     assert!((config.strategy.order_amount_usdt - 10.0).abs() < f64::EPSILON);
     assert_eq!(config.risk.global_rate_limit_per_minute, 600);
+    assert_eq!(config.risk.default_strategy_cooldown_ms, 3000);
+    assert_eq!(config.risk.default_strategy_max_active_orders, 1);
+    assert_eq!(config.risk.strategy_limits.len(), 1);
+    assert_eq!(config.risk.strategy_limits[0].source_tag, "mnl");
+    assert_eq!(config.risk.strategy_limits[0].cooldown_ms, Some(0));
+    assert_eq!(config.risk.strategy_limits[0].max_active_orders, Some(2));
     assert_eq!(config.ui.price_history_len, 120);
 }
 

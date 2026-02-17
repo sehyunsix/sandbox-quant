@@ -49,12 +49,28 @@ pub struct StrategyConfig {
 pub struct RiskConfig {
     #[serde(default = "default_global_rate_limit_per_minute")]
     pub global_rate_limit_per_minute: u32,
+    #[serde(default = "default_strategy_cooldown_ms")]
+    pub default_strategy_cooldown_ms: u64,
+    #[serde(default = "default_strategy_max_active_orders")]
+    pub default_strategy_max_active_orders: u32,
+    #[serde(default)]
+    pub strategy_limits: Vec<StrategyLimitConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StrategyLimitConfig {
+    pub source_tag: String,
+    pub cooldown_ms: Option<u64>,
+    pub max_active_orders: Option<u32>,
 }
 
 impl Default for RiskConfig {
     fn default() -> Self {
         Self {
             global_rate_limit_per_minute: default_global_rate_limit_per_minute(),
+            default_strategy_cooldown_ms: default_strategy_cooldown_ms(),
+            default_strategy_max_active_orders: default_strategy_max_active_orders(),
+            strategy_limits: Vec::new(),
         }
     }
 }
@@ -80,6 +96,14 @@ fn default_futures_ws_base_url() -> String {
 
 fn default_global_rate_limit_per_minute() -> u32 {
     600
+}
+
+fn default_strategy_cooldown_ms() -> u64 {
+    3_000
+}
+
+fn default_strategy_max_active_orders() -> u32 {
+    1
 }
 
 /// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.
@@ -179,4 +203,3 @@ impl Config {
         Ok(config)
     }
 }
-
