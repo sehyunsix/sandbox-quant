@@ -1,3 +1,7 @@
+## v0.2.8 - 2026-02-17
+
+- docs: add browser docs portal and enrich risk/order docstrings (73f069f)
+
 ## v0.2.7 - 2026-02-17
 
 - refactor(order): remove duplicated risk helpers after module split (95343a0)
