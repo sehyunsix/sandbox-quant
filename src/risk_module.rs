@@ -13,6 +13,7 @@ pub enum MarketKind {
     Futures,
 }
 
+/// Stable taxonomy for order rejection reasons emitted by the risk path.
 #[derive(Debug, Clone, Copy)]
 pub enum RejectionReasonCode {
     RiskNoPriceData,
@@ -46,28 +47,43 @@ impl RejectionReasonCode {
 
 #[derive(Debug, Clone)]
 pub struct OrderIntent {
+    /// Globally unique ID for this intent.
     pub intent_id: String,
+    /// Source strategy tag (e.g. `cfg`, `fst`, `mnl`).
     pub source_tag: String,
+    /// Trading symbol (e.g. `BTCUSDT`).
     pub symbol: String,
+    /// Spot/Futures market kind.
     pub market: MarketKind,
+    /// Intended order side.
     pub side: OrderSide,
+    /// Notional size basis in USDT.
     pub order_amount_usdt: f64,
+    /// Last known mark/last trade price.
     pub last_price: f64,
+    /// Millisecond timestamp when intent was created.
     pub created_at_ms: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct RiskDecision {
+    /// `true` if intent passed checks and can be submitted.
     pub approved: bool,
+    /// Quantity after exchange/risk normalization.
     pub normalized_qty: f64,
+    /// Machine-readable reason code when rejected.
     pub reason_code: Option<String>,
+    /// Human-readable rejection reason.
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct RateBudgetSnapshot {
+    /// Consumed request budget in current minute window.
     pub used: u32,
+    /// Total budget limit in current minute window.
     pub limit: u32,
+    /// Milliseconds until budget window reset.
     pub reset_in_ms: u64,
 }
 
@@ -79,6 +95,7 @@ pub struct RiskModule {
 }
 
 impl RiskModule {
+    /// Build a risk module with a per-minute global rate budget.
     pub fn new(rest_client: Arc<BinanceRestClient>, global_rate_limit_per_minute: u32) -> Self {
         Self {
             rest_client,
@@ -88,6 +105,7 @@ impl RiskModule {
         }
     }
 
+    /// Return current global rate-budget usage.
     pub fn rate_budget_snapshot(&self) -> RateBudgetSnapshot {
         let elapsed = self.rate_budget_window_started_at.elapsed();
         let reset = Duration::from_secs(60).saturating_sub(elapsed);
@@ -98,6 +116,8 @@ impl RiskModule {
         }
     }
 
+    /// Reserve one unit from the global rate budget.
+    /// Returns `false` when the current minute budget is exhausted.
     pub fn reserve_rate_budget(&mut self) -> bool {
         if self.rate_budget_window_started_at.elapsed() >= Duration::from_secs(60) {
             self.rate_budget_window_started_at = Instant::now();
@@ -110,6 +130,9 @@ impl RiskModule {
         true
     }
 
+    /// Evaluate an order intent against risk rules and exchange filters.
+    ///
+    /// This performs quantity normalization, min/max checks, and spot balance checks.
     pub async fn evaluate_intent(
         &self,
         intent: &OrderIntent,

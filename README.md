@@ -56,6 +56,23 @@ cargo run --bin sandbox-quant
 
 Edit `config/default.toml` as needed.
 
+## Docs In Browser
+
+Project docs can be viewed in a browser in two ways.
+
+1. Markdown docs portal (`mdBook`)
+
+```bash
+cargo install mdbook
+mdbook serve docs-site --open
+```
+
+2. Rust API docs (`rustdoc`)
+
+```bash
+cargo doc --no-deps --open
+```
+
 ## Usage
 
 Main keys:

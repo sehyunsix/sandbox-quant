@@ -280,6 +280,7 @@ fn compute_trade_stats_by_source(
 }
 
 impl OrderManager {
+    /// Create a new order manager bound to a single symbol/market context.
     pub fn new(
         rest_client: Arc<BinanceRestClient>,
         symbol: &str,
@@ -300,19 +301,23 @@ impl OrderManager {
         }
     }
 
+    /// Return current in-memory position snapshot.
     pub fn position(&self) -> &Position {
         &self.position
     }
 
+    /// Return latest cached free balances.
     pub fn balances(&self) -> &HashMap<String, f64> {
         &self.balances
     }
 
+    /// Update last price and recompute unrealized PnL.
     pub fn update_unrealized_pnl(&mut self, current_price: f64) {
         self.last_price = current_price;
         self.position.update_unrealized_pnl(current_price);
     }
 
+    /// Return current global rate-budget snapshot from the risk module.
     pub fn rate_budget_snapshot(&self) -> RateBudgetSnapshot {
         self.risk_module.rate_budget_snapshot()
     }
@@ -686,6 +691,7 @@ impl OrderManager {
         })
     }
 
+    /// Build an order intent, run risk checks, and submit to broker when approved.
     pub async fn submit_order(
         &mut self,
         signal: Signal,

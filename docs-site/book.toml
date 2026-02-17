@@ -1,0 +1,11 @@
+[book]
+authors = ["sandbox-quant"]
+language = "ko"
+multilingual = false
+src = "src"
+title = "sandbox-quant Docs"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/sehyunsix/sandbox-quant"
