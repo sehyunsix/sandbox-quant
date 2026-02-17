@@ -1,3 +1,12 @@
+## v0.2.14 - 2026-02-17
+
+- test(order_store): add strategy stats persistence tests with docs (a3488cd)
+- feat(runtime): queue strategy/manual signals through shared risk channel (e21eb78)
+- feat(runtime): add strategy worker registry and symbol tick channels (5388d46)
+- feat(stats): persist strategy+symbol stats for restart recovery (cfc287c)
+- feat(risk): add symbol exposure and endpoint budget guardrails (6625e93)
+- feat(risk): enforce per-symbol exposure limits (65db24a)
+
 ## v0.2.13 - 2026-02-17
 
 - fix(ci): run crate publish in main release workflow (7a67457)
