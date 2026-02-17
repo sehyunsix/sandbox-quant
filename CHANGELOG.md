@@ -1,3 +1,7 @@
+## v0.2.15 - 2026-02-17
+
+- docs(agent): require tests in tests/ and for every feature (ac96c16)
+
 ## v0.2.14 - 2026-02-17
 
 - test(order_store): add strategy stats persistence tests with docs (a3488cd)
