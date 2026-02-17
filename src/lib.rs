@@ -6,5 +6,6 @@ pub mod indicator;
 pub mod model;
 pub mod order_manager;
 pub mod order_store;
+pub mod risk_module;
 pub mod strategy;
 pub mod ui;
