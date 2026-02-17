@@ -1,3 +1,8 @@
+## v0.3.0 - 2026-02-17
+
+- release correction: normalize accidental v1.0.0 bump to v0.3.0
+- fix(ci): remove feat(break) from automatic major bump triggers
+
 ## v1.0.0 - 2026-02-17
 
 - feat(break): trigger 0.3.0 release (7c08184)
