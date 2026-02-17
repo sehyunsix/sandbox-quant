@@ -1,0 +1,78 @@
+name: Auto Version And Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  bump-release:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Detect bump level from commit messages
+        id: bump
+        run: |
+          set -euo pipefail
+          RANGE="${{ github.event.before }}..${{ github.sha }}"
+          MESSAGES="$(git log --format=%B ${RANGE} || true)"
+          LEVEL="patch"
+          if echo "$MESSAGES" | grep -Eiq "(^|[[:space:]])#major([[:space:]]|$)|BREAKING CHANGE"; then
+            LEVEL="major"
+          elif echo "$MESSAGES" | grep -Eiq "(^|[[:space:]])#minor([[:space:]]|$)"; then
+            LEVEL="minor"
+          fi
+          echo "level=${LEVEL}" >> "$GITHUB_OUTPUT"
+          echo "Detected bump level: ${LEVEL}"
+
+      - name: Bump Cargo version
+        id: ver
+        run: |
+          set -euo pipefail
+          CURRENT="$(awk -F '\"' '/^version = \"/ {print $2; exit}' Cargo.toml)"
+          IFS='.' read -r MAJ MIN PAT <<< "${CURRENT}"
+          case "${{ steps.bump.outputs.level }}" in
+            major) MAJ=$((MAJ+1)); MIN=0; PAT=0 ;;
+            minor) MIN=$((MIN+1)); PAT=0 ;;
+            *) PAT=$((PAT+1)) ;;
+          esac
+          NEXT="${MAJ}.${MIN}.${PAT}"
+          sed -i "0,/^version = \".*\"/s//version = \"${NEXT}\"/" Cargo.toml
+          cargo check -q
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "next=${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "Version bumped: ${CURRENT} -> ${NEXT}"
+
+      - name: Commit and push bumped version
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): v${{ steps.ver.outputs.next }} [skip ci]"
+          git push origin HEAD:main
+
+      - name: Create git tag
+        run: |
+          set -euo pipefail
+          git tag -a "${{ steps.ver.outputs.tag }}" -m "release ${{ steps.ver.outputs.tag }}"
+          git push origin "${{ steps.ver.outputs.tag }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
