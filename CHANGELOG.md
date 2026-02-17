@@ -1,3 +1,8 @@
+## v0.5.0 - 2026-02-17
+
+- feat(ui): select strategy from grid and jump to focus (a259e47)
+- test(ui): add focus drill-down render and fallback focus tests (cb2d7c8)
+
 ## v0.4.0 - 2026-02-17
 
 - feat(ui): add focus drill-down popup with state persistence (f452396)
