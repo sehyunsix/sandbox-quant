@@ -346,6 +346,7 @@ impl AppState {
             AppEvent::OrderUpdate(ref update) => {
                 match update {
                     OrderUpdate::Filled {
+                        intent_id,
                         client_order_id,
                         side,
                         fills,
@@ -370,28 +371,30 @@ impl AppState {
                             self.fill_markers.remove(0);
                         }
                         self.push_log(format!(
-                            "FILLED {} {} @ {:.2}",
-                            side, client_order_id, avg_price
+                            "FILLED {} {} ({}) @ {:.2}",
+                            side, client_order_id, intent_id, avg_price
                         ));
                     }
                     OrderUpdate::Submitted {
+                        intent_id,
                         client_order_id,
                         server_order_id,
                     } => {
                         self.refresh_equity_usdt();
                         self.push_log(format!(
-                            "Submitted {} (id: {})",
-                            client_order_id, server_order_id
+                            "Submitted {} (id: {}, {})",
+                            client_order_id, server_order_id, intent_id
                         ));
                     }
                     OrderUpdate::Rejected {
+                        intent_id,
                         client_order_id,
                         reason_code,
                         reason,
                     } => {
                         self.push_log(format!(
-                            "[ERR] Rejected {} [{}]: {}",
-                            client_order_id, reason_code, reason
+                            "[ERR] Rejected {} ({}) [{}]: {}",
+                            client_order_id, intent_id, reason_code, reason
                         ));
                     }
                 }

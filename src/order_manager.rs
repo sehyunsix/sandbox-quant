@@ -21,16 +21,19 @@ pub enum MarketKind {
 #[derive(Debug, Clone)]
 pub enum OrderUpdate {
     Submitted {
+        intent_id: String,
         client_order_id: String,
         server_order_id: u64,
     },
     Filled {
+        intent_id: String,
         client_order_id: String,
         side: OrderSide,
         fills: Vec<Fill>,
         avg_price: f64,
     },
     Rejected {
+        intent_id: String,
         client_order_id: String,
         reason_code: String,
         reason: String,
@@ -826,6 +829,7 @@ impl OrderManager {
         let decision = self.evaluate_intent(&intent).await?;
         if !decision.approved {
             return Ok(Some(OrderUpdate::Rejected {
+                intent_id: intent.intent_id.clone(),
                 client_order_id: "n/a".to_string(),
                 reason_code: decision
                     .reason_code
@@ -837,6 +841,7 @@ impl OrderManager {
         }
         if !self.reserve_rate_budget() {
             return Ok(Some(OrderUpdate::Rejected {
+                intent_id: intent.intent_id.clone(),
                 client_order_id: "n/a".to_string(),
                 reason_code: RejectionReasonCode::RateGlobalBudgetExceeded
                     .as_str()
@@ -890,7 +895,12 @@ impl OrderManager {
 
         match submit_res {
             Ok(response) => {
-                let update = self.process_order_response(&client_order_id, side, &response);
+                let update = self.process_order_response(
+                    &intent.intent_id,
+                    &client_order_id,
+                    side,
+                    &response,
+                );
 
                 // Refresh balances after fill
                 if matches!(update, OrderUpdate::Filled { .. }) {
@@ -912,6 +922,7 @@ impl OrderManager {
                     order.updated_at = chrono::Utc::now();
                 }
                 Ok(Some(OrderUpdate::Rejected {
+                    intent_id: intent.intent_id.clone(),
                     client_order_id,
                     reason_code: RejectionReasonCode::BrokerSubmitFailed.as_str().to_string(),
                     reason: e.to_string(),
@@ -1068,6 +1079,7 @@ impl OrderManager {
 
     fn process_order_response(
         &mut self,
+        intent_id: &str,
         client_order_id: &str,
         side: OrderSide,
         response: &BinanceOrderResponse,
@@ -1113,6 +1125,7 @@ impl OrderManager {
             );
 
             OrderUpdate::Filled {
+                intent_id: intent_id.to_string(),
                 client_order_id: client_order_id.to_string(),
                 side,
                 fills,
@@ -1120,6 +1133,7 @@ impl OrderManager {
             }
         } else {
             OrderUpdate::Submitted {
+                intent_id: intent_id.to_string(),
                 client_order_id: client_order_id.to_string(),
                 server_order_id: response.order_id,
             }
