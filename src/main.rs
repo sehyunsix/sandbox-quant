@@ -307,6 +307,7 @@ async fn main() -> Result<()> {
         let mut worker_id = strategy_worker_id(active_preset, &current_api_symbol, current_market);
         let (worker_tick_tx, mut worker_tick_rx) = mpsc::channel::<Tick>(256);
         worker_registry.register(worker_id.clone(), current_api_symbol.clone(), worker_tick_tx);
+        let (risk_eval_tx, mut risk_eval_rx) = mpsc::channel::<(Signal, String)>(64);
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
 
@@ -420,44 +421,11 @@ async fn main() -> Result<()> {
                         let _ = strat_app_tx
                             .send(AppEvent::StrategySignal(signal.clone()))
                             .await;
-
-                        match order_mgr.submit_order(signal, active_preset.source_tag()).await {
-                            Ok(Some(ref update)) => {
-                                let _ = strat_app_tx
-                                    .send(AppEvent::OrderUpdate(update.clone()))
-                                    .await;
-                                match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                                    Ok(history) => {
-                                        let _ = strat_app_tx
-                                            .send(AppEvent::OrderHistoryUpdate(history))
-                                            .await;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(error = %e, "Failed to refresh order history");
-                                        let _ = strat_app_tx
-                                            .send(AppEvent::LogMessage(format!(
-                                                "[WARN] Order history refresh failed: {}",
-                                                e
-                                            )))
-                                            .await;
-                                    }
-                                }
-                                if matches!(
-                                    update,
-                                    sandbox_quant::order_manager::OrderUpdate::Filled { .. }
-                                ) {
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
-                                        .await;
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                tracing::error!(error = %e, "Order submission failed");
-                                let _ = strat_app_tx
-                                    .send(AppEvent::Error(e.to_string()))
-                                    .await;
-                            }
+                        if let Err(e) = risk_eval_tx
+                            .send((signal, active_preset.source_tag().to_string()))
+                            .await
+                        {
+                            tracing::error!(error = %e, "Failed to enqueue strategy signal");
                         }
                     }
                 }
@@ -466,8 +434,12 @@ async fn main() -> Result<()> {
                     let _ = strat_app_tx
                         .send(AppEvent::StrategySignal(signal.clone()))
                         .await;
-
-                    match order_mgr.submit_order(signal, "mnl").await {
+                    if let Err(e) = risk_eval_tx.send((signal, "mnl".to_string())).await {
+                        tracing::error!(error = %e, "Failed to enqueue manual signal");
+                    }
+                }
+                Some((signal, source_tag)) = risk_eval_rx.recv() => {
+                    match order_mgr.submit_order(signal, &source_tag).await {
                         Ok(Some(ref update)) => {
                             let _ = strat_app_tx
                                 .send(AppEvent::OrderUpdate(update.clone()))
@@ -499,7 +471,7 @@ async fn main() -> Result<()> {
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            tracing::error!(error = %e, "Manual order submission failed");
+                            tracing::error!(error = %e, "Queued order submission failed");
                             let _ = strat_app_tx
                                 .send(AppEvent::Error(e.to_string()))
                                 .await;
