@@ -386,9 +386,13 @@ impl AppState {
                     }
                     OrderUpdate::Rejected {
                         client_order_id,
+                        reason_code,
                         reason,
                     } => {
-                        self.push_log(format!("[ERR] Rejected {}: {}", client_order_id, reason));
+                        self.push_log(format!(
+                            "[ERR] Rejected {} [{}]: {}",
+                            client_order_id, reason_code, reason
+                        ));
                     }
                 }
                 self.last_order = Some(update.clone());
