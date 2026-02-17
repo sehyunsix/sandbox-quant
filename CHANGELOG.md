@@ -1,3 +1,7 @@
+## v1.0.0 - 2026-02-17
+
+- feat(break): trigger 0.3.0 release (7c08184)
+
 ## v0.2.18 - 2026-02-17
 
 - fix(ci): treat feat(break) as major bump trigger (f8b1080)
