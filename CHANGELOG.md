@@ -1,3 +1,7 @@
+## v0.2.10 - 2026-02-17
+
+- chore: adopt MIT license (b88e81b)
+
 ## v0.2.9 - 2026-02-17
 
 - docs: expand risk/order manager docstrings with usage and cautions (1dae5af)
