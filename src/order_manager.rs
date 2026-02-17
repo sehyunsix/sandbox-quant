@@ -37,6 +37,37 @@ pub enum OrderUpdate {
     },
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RejectionReasonCode {
+    RiskNoPriceData,
+    RiskNoSpotBaseBalance,
+    RiskQtyTooSmall,
+    RiskQtyBelowMin,
+    RiskQtyAboveMax,
+    RiskInsufficientQuoteBalance,
+    RiskInsufficientBaseBalance,
+    RateGlobalBudgetExceeded,
+    BrokerSubmitFailed,
+    RiskUnknown,
+}
+
+impl RejectionReasonCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RiskNoPriceData => "risk.no_price_data",
+            Self::RiskNoSpotBaseBalance => "risk.no_spot_base_balance",
+            Self::RiskQtyTooSmall => "risk.qty_too_small",
+            Self::RiskQtyBelowMin => "risk.qty_below_min",
+            Self::RiskQtyAboveMax => "risk.qty_above_max",
+            Self::RiskInsufficientQuoteBalance => "risk.insufficient_quote_balance",
+            Self::RiskInsufficientBaseBalance => "risk.insufficient_base_balance",
+            Self::RateGlobalBudgetExceeded => "rate.global_budget_exceeded",
+            Self::BrokerSubmitFailed => "broker.submit_failed",
+            Self::RiskUnknown => "risk.unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OrderIntent {
     pub intent_id: String,
@@ -351,6 +382,7 @@ impl OrderManager {
         symbol: &str,
         market: MarketKind,
         order_amount_usdt: f64,
+        global_rate_limit_per_minute: u32,
     ) -> Self {
         Self {
             rest_client,
@@ -363,7 +395,7 @@ impl OrderManager {
             last_price: 0.0,
             rate_budget_window_started_at: Instant::now(),
             rate_budget_used: 0,
-            rate_budget_limit_per_minute: 600,
+            rate_budget_limit_per_minute: global_rate_limit_per_minute.max(1),
         }
     }
 
@@ -797,7 +829,7 @@ impl OrderManager {
                 client_order_id: "n/a".to_string(),
                 reason_code: decision
                     .reason_code
-                    .unwrap_or_else(|| "risk.unknown".to_string()),
+                    .unwrap_or_else(|| RejectionReasonCode::RiskUnknown.as_str().to_string()),
                 reason: decision
                     .reason
                     .unwrap_or_else(|| "Rejected by RiskModule".to_string()),
@@ -806,7 +838,9 @@ impl OrderManager {
         if !self.reserve_rate_budget() {
             return Ok(Some(OrderUpdate::Rejected {
                 client_order_id: "n/a".to_string(),
-                reason_code: "rate.global_budget_exceeded".to_string(),
+                reason_code: RejectionReasonCode::RateGlobalBudgetExceeded
+                    .as_str()
+                    .to_string(),
                 reason: "Global rate budget exceeded; try again after reset".to_string(),
             }));
         }
@@ -879,7 +913,7 @@ impl OrderManager {
                 }
                 Ok(Some(OrderUpdate::Rejected {
                     client_order_id,
-                    reason_code: "broker.submit_failed".to_string(),
+                    reason_code: RejectionReasonCode::BrokerSubmitFailed.as_str().to_string(),
                     reason: e.to_string(),
                 }))
             }
@@ -891,7 +925,7 @@ impl OrderManager {
             return Ok(RiskDecision {
                 approved: false,
                 normalized_qty: 0.0,
-                reason_code: Some("risk.no_price_data".to_string()),
+                reason_code: Some(RejectionReasonCode::RiskNoPriceData.as_str().to_string()),
                 reason: Some("No price data yet".to_string()),
             });
         }
@@ -907,7 +941,11 @@ impl OrderManager {
                         return Ok(RiskDecision {
                             approved: false,
                             normalized_qty: 0.0,
-                            reason_code: Some("risk.no_spot_base_balance".to_string()),
+                            reason_code: Some(
+                                RejectionReasonCode::RiskNoSpotBaseBalance
+                                    .as_str()
+                                    .to_string(),
+                            ),
                             reason: Some(format!("No {} balance to sell", base_asset)),
                         });
                     }
@@ -942,7 +980,7 @@ impl OrderManager {
             return Ok(RiskDecision {
                 approved: false,
                 normalized_qty: 0.0,
-                reason_code: Some("risk.qty_too_small".to_string()),
+                reason_code: Some(RejectionReasonCode::RiskQtyTooSmall.as_str().to_string()),
                 reason: Some(format!(
                     "Calculated qty too small after normalization (raw {:.8}, step {:.8}, minQty {:.8})",
                     raw_qty, rules.step_size, rules.min_qty
@@ -953,7 +991,7 @@ impl OrderManager {
             return Ok(RiskDecision {
                 approved: false,
                 normalized_qty: 0.0,
-                reason_code: Some("risk.qty_below_min".to_string()),
+                reason_code: Some(RejectionReasonCode::RiskQtyBelowMin.as_str().to_string()),
                 reason: Some(format!(
                     "Qty below minQty (qty {:.8} < min {:.8}, step {:.8})",
                     qty, rules.min_qty, rules.step_size
@@ -964,7 +1002,7 @@ impl OrderManager {
             return Ok(RiskDecision {
                 approved: false,
                 normalized_qty: 0.0,
-                reason_code: Some("risk.qty_above_max".to_string()),
+                reason_code: Some(RejectionReasonCode::RiskQtyAboveMax.as_str().to_string()),
                 reason: Some(format!(
                     "Qty above maxQty (qty {:.8} > max {:.8})",
                     qty, rules.max_qty
@@ -987,7 +1025,11 @@ impl OrderManager {
                         return Ok(RiskDecision {
                             approved: false,
                             normalized_qty: 0.0,
-                            reason_code: Some("risk.insufficient_quote_balance".to_string()),
+                            reason_code: Some(
+                                RejectionReasonCode::RiskInsufficientQuoteBalance
+                                    .as_str()
+                                    .to_string(),
+                            ),
                             reason: Some(format!(
                                 "Insufficient {}: need {:.2}, have {:.2}",
                                 quote_asset_name, order_value, quote_free
@@ -1001,7 +1043,11 @@ impl OrderManager {
                         return Ok(RiskDecision {
                             approved: false,
                             normalized_qty: 0.0,
-                            reason_code: Some("risk.insufficient_base_balance".to_string()),
+                            reason_code: Some(
+                                RejectionReasonCode::RiskInsufficientBaseBalance
+                                    .as_str()
+                                    .to_string(),
+                            ),
                             reason: Some(format!(
                                 "Insufficient {}: need {:.5}, have {:.5}",
                                 base_asset, qty, base_free
