@@ -8,6 +8,7 @@ readme = "README.md"
 documentation = "https://docs.rs/sandbox-quant"
 keywords = ["trading", "binance", "terminal", "risk", "quant"]
 categories = ["command-line-utilities", "finance"]
+license = "MIT"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
