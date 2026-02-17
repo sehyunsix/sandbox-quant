@@ -14,6 +14,9 @@ pub enum MarketKind {
 }
 
 /// Stable taxonomy for order rejection reasons emitted by the risk path.
+///
+/// These codes are intended for machine consumption (UI badges, metrics tags,
+/// alert routing). Keep values stable once released.
 #[derive(Debug, Clone, Copy)]
 pub enum RejectionReasonCode {
     RiskNoPriceData,
@@ -62,14 +65,23 @@ pub struct OrderIntent {
     /// Last known mark/last trade price.
     pub last_price: f64,
     /// Millisecond timestamp when intent was created.
+    ///
+    /// This is informational and can be used for trace correlation and latency
+    /// analysis in logs.
     pub created_at_ms: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct RiskDecision {
     /// `true` if intent passed checks and can be submitted.
+    ///
+    /// When `false`, caller should surface `reason_code` and `reason` to users
+    /// and skip broker submission.
     pub approved: bool,
     /// Quantity after exchange/risk normalization.
+    ///
+    /// For spot: rounded down to step size.
+    /// For futures: rounded up to satisfy minimum tradable size/notional.
     pub normalized_qty: f64,
     /// Machine-readable reason code when rejected.
     pub reason_code: Option<String>,
@@ -96,6 +108,9 @@ pub struct RiskModule {
 
 impl RiskModule {
     /// Build a risk module with a per-minute global rate budget.
+    ///
+    /// `global_rate_limit_per_minute` is clamped to at least `1` to prevent an
+    /// always-rejecting configuration.
     pub fn new(rest_client: Arc<BinanceRestClient>, global_rate_limit_per_minute: u32) -> Self {
         Self {
             rest_client,
@@ -106,6 +121,8 @@ impl RiskModule {
     }
 
     /// Return current global rate-budget usage.
+    ///
+    /// Use this for UI/telemetry only. It does not reserve capacity.
     pub fn rate_budget_snapshot(&self) -> RateBudgetSnapshot {
         let elapsed = self.rate_budget_window_started_at.elapsed();
         let reset = Duration::from_secs(60).saturating_sub(elapsed);
@@ -117,7 +134,19 @@ impl RiskModule {
     }
 
     /// Reserve one unit from the global rate budget.
+    ///
+    /// This method resets the rolling minute window when needed and then
+    /// consumes exactly one request token.
+    ///
     /// Returns `false` when the current minute budget is exhausted.
+    ///
+    /// # Usage
+    /// Call this once per outbound broker request, after risk approval and
+    /// immediately before submission.
+    ///
+    /// # Caution
+    /// Do not call this speculatively and then skip submission; doing so
+    /// reduces usable throughput and can cause unnecessary rejections.
     pub fn reserve_rate_budget(&mut self) -> bool {
         if self.rate_budget_window_started_at.elapsed() >= Duration::from_secs(60) {
             self.rate_budget_window_started_at = Instant::now();
@@ -132,7 +161,31 @@ impl RiskModule {
 
     /// Evaluate an order intent against risk rules and exchange filters.
     ///
-    /// This performs quantity normalization, min/max checks, and spot balance checks.
+    /// This performs:
+    /// - price availability validation,
+    /// - quantity derivation and normalization by market rules,
+    /// - min/max quantity validation,
+    /// - spot balance sufficiency checks.
+    ///
+    /// # Returns
+    /// - `Ok(RiskDecision { approved: true, .. })` when submission is allowed.
+    /// - `Ok(RiskDecision { approved: false, .. })` for expected business-rule
+    ///   rejection (insufficient balance, too-small qty, etc).
+    /// - `Err(_)` when exchange metadata fetch fails or other runtime errors occur.
+    ///
+    /// # Usage
+    /// Use as the first gate in an order pipeline:
+    /// 1. Build `OrderIntent`.
+    /// 2. Call `evaluate_intent`.
+    /// 3. If approved, call `reserve_rate_budget`.
+    /// 4. Submit order to broker.
+    ///
+    /// # Caution
+    /// - `balances` should be recently refreshed. Stale balances can produce
+    ///   false approvals/rejections.
+    /// - For spot sell, requested size is currently driven by available base
+    ///   balance and then normalized, not by `order_amount_usdt`.
+    /// - This function does not place orders or mutate state.
     pub async fn evaluate_intent(
         &self,
         intent: &OrderIntent,
