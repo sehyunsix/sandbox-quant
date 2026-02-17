@@ -12,5 +12,6 @@ Rules:
 
 Outputs:
 - `Cargo.toml` + `Cargo.lock` 버전 업데이트 커밋
+- `CHANGELOG.md` 자동 갱신 (최신 릴리스 항목이 상단에 prepend)
 - git tag 생성 (`vX.Y.Z`)
 - GitHub Release 생성

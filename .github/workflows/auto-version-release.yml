@@ -55,12 +55,33 @@ jobs:
           echo "tag=v${NEXT}" >> "$GITHUB_OUTPUT"
           echo "Version bumped: ${CURRENT} -> ${NEXT}"
 
+      - name: Update release history
+        run: |
+          set -euo pipefail
+          RANGE="${{ github.event.before }}..${{ github.sha }}"
+          TODAY="$(date -u +%Y-%m-%d)"
+          NOTES="$(git log --no-merges --pretty=format:'- %s (%h)' ${RANGE} || true)"
+          if [ -z "${NOTES}" ]; then
+            NOTES="- maintenance update (${GITHUB_SHA::7})"
+          fi
+          {
+            printf "## v%s - %s\n\n" "${{ steps.ver.outputs.next }}" "${TODAY}"
+            printf "%s\n\n" "${NOTES}"
+          } > /tmp/changelog_new_entry.md
+
+          if [ -f CHANGELOG.md ]; then
+            cat /tmp/changelog_new_entry.md CHANGELOG.md > /tmp/changelog_merged.md
+            mv /tmp/changelog_merged.md CHANGELOG.md
+          else
+            mv /tmp/changelog_new_entry.md CHANGELOG.md
+          fi
+
       - name: Commit and push bumped version
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
+          git add Cargo.toml Cargo.lock CHANGELOG.md
           git commit -m "chore(release): v${{ steps.ver.outputs.next }} [skip ci]"
           git push origin HEAD:main
 
