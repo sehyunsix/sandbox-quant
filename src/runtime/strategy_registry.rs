@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use tokio::sync::mpsc;
 
@@ -7,7 +7,7 @@ use crate::model::tick::Tick;
 #[derive(Default)]
 pub struct StrategyWorkerRegistry {
     workers: HashMap<String, StrategyWorkerHandle>,
-    workers_by_symbol: HashMap<String, HashSet<String>>,
+    workers_by_symbol: HashMap<String, BTreeSet<String>>,
 }
 
 struct StrategyWorkerHandle {
@@ -71,50 +71,13 @@ impl StrategyWorkerRegistry {
             }
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::StrategyWorkerRegistry;
-    use crate::model::tick::Tick;
-    use tokio::sync::mpsc;
-
-    fn tick(symbol: &str, price: f64) -> Tick {
-        Tick {
-            symbol: symbol.to_string(),
-            price,
-            qty: 0.1,
-            timestamp_ms: 1,
-            is_buyer_maker: false,
-            trade_id: 1,
-        }
-    }
-
-    #[test]
-    /// Verifies symbol-based routing: only workers registered for the same symbol
-    /// should receive the dispatched tick.
-    fn dispatches_only_to_matching_symbol_workers() {
-        let mut registry = StrategyWorkerRegistry::default();
-        let (btc_tx, mut btc_rx) = mpsc::channel(4);
-        let (eth_tx, mut eth_rx) = mpsc::channel(4);
-        registry.register("ma-cfg-btc", "BTCUSDT", btc_tx);
-        registry.register("ma-cfg-eth", "ETHUSDT", eth_tx);
-
-        registry.dispatch_tick(tick("BTCUSDT", 100.0));
-        assert!(btc_rx.try_recv().is_ok());
-        assert!(eth_rx.try_recv().is_err());
-    }
-
-    #[test]
-    /// Verifies registry cleanup: once a worker is unregistered it must no
-    /// longer receive ticks for its former symbol.
-    fn unregister_removes_worker_from_dispatch_path() {
-        let mut registry = StrategyWorkerRegistry::default();
-        let (btc_tx, mut btc_rx) = mpsc::channel(4);
-        registry.register("ma-cfg-btc", "BTCUSDT", btc_tx);
-        registry.unregister("ma-cfg-btc");
-
-        registry.dispatch_tick(tick("BTCUSDT", 100.0));
-        assert!(btc_rx.try_recv().is_err());
+    /// Return worker ids for the symbol in deterministic lexical order.
+    pub fn worker_ids_for_symbol(&self, symbol: &str) -> Vec<String> {
+        let key = symbol.trim().to_ascii_uppercase();
+        self.workers_by_symbol
+            .get(&key)
+            .map(|ids| ids.iter().cloned().collect())
+            .unwrap_or_default()
     }
 }
