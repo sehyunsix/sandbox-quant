@@ -40,7 +40,7 @@ jobs:
           LEVEL="patch"
           if echo "$MESSAGES" | grep -Eiq "(^|[[:space:]])#major([[:space:]]|$)|BREAKING CHANGE"; then
             LEVEL="major"
-          elif echo "$MESSAGES" | grep -Eiq "(^|[[:space:]])#minor([[:space:]]|$)"; then
+          elif echo "$MESSAGES" | grep -Eiq "(^|[[:space:]])#minor([[:space:]]|$)|^feat(\([^)]+\))?:"; then
             LEVEL="minor"
           fi
           echo "level=${LEVEL}" >> "$GITHUB_OUTPUT"
