@@ -1,14 +1,3 @@
-mod binance;
-mod config;
-mod error;
-mod event;
-mod indicator;
-mod model;
-mod order_manager;
-mod order_store;
-mod strategy;
-mod ui;
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,15 +5,18 @@ use anyhow::{Context, Result};
 use crossterm::event::{Event, KeyCode};
 use tokio::sync::{mpsc, watch};
 
-use crate::binance::rest::BinanceRestClient;
-use crate::binance::ws::BinanceWsClient;
-use crate::config::{parse_interval_ms, Config};
-use crate::event::AppEvent;
-use crate::model::position::Position;
-use crate::model::signal::Signal;
-use crate::order_manager::{MarketKind, OrderManager};
-use crate::strategy::ma_crossover::MaCrossover;
-use crate::ui::AppState;
+use sandbox_quant::binance::rest::BinanceRestClient;
+use sandbox_quant::binance::ws::BinanceWsClient;
+use sandbox_quant::config::{parse_interval_ms, Config};
+use sandbox_quant::event::AppEvent;
+use sandbox_quant::model::position::Position;
+use sandbox_quant::model::signal::Signal;
+use sandbox_quant::model::tick::Tick;
+use sandbox_quant::order_manager::{MarketKind, OrderManager};
+use sandbox_quant::order_store;
+use sandbox_quant::strategy::ma_crossover::MaCrossover;
+use sandbox_quant::ui;
+use sandbox_quant::ui::AppState;
 
 const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
@@ -185,7 +177,7 @@ async fn main() -> Result<()> {
 
     // Channels
     let (app_tx, mut app_rx) = mpsc::channel::<AppEvent>(256);
-    let (tick_tx, mut tick_rx) = mpsc::channel::<model::tick::Tick>(256);
+    let (tick_tx, mut tick_rx) = mpsc::channel::<Tick>(256);
     let (manual_order_tx, mut manual_order_rx) = mpsc::channel::<Signal>(16);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (strategy_enabled_tx, strategy_enabled_rx) = watch::channel(true);
@@ -354,7 +346,7 @@ async fn main() -> Result<()> {
 
         // Warm up SMA indicators with historical kline close prices (no orders)
         for price in &strat_historical_closes {
-            let tick = model::tick::Tick::from_price(*price);
+            let tick = Tick::from_price(*price);
             strategy.on_tick(&tick);
         }
         if !strat_historical_closes.is_empty() {
@@ -432,7 +424,10 @@ async fn main() -> Result<()> {
                                     }
                                 }
                                 // Send updated balances to UI after fill
-                                if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
+                                if matches!(
+                                    update,
+                                    sandbox_quant::order_manager::OrderUpdate::Filled { .. }
+                                ) {
                                     let _ = strat_app_tx
                                         .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
                                         .await;
@@ -475,7 +470,10 @@ async fn main() -> Result<()> {
                                         .await;
                                 }
                             }
-                            if matches!(update, crate::order_manager::OrderUpdate::Filled { .. }) {
+                            if matches!(
+                                update,
+                                sandbox_quant::order_manager::OrderUpdate::Filled { .. }
+                            ) {
                                 let _ = strat_app_tx
                                     .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
                                     .await;
