@@ -281,6 +281,13 @@ fn compute_trade_stats_by_source(
 
 impl OrderManager {
     /// Create a new order manager bound to a single symbol/market context.
+    ///
+    /// The instance keeps in-memory position, cached balances, and an embedded
+    /// `RiskModule` that enforces pre-trade checks and global rate budget.
+    ///
+    /// # Caution
+    /// This manager is stateful (`last_price`, balances, active orders). Reuse
+    /// the same instance for a symbol stream instead of recreating per tick.
     pub fn new(
         rest_client: Arc<BinanceRestClient>,
         symbol: &str,
@@ -302,28 +309,49 @@ impl OrderManager {
     }
 
     /// Return current in-memory position snapshot.
+    ///
+    /// Values reflect fills processed by this process. They are not a full
+    /// exchange reconciliation snapshot.
     pub fn position(&self) -> &Position {
         &self.position
     }
 
     /// Return latest cached free balances.
+    ///
+    /// Cache is updated by `refresh_balances`. Missing assets should be treated
+    /// as zero balance.
     pub fn balances(&self) -> &HashMap<String, f64> {
         &self.balances
     }
 
     /// Update last price and recompute unrealized PnL.
+    ///
+    /// # Usage
+    /// Call on every market data tick before `submit_order`, so risk checks use
+    /// a valid `last_price`.
     pub fn update_unrealized_pnl(&mut self, current_price: f64) {
         self.last_price = current_price;
         self.position.update_unrealized_pnl(current_price);
     }
 
     /// Return current global rate-budget snapshot from the risk module.
+    ///
+    /// Intended for UI display and observability.
     pub fn rate_budget_snapshot(&self) -> RateBudgetSnapshot {
         self.risk_module.rate_budget_snapshot()
     }
 
     /// Fetch account balances from Binance and update internal state.
-    /// Returns the balances map (asset → free balance) for non-zero balances.
+    ///
+    /// Returns the map `asset -> free` for assets with non-zero total (spot) or
+    /// non-trivial wallet balance (futures).
+    ///
+    /// # Usage
+    /// Refresh before order submission cycles to reduce false "insufficient
+    /// balance" rejections from stale cache.
+    ///
+    /// # Caution
+    /// Network/API failures return `Err(_)` and leave previous cache untouched.
     pub async fn refresh_balances(&mut self) -> Result<HashMap<String, f64>> {
         if self.market == MarketKind::Futures {
             let account = self.rest_client.get_futures_account().await?;
@@ -348,6 +376,13 @@ impl OrderManager {
     }
 
     /// Fetch order history from exchange and format rows for UI display.
+    ///
+    /// This method combines order and trade endpoints, persists snapshots to
+    /// local sqlite, and emits a best-effort history view even if one endpoint
+    /// fails.
+    ///
+    /// # Caution
+    /// `trade_data_complete = false` means derived PnL may be partial.
     pub async fn refresh_order_history(&self, limit: usize) -> Result<OrderHistorySnapshot> {
         if self.market == MarketKind::Futures {
             let fetch_started = Instant::now();
@@ -692,6 +727,29 @@ impl OrderManager {
     }
 
     /// Build an order intent, run risk checks, and submit to broker when approved.
+    ///
+    /// # Behavior
+    /// - `Signal::Hold` returns `Ok(None)`.
+    /// - For buy/sell signals, this method:
+    ///   1. Builds `OrderIntent`.
+    ///   2. Calls `RiskModule::evaluate_intent`.
+    ///   3. Reserves one global rate token via `reserve_rate_budget`.
+    ///   4. Submits market order to spot/futures broker endpoint.
+    /// - Rejections are returned as `Ok(Some(OrderUpdate::Rejected { .. }))`
+    ///   with structured `reason_code`.
+    ///
+    /// # Usage
+    /// Recommended sequence:
+    /// 1. `update_unrealized_pnl(last_price)`
+    /// 2. `refresh_balances()` (periodic or before trading loop)
+    /// 3. `submit_order(signal, source_tag)`
+    ///
+    /// # Caution
+    /// - Spot sell requires base-asset balance (e.g. `ETH` for `ETHUSDT`).
+    /// - If balances are stale, you may see "No position to sell" or
+    ///   "Insufficient <asset>" even though exchange state changed recently.
+    /// - This method returns transport/runtime errors as `Err(_)`; business
+    ///   rejections are encoded in `OrderUpdate::Rejected`.
     pub async fn submit_order(
         &mut self,
         signal: Signal,
