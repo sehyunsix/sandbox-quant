@@ -1,3 +1,7 @@
+## v0.2.12 - 2026-02-17
+
+- feat(risk): add per-strategy cooldown and active-order limits (8fb5da3)
+
 ## v0.2.11 - 2026-02-17
 
 - chore(ci): harden cargo publish workflow (059f2a8)
