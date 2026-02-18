@@ -1,3 +1,11 @@
+## v0.11.0 - 2026-02-18
+
+- feat(ui): split right panel semantics and stack strategy metrics vertically (454ba2b)
+- fix(logging): use real signal symbol and remove ws connected noise (6aa35b5)
+- feat(logging): migrate ws/main runtime logs to structured LogRecord events (7d0d097)
+- docs(rfc): align logging RFC with OTel/ECS and tracing references (ad215f0)
+- feat(asset-table): stream per-symbol pnl updates in real time (b32c145)
+
 ## v0.10.0 - 2026-02-18
 
 - fix(pnl): aggregate strategy stats across symbols for grid totals (088cf42)
