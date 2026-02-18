@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -9,12 +10,15 @@ use crate::strategy_catalog::StrategyCatalog;
 pub struct LoadedStrategySession {
     pub catalog: StrategyCatalog,
     pub selected_source_tag: Option<String>,
+    pub enabled_source_tags: HashSet<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedStrategySession {
     selected_source_tag: String,
     profiles: Vec<crate::strategy_catalog::StrategyProfile>,
+    #[serde(default)]
+    enabled_source_tags: Vec<String>,
 }
 
 fn strategy_session_path() -> PathBuf {
@@ -64,21 +68,24 @@ pub fn load_strategy_session_from_path(
             min_ticks_between_signals,
         ),
         selected_source_tag: Some(persisted.selected_source_tag),
+        enabled_source_tags: persisted.enabled_source_tags.into_iter().collect(),
     }))
 }
 
 pub fn persist_strategy_session(
     catalog: &StrategyCatalog,
     selected_source_tag: &str,
+    enabled_source_tags: &HashSet<String>,
 ) -> Result<()> {
     let path = strategy_session_path();
-    persist_strategy_session_to_path(&path, catalog, selected_source_tag)
+    persist_strategy_session_to_path(&path, catalog, selected_source_tag, enabled_source_tags)
 }
 
 pub fn persist_strategy_session_to_path(
     path: &Path,
     catalog: &StrategyCatalog,
     selected_source_tag: &str,
+    enabled_source_tags: &HashSet<String>,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -88,6 +95,7 @@ pub fn persist_strategy_session_to_path(
     let payload = PersistedStrategySession {
         selected_source_tag: selected_source_tag.to_string(),
         profiles: catalog.profiles().to_vec(),
+        enabled_source_tags: enabled_source_tags.iter().cloned().collect(),
     };
     let json = serde_json::to_string_pretty(&payload)
         .context("failed to serialize persisted strategy session json")?;

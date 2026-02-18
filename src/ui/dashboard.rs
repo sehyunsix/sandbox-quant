@@ -569,6 +569,8 @@ impl Widget for KeybindBar {
             Span::styled("ause ", Style::default().fg(Color::DarkGray)),
             Span::styled("[R]", Style::default().fg(Color::Yellow)),
             Span::styled("esume ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[O]", Style::default().fg(Color::Yellow)),
+            Span::styled("n/off(grid) ", Style::default().fg(Color::DarkGray)),
             Span::styled("[B]", Style::default().fg(Color::Green)),
             Span::styled("uy ", Style::default().fg(Color::DarkGray)),
             Span::styled("[S]", Style::default().fg(Color::Red)),
@@ -597,8 +599,6 @@ impl Widget for KeybindBar {
             Span::styled("history ", Style::default().fg(Color::DarkGray)),
             Span::styled("[G]", Style::default().fg(Color::Magenta)),
             Span::styled("rid ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[F]", Style::default().fg(Color::Magenta)),
-            Span::styled("ocus", Style::default().fg(Color::DarkGray)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);

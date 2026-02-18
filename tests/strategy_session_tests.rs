@@ -26,8 +26,12 @@ fn strategy_session_round_trip_persists_catalog_and_selected_profile() {
     let forked = catalog
         .fork_profile(custom_index, "ETHUSDT", 8, 29, 3)
         .expect("custom strategy should be forkable");
+    assert!(catalog.mark_running(&forked.source_tag, 10_000));
+    assert!(catalog.mark_stopped(&forked.source_tag, 16_500));
+    let mut enabled = std::collections::HashSet::new();
+    enabled.insert(forked.source_tag.clone());
 
-    persist_strategy_session_to_path(&path, &catalog, &forked.source_tag)
+    persist_strategy_session_to_path(&path, &catalog, &forked.source_tag, &enabled)
         .expect("session persist should succeed");
 
     let loaded = load_strategy_session_from_path(&path, "BTCUSDT", 9, 21, 2)
@@ -35,10 +39,15 @@ fn strategy_session_round_trip_persists_catalog_and_selected_profile() {
         .expect("persisted session should exist");
 
     assert_eq!(loaded.selected_source_tag.as_deref(), Some("c02"));
+    assert!(loaded.enabled_source_tags.contains("c02"));
     assert!(loaded
         .catalog
         .get_by_source_tag("c02")
-        .map(|profile| profile.label.starts_with("MA(Custom 8/29)") && profile.symbol == "ETHUSDT")
+        .map(|profile| {
+            profile.label.starts_with("MA(Custom 8/29)")
+                && profile.symbol == "ETHUSDT"
+                && profile.cumulative_running_ms == 6_500
+        })
         .unwrap_or(false));
 }
 

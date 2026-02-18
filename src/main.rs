@@ -809,6 +809,11 @@ async fn main() -> Result<()> {
         .iter()
         .position(|item| item == &initial_strategy_profile.symbol)
         .unwrap_or(0);
+    app_state.v2_grid_select_on_panel = app_state
+        .strategy_item_active
+        .get(app_state.v2_grid_strategy_index)
+        .copied()
+        .unwrap_or(false);
     app_state.v2_grid_open = true;
 
     // Pre-fill chart with historical candles
@@ -1120,14 +1125,71 @@ async fn main() -> Result<()> {
                 }
                 if app_state.v2_grid_open {
                     match key.code {
+                        KeyCode::Tab => {
+                            app_state.v2_grid_select_on_panel = !app_state.v2_grid_select_on_panel;
+                            let panel_indices: Vec<usize> = app_state
+                                .strategy_item_active
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(idx, active)| {
+                                    if *active == app_state.v2_grid_select_on_panel {
+                                        Some(idx)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            if !panel_indices.contains(&app_state.v2_grid_strategy_index) {
+                                if let Some(first) = panel_indices.first().copied() {
+                                    app_state.v2_grid_strategy_index = first;
+                                }
+                            }
+                        }
                         KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                            app_state.v2_grid_strategy_index =
-                                app_state.v2_grid_strategy_index.saturating_sub(1);
+                            let panel_indices: Vec<usize> = app_state
+                                .strategy_item_active
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(idx, active)| {
+                                    if *active == app_state.v2_grid_select_on_panel {
+                                        Some(idx)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            if let Some(pos) = panel_indices
+                                .iter()
+                                .position(|idx| *idx == app_state.v2_grid_strategy_index)
+                            {
+                                let next_pos = pos.saturating_sub(1);
+                                app_state.v2_grid_strategy_index = panel_indices[next_pos];
+                            } else if let Some(first) = panel_indices.first().copied() {
+                                app_state.v2_grid_strategy_index = first;
+                            }
                         }
                         KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            app_state.v2_grid_strategy_index = (app_state.v2_grid_strategy_index
-                                + 1)
-                            .min(app_state.strategy_items.len().saturating_sub(1));
+                            let panel_indices: Vec<usize> = app_state
+                                .strategy_item_active
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(idx, active)| {
+                                    if *active == app_state.v2_grid_select_on_panel {
+                                        Some(idx)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            if let Some(pos) = panel_indices
+                                .iter()
+                                .position(|idx| *idx == app_state.v2_grid_strategy_index)
+                            {
+                                let next_pos = (pos + 1).min(panel_indices.len().saturating_sub(1));
+                                app_state.v2_grid_strategy_index = panel_indices[next_pos];
+                            } else if let Some(first) = panel_indices.first().copied() {
+                                app_state.v2_grid_strategy_index = first;
+                            }
                         }
                         KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
                             app_state.v2_grid_symbol_index =
@@ -1265,6 +1327,11 @@ async fn main() -> Result<()> {
                                     );
                                     app_state.v2_grid_strategy_index =
                                         fallback_idx.min(strategy_catalog.len().saturating_sub(1));
+                                    app_state.v2_grid_select_on_panel = app_state
+                                        .strategy_item_active
+                                        .get(app_state.v2_grid_strategy_index)
+                                        .copied()
+                                        .unwrap_or(false);
                                     app_state.push_log(format!("Strategy deleted: {}", profile.label));
                                     persist_strategy_session_state(
                                         &mut app_state,
@@ -1302,20 +1369,6 @@ async fn main() -> Result<()> {
                                             true,
                                             app_state.paused,
                                         );
-                                        apply_symbol_selection(
-                                            &next_profile.symbol,
-                                            &mut current_symbol,
-                                            &mut app_state,
-                                            &ws_symbol_tx,
-                                            &rest_client,
-                                            &config,
-                                            &app_tx,
-                                        );
-                                        current_strategy_profile = next_profile.clone();
-                                        app_state.strategy_label = next_profile.label.clone();
-                                        app_state.fast_sma = None;
-                                        app_state.slow_sma = None;
-                                        let _ = strategy_profile_tx.send(next_profile.clone());
                                         app_state.paused = false;
                                         let _ = strategy_enabled_tx.send(true);
                                         app_state.push_log(format!(
@@ -1331,6 +1384,11 @@ async fn main() -> Result<()> {
                                         &strategy_catalog,
                                         &enabled_strategy_tags,
                                     );
+                                    app_state.v2_grid_select_on_panel = app_state
+                                        .strategy_item_active
+                                        .get(app_state.v2_grid_strategy_index)
+                                        .copied()
+                                        .unwrap_or(false);
                                     persist_strategy_session_state(
                                         &mut app_state,
                                         &strategy_catalog,
@@ -1483,6 +1541,11 @@ async fn main() -> Result<()> {
                             .iter()
                             .position(|item| item == &app_state.strategy_label)
                             .unwrap_or(0);
+                        app_state.v2_grid_select_on_panel = app_state
+                            .strategy_item_active
+                            .get(app_state.v2_grid_strategy_index)
+                            .copied()
+                            .unwrap_or(false);
                         app_state.v2_grid_open = true;
                     }
                     KeyCode::Char('f') | KeyCode::Char('F') => {
@@ -1496,6 +1559,11 @@ async fn main() -> Result<()> {
                             .iter()
                             .position(|item| item == &app_state.strategy_label)
                             .unwrap_or(0);
+                        app_state.v2_grid_select_on_panel = app_state
+                            .strategy_item_active
+                            .get(app_state.v2_grid_strategy_index)
+                            .copied()
+                            .unwrap_or(false);
                         app_state.v2_grid_open = true;
                     }
                     _ => {}

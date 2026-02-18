@@ -80,14 +80,54 @@ impl AppStateV2 {
                 .cmp(&b.symbol)
                 .then_with(|| a.strategy_id.cmp(&b.strategy_id))
         });
-
-        let asset_row = AssetEntry {
-            symbol: state.symbol.clone(),
-            last_price: state.last_price(),
-            position_qty: state.position.qty,
-            realized_pnl_usdt: state.history_realized_pnl,
-            unrealized_pnl_usdt: state.position.unrealized_pnl,
-        };
+        let mut asset_symbols: Vec<String> = state
+            .symbol_items
+            .iter()
+            .cloned()
+            .chain(state.strategy_item_symbols.iter().cloned())
+            .chain(state.balances.keys().cloned())
+            .filter(|s| !s.trim().is_empty())
+            .collect();
+        asset_symbols.sort();
+        asset_symbols.dedup();
+        if asset_symbols.is_empty() {
+            asset_symbols.push(state.symbol.clone());
+        }
+        let assets = asset_symbols
+            .into_iter()
+            .map(|symbol| {
+                if symbol == state.symbol {
+                    AssetEntry {
+                        symbol,
+                        last_price: state.last_price(),
+                        position_qty: state.position.qty,
+                        realized_pnl_usdt: state.history_realized_pnl,
+                        unrealized_pnl_usdt: state.position.unrealized_pnl,
+                    }
+                } else {
+                    let inferred_qty = state
+                        .balances
+                        .get(&symbol)
+                        .copied()
+                        .or_else(|| {
+                            let (base, _) = split_symbol_assets(&symbol);
+                            if base.is_empty() {
+                                None
+                            } else {
+                                state.balances.get(&base).copied()
+                            }
+                        })
+                        .unwrap_or(0.0);
+                    AssetEntry {
+                        symbol,
+                        last_price: None,
+                        position_qty: inferred_qty,
+                        realized_pnl_usdt: 0.0,
+                        unrealized_pnl_usdt: 0.0,
+                    }
+                }
+            })
+            .collect();
 
         Self {
             portfolio: PortfolioSummary {
@@ -96,7 +136,7 @@ impl AppStateV2 {
                 total_unrealized_pnl_usdt: state.position.unrealized_pnl,
                 ws_connected: state.ws_connected,
             },
-            assets: vec![asset_row],
+            assets,
             strategies: strategy_rows,
             matrix: matrix_rows,
             focus: FocusState {
@@ -113,4 +153,18 @@ impl AppStateV2 {
             .map(|s| (s.strategy_id.clone(), s))
             .collect()
     }
+}
+
+fn split_symbol_assets(symbol: &str) -> (String, String) {
+    const QUOTE_SUFFIXES: [&str; 10] = [
+        "USDT", "USDC", "FDUSD", "BUSD", "TUSD", "TRY", "EUR", "BTC", "ETH", "BNB",
+    ];
+    for q in QUOTE_SUFFIXES {
+        if let Some(base) = symbol.strip_suffix(q) {
+            if !base.is_empty() {
+                return (base.to_string(), q.to_string());
+            }
+        }
+    }
+    (String::new(), String::new())
 }
