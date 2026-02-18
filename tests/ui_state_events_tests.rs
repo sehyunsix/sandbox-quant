@@ -1,6 +1,7 @@
 use sandbox_quant::event::{AppEvent, WsConnectionStatus};
 use sandbox_quant::model::order::OrderSide;
 use sandbox_quant::model::signal::Signal;
+use sandbox_quant::order_manager::OrderHistoryStats;
 use sandbox_quant::order_manager::OrderUpdate;
 use sandbox_quant::risk_module::RateBudgetSnapshot;
 use sandbox_quant::ui::AppState;
@@ -150,4 +151,27 @@ fn app_state_tracks_fill_latency_without_submitted_event() {
         !s.network_fill_latencies_ms.is_empty(),
         "fill latency should be sampled even when Submitted is absent"
     );
+}
+
+#[test]
+/// Verifies aggregated strategy stats propagation:
+/// periodic multi-symbol sync should update grid strategy pnl map via StrategyStatsUpdate.
+fn app_state_applies_strategy_stats_update_event() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    let mut stats = std::collections::HashMap::new();
+    stats.insert(
+        "cfg".to_string(),
+        OrderHistoryStats {
+            trade_count: 4,
+            win_count: 3,
+            lose_count: 1,
+            realized_pnl: 12.5,
+        },
+    );
+    s.apply(AppEvent::StrategyStatsUpdate {
+        strategy_stats: stats,
+    });
+    let cfg = s.strategy_stats.get("cfg").expect("cfg stats should be present");
+    assert_eq!(cfg.trade_count, 4);
+    assert!((cfg.realized_pnl - 12.5).abs() < f64::EPSILON);
 }

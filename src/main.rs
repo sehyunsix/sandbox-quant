@@ -13,7 +13,7 @@ use sandbox_quant::event::AppEvent;
 use sandbox_quant::model::position::Position;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
-use sandbox_quant::order_manager::{MarketKind, OrderManager};
+use sandbox_quant::order_manager::{MarketKind, OrderHistoryStats, OrderManager};
 use sandbox_quant::order_store;
 use sandbox_quant::strategy::ma_crossover::MaCrossover;
 use sandbox_quant::strategy_catalog::{StrategyCatalog, StrategyProfile};
@@ -191,12 +191,6 @@ fn apply_symbol_selection(
     app_state.fill_markers.clear();
     app_state.open_order_history.clear();
     app_state.filled_order_history.clear();
-    app_state.history_trade_count = 0;
-    app_state.history_win_count = 0;
-    app_state.history_lose_count = 0;
-    app_state.history_realized_pnl = 0.0;
-    app_state.history_estimated_total_pnl_usdt = Some(0.0);
-    app_state.strategy_stats.clear();
     app_state.history_fills.clear();
     app_state.last_applied_fee = "---".to_string();
     app_state.trade_stats_reset_warned = false;
@@ -707,24 +701,39 @@ async fn main() -> Result<()> {
                     }
                 }
                 _ = order_history_sync.tick() => {
-                    if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
+                    let mut aggregated_stats: HashMap<String, OrderHistoryStats> = HashMap::new();
+                    for (instrument, mgr) in order_managers.iter_mut() {
                         match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
                             Ok(history) => {
-                                let _ = strat_app_tx
-                                    .send(AppEvent::OrderHistoryUpdate(history))
-                                    .await;
+                                if instrument == &selected_symbol {
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::OrderHistoryUpdate(history.clone()))
+                                        .await;
+                                }
+                                for (tag, s) in history.strategy_stats {
+                                    let slot = aggregated_stats.entry(tag).or_default();
+                                    slot.trade_count = slot.trade_count.saturating_add(s.trade_count);
+                                    slot.win_count = slot.win_count.saturating_add(s.win_count);
+                                    slot.lose_count = slot.lose_count.saturating_add(s.lose_count);
+                                    slot.realized_pnl += s.realized_pnl;
+                                }
                             }
                             Err(e) => {
                                 let _ = strat_app_tx
                                     .send(AppEvent::LogMessage(format!(
-                                        "[WARN] Periodic order history sync failed: {}",
-                                        e
+                                        "[WARN] Periodic order history sync failed ({}): {}",
+                                        instrument, e
                                     )))
                                     .await;
                             }
                         }
                         emit_rate_snapshot(&strat_app_tx, mgr);
                     }
+                    let _ = strat_app_tx
+                        .send(AppEvent::StrategyStatsUpdate {
+                            strategy_stats: aggregated_stats,
+                        })
+                        .await;
                 }
                 _ = strat_symbol_rx.changed() => {
                     selected_symbol = normalize_instrument_label(strat_symbol_rx.borrow().as_str());

@@ -827,7 +827,6 @@ impl AppState {
                         self.history_win_count = snapshot.stats.win_count;
                         self.history_lose_count = snapshot.stats.lose_count;
                         self.history_realized_pnl = snapshot.stats.realized_pnl;
-                        self.strategy_stats = snapshot.strategy_stats;
                         // Keep position panel aligned with exchange history state
                         // so Qty/Entry/UnrPL reflect actual holdings, not only session fills.
                         if snapshot.open_qty > f64::EPSILON {
@@ -860,6 +859,10 @@ impl AppState {
                     snapshot.fetch_latency_ms,
                 );
                 self.refresh_history_rows();
+            }
+            AppEvent::StrategyStatsUpdate { strategy_stats } => {
+                rebuild_projection = true;
+                self.strategy_stats = strategy_stats;
             }
             AppEvent::RiskRateSnapshot {
                 global,
