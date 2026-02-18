@@ -835,10 +835,10 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
-            Constraint::Length(7),
-            Constraint::Length(5),
-            Constraint::Min(4),
+            Constraint::Length(4),
+            Constraint::Min(10),
+            Constraint::Length(3),
+            Constraint::Min(3),
         ])
         .split(inner);
 
@@ -937,8 +937,8 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         rows,
         [
             Constraint::Length(2),
-            Constraint::Length(14),
-            Constraint::Length(30),
+            Constraint::Length(16),
+            Constraint::Min(28),
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(4),
