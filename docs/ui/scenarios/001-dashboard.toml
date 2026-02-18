@@ -1,0 +1,13 @@
+id = "dashboard-main"
+title = "Main Dashboard"
+width = 180
+height = 48
+profiles = ["smoke", "full"]
+
+[[step]]
+type = "assert_text"
+value = "sandbox-quant"
+
+[[step]]
+type = "snapshot"
+path = "docs/ui/screenshots/dashboard-main.txt"

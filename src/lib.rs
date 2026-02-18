@@ -12,3 +12,4 @@ pub mod strategy;
 pub mod strategy_catalog;
 pub mod strategy_session;
 pub mod ui;
+pub mod ui_docs;

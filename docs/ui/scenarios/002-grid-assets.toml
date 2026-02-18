@@ -1,0 +1,21 @@
+id = "grid-assets"
+title = "Portfolio Grid - Assets Tab"
+width = 200
+height = 52
+profiles = ["smoke", "full"]
+
+[[step]]
+type = "key"
+value = "g"
+
+[[step]]
+type = "key"
+value = "1"
+
+[[step]]
+type = "assert_text"
+value = "Asset Table"
+
+[[step]]
+type = "snapshot"
+path = "docs/ui/screenshots/grid-assets.txt"

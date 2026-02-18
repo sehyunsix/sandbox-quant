@@ -1,0 +1,25 @@
+id = "grid-strategies-config"
+title = "Portfolio Grid - Strategies + Config Popup"
+width = 220
+height = 56
+profiles = ["smoke", "full"]
+
+[[step]]
+type = "key"
+value = "g"
+
+[[step]]
+type = "key"
+value = "2"
+
+[[step]]
+type = "key"
+value = "c"
+
+[[step]]
+type = "assert_text"
+value = "Strategy Config"
+
+[[step]]
+type = "snapshot"
+path = "docs/ui/screenshots/grid-strategies-config.txt"
