@@ -1056,7 +1056,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(40), Constraint::Length(24)])
         .split(outer[1]);
-    let selected_strategy_stats = strategy_stats_for_item(&state.strategy_stats, &state.strategy_label)
+    let selected_strategy_stats =
+        strategy_stats_for_item(&state.strategy_stats, &state.strategy_label, &state.symbol)
         .cloned()
         .unwrap_or_default();
 
@@ -1190,7 +1191,11 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
 
     let focus_symbol = state.focus_symbol().unwrap_or(&state.symbol);
     let focus_strategy = state.focus_strategy_id().unwrap_or(&state.strategy_label);
-    let focus_strategy_stats = strategy_stats_for_item(&state.strategy_stats, focus_strategy)
+    let focus_strategy_stats = strategy_stats_for_item(
+        &state.strategy_stats,
+        focus_strategy,
+        focus_symbol,
+    )
         .cloned()
         .unwrap_or_default();
     frame.render_widget(
@@ -1885,10 +1890,17 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
         indices
             .iter()
             .map(|idx| {
-                state
+                let item = state
                     .strategy_items
                     .get(*idx)
-                    .and_then(|item| strategy_stats_for_item(&state.strategy_stats, item))
+                    .map(String::as_str)
+                    .unwrap_or("-");
+                let row_symbol = state
+                    .strategy_item_symbols
+                    .get(*idx)
+                    .map(String::as_str)
+                    .unwrap_or(state.symbol.as_str());
+                strategy_stats_for_item(&state.strategy_stats, item, row_symbol)
                     .map(|s| s.realized_pnl)
                     .unwrap_or(0.0)
             })
@@ -1993,7 +2005,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     .copied()
                     .map(format_running_time)
                     .unwrap_or_else(|| "-".to_string());
-                let stats = strategy_stats_for_item(&state.strategy_stats, &item);
+                let stats = strategy_stats_for_item(&state.strategy_stats, &item, row_symbol);
                 let source_tag = source_tag_for_strategy_item(&item);
                 let last_evt = source_tag
                     .as_ref()
@@ -2443,7 +2455,8 @@ fn render_selector_popup(
         .enumerate()
         .map(|(idx, item)| {
             let item_text = if let Some(stats_map) = stats {
-                if let Some(s) = strategy_stats_for_item(stats_map, item) {
+                let symbol = selected_symbol.unwrap_or("-");
+                if let Some(s) = strategy_stats_for_item(stats_map, item, symbol) {
                     format!(
                         "{:<16}  W:{:<3} L:{:<3} T:{:<3} PnL:{:.4}",
                         item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
@@ -2476,7 +2489,8 @@ fn render_selector_popup(
     if let (Some(stats_map), Some(t)) = (stats, total_stats.as_ref()) {
         let mut strategy_sum = OrderHistoryStats::default();
         for item in items {
-            if let Some(s) = strategy_stats_for_item(stats_map, item) {
+            let symbol = selected_symbol.unwrap_or("-");
+            if let Some(s) = strategy_stats_for_item(stats_map, item, symbol) {
                 strategy_sum.trade_count += s.trade_count;
                 strategy_sum.win_count += s.win_count;
                 strategy_sum.lose_count += s.lose_count;
@@ -2513,7 +2527,14 @@ fn render_selector_popup(
 fn strategy_stats_for_item<'a>(
     stats_map: &'a HashMap<String, OrderHistoryStats>,
     item: &str,
+    symbol: &str,
 ) -> Option<&'a OrderHistoryStats> {
+    if let Some(source_tag) = source_tag_for_strategy_item(item) {
+        let scoped = strategy_stats_scope_key(symbol, &source_tag);
+        if let Some(s) = stats_map.get(&scoped) {
+            return Some(s);
+        }
+    }
     if let Some(s) = stats_map.get(item) {
         return Some(s);
     }
@@ -2523,6 +2544,14 @@ fn strategy_stats_for_item<'a>(
             .get(&tag)
             .or_else(|| stats_map.get(&tag.to_ascii_uppercase()))
     })
+}
+
+fn strategy_stats_scope_key(symbol: &str, source_tag: &str) -> String {
+    format!(
+        "{}::{}",
+        symbol.trim().to_ascii_uppercase(),
+        source_tag.trim().to_ascii_lowercase()
+    )
 }
 
 fn source_tag_for_strategy_item(item: &str) -> Option<String> {
