@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct StrategyProfile {
     pub label: String,
     pub source_tag: String,
+    #[serde(default)]
+    pub symbol: String,
     pub fast_period: usize,
     pub slow_period: usize,
     pub min_ticks_between_signals: u64,
@@ -26,12 +28,19 @@ pub struct StrategyCatalog {
 }
 
 impl StrategyCatalog {
-    pub fn new(config_fast: usize, config_slow: usize, min_ticks_between_signals: u64) -> Self {
+    pub fn new(
+        default_symbol: &str,
+        config_fast: usize,
+        config_slow: usize,
+        min_ticks_between_signals: u64,
+    ) -> Self {
+        let symbol = default_symbol.trim().to_ascii_uppercase();
         Self {
             profiles: vec![
                 StrategyProfile {
                     label: "MA(Config)".to_string(),
                     source_tag: "cfg".to_string(),
+                    symbol: symbol.clone(),
                     fast_period: config_fast,
                     slow_period: config_slow,
                     min_ticks_between_signals,
@@ -39,6 +48,7 @@ impl StrategyCatalog {
                 StrategyProfile {
                     label: "MA(Fast 5/20)".to_string(),
                     source_tag: "fst".to_string(),
+                    symbol: symbol.clone(),
                     fast_period: 5,
                     slow_period: 20,
                     min_ticks_between_signals,
@@ -46,6 +56,7 @@ impl StrategyCatalog {
                 StrategyProfile {
                     label: "MA(Slow 20/60)".to_string(),
                     source_tag: "slw".to_string(),
+                    symbol,
                     fast_period: 20,
                     slow_period: 60,
                     min_ticks_between_signals,
@@ -57,6 +68,10 @@ impl StrategyCatalog {
 
     pub fn labels(&self) -> Vec<String> {
         self.profiles.iter().map(|p| p.label.clone()).collect()
+    }
+
+    pub fn symbols(&self) -> Vec<String> {
+        self.profiles.iter().map(|p| p.symbol.clone()).collect()
     }
 
     pub fn len(&self) -> usize {
@@ -80,13 +95,24 @@ impl StrategyCatalog {
     }
 
     pub fn from_profiles(
-        profiles: Vec<StrategyProfile>,
+        mut profiles: Vec<StrategyProfile>,
+        default_symbol: &str,
         config_fast: usize,
         config_slow: usize,
         min_ticks_between_signals: u64,
     ) -> Self {
         if profiles.is_empty() {
-            return Self::new(config_fast, config_slow, min_ticks_between_signals);
+            return Self::new(
+                default_symbol,
+                config_fast,
+                config_slow,
+                min_ticks_between_signals,
+            );
+        }
+        for profile in &mut profiles {
+            if profile.symbol.trim().is_empty() {
+                profile.symbol = default_symbol.trim().to_ascii_uppercase();
+            }
         }
         let next_custom_id = profiles
             .iter()
@@ -109,47 +135,51 @@ impl StrategyCatalog {
             .get(base_index)
             .cloned()
             .unwrap_or_else(|| self.profiles[0].clone());
-        let tag = format!("c{:02}", self.next_custom_id);
-        self.next_custom_id += 1;
-        let fast = base.fast_period.max(2);
-        let slow = base.slow_period.max(fast + 1);
-        let profile = StrategyProfile {
-            label: format!("MA(Custom {}/{}) [{}]", fast, slow, tag),
-            source_tag: tag,
-            fast_period: fast,
-            slow_period: slow,
-            min_ticks_between_signals: base.min_ticks_between_signals,
-        };
-        self.profiles.push(profile.clone());
-        profile
+        self.new_custom_profile(
+            &base.symbol,
+            base.fast_period,
+            base.slow_period,
+            base.min_ticks_between_signals,
+        )
     }
 
-    pub fn update_profile(
+    pub fn fork_profile(
         &mut self,
         index: usize,
+        symbol: &str,
         fast_period: usize,
         slow_period: usize,
         min_ticks_between_signals: u64,
     ) -> Option<StrategyProfile> {
-        let profile = self.profiles.get_mut(index)?;
-        let fast = fast_period.max(2);
-        let slow = slow_period.max(fast + 1);
-        profile.fast_period = fast;
-        profile.slow_period = slow;
-        profile.min_ticks_between_signals = min_ticks_between_signals.max(1);
-        if profile.source_tag.starts_with('c') {
-            profile.label = format!(
-                "MA(Custom {}/{}) [{}]",
-                profile.fast_period, profile.slow_period, profile.source_tag
-            );
-        } else if profile.source_tag == "fst" {
-            profile.label = format!("MA(Fast {}/{})", profile.fast_period, profile.slow_period);
-        } else if profile.source_tag == "slw" {
-            profile.label = format!("MA(Slow {}/{})", profile.fast_period, profile.slow_period);
-        } else if profile.source_tag == "cfg" {
-            profile.label = format!("MA(Config {}/{})", profile.fast_period, profile.slow_period);
-        }
-        Some(profile.clone())
+        self.profiles.get(index)?;
+        Some(self.new_custom_profile(
+            symbol,
+            fast_period,
+            slow_period,
+            min_ticks_between_signals,
+        ))
     }
 
+    fn new_custom_profile(
+        &mut self,
+        symbol: &str,
+        fast_period: usize,
+        slow_period: usize,
+        min_ticks_between_signals: u64,
+    ) -> StrategyProfile {
+        let tag = format!("c{:02}", self.next_custom_id);
+        self.next_custom_id += 1;
+        let fast = fast_period.max(2);
+        let slow = slow_period.max(fast + 1);
+        let profile = StrategyProfile {
+            label: format!("MA(Custom {}/{}) [{}]", fast, slow, tag),
+            source_tag: tag,
+            symbol: symbol.trim().to_ascii_uppercase(),
+            fast_period: fast,
+            slow_period: slow,
+            min_ticks_between_signals: min_ticks_between_signals.max(1),
+        };
+        self.profiles.push(profile.clone());
+        profile
+    }
 }

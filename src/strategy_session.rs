@@ -24,6 +24,7 @@ fn strategy_session_path() -> PathBuf {
 }
 
 pub fn load_strategy_session(
+    default_symbol: &str,
     config_fast: usize,
     config_slow: usize,
     min_ticks_between_signals: u64,
@@ -31,6 +32,7 @@ pub fn load_strategy_session(
     let path = strategy_session_path();
     load_strategy_session_from_path(
         &path,
+        default_symbol,
         config_fast,
         config_slow,
         min_ticks_between_signals,
@@ -39,6 +41,7 @@ pub fn load_strategy_session(
 
 pub fn load_strategy_session_from_path(
     path: &Path,
+    default_symbol: &str,
     config_fast: usize,
     config_slow: usize,
     min_ticks_between_signals: u64,
@@ -55,6 +58,7 @@ pub fn load_strategy_session_from_path(
     Ok(Some(LoadedStrategySession {
         catalog: StrategyCatalog::from_profiles(
             persisted.profiles,
+            default_symbol,
             config_fast,
             config_slow,
             min_ticks_between_signals,
