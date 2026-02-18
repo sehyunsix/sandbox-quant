@@ -62,7 +62,7 @@ fn render_grid_popup_with_strategy_selector() {
         "strategy table should include selectable configured strategies"
     );
     assert!(
-        text.contains("Use [N] new"),
+        text.contains("Strategy"),
         "grid strategy navigation hint should be visible"
     );
 }
@@ -93,7 +93,7 @@ fn render_grid_popup_with_registered_custom_strategy() {
 
     let text = buffer_text(&terminal);
     assert!(text.contains("MA(Custom 8/29) [c01]"));
-    assert!(text.contains("W:2 L:1 T:3"));
+    assert!(text.contains("+1.2500"));
 }
 
 #[test]

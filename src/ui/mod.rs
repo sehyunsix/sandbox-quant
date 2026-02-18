@@ -867,15 +867,19 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         .get(state.v2_grid_symbol_index)
         .map(String::as_str)
         .unwrap_or(state.symbol.as_str());
+    strategy_lines.push(Line::from(Span::styled(
+        format!("{:<24} {:>3} {:>3} {:>4} {:>11}", "Strategy", "W", "L", "T", "PnL"),
+        Style::default().fg(Color::DarkGray),
+    )));
     for (idx, item) in state.strategy_items.iter().enumerate() {
         let stats = strategy_stats_for_item(&state.strategy_stats, item);
         let line = if let Some(s) = stats {
             format!(
-                "{} | {}  W:{} L:{} T:{}  PnL:{:+.4}",
-                selected_symbol, item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
+                "{:<24} {:>3} {:>3} {:>4} {:+11.4}",
+                item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
             )
         } else {
-            format!("{} | {}  W:0 L:0 T:0  PnL:{:+.4}", selected_symbol, item, 0.0)
+            format!("{:<24} {:>3} {:>3} {:>4} {:+11.4}", item, 0, 0, 0, 0.0)
         };
         let (prefix, style) = if idx == state.v2_grid_strategy_index {
             (
