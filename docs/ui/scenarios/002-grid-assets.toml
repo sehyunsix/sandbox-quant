@@ -14,7 +14,7 @@ value = "1"
 
 [[step]]
 type = "assert_text"
-value = "Asset Table"
+value = "Assets | Total"
 
 [[step]]
 type = "snapshot"

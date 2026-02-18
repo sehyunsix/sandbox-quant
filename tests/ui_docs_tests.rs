@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use sandbox_quant::ui_docs::{load_scenarios_from_dir, run_scenarios_and_write, Scenario};
+use sandbox_quant::ui_docs::{
+    load_scenarios_from_dir, render_to_text, run_scenarios_and_write, seed_state, Scenario,
+};
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("sq-ui-docs-{}-{}", name, uuid::Uuid::new_v4()));
@@ -33,6 +35,7 @@ value = "g"
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].id, "test-id");
     assert_eq!(loaded[0].title, "Test Scenario");
+    assert_eq!(loaded[0].steps.len(), 1);
 }
 
 #[test]
@@ -62,9 +65,30 @@ fn run_scenario_and_update_readme_markers() {
         run_scenarios_and_write(&[scenario], &index_path, &readme_path).expect("run ui docs");
     assert_eq!(rendered.len(), 1);
     assert!(snapshot_path.exists(), "snapshot should be generated");
+    let svg_path = snapshot_path.with_extension("svg");
+    assert!(svg_path.exists(), "svg preview should be generated");
     let index = fs::read_to_string(index_path).expect("read index");
     assert!(index.contains("Dashboard Test"));
+    assert!(index.contains("!["), "index should embed image preview");
     let readme = fs::read_to_string(readme_path).expect("read readme");
     assert!(readme.contains("UI Docs (Auto)"));
     assert!(readme.contains("docs/ui/INDEX.md"));
+    assert!(
+        readme.contains(".svg"),
+        "readme should include image preview paths"
+    );
+}
+
+#[test]
+fn seed_state_renders_chart_and_latency() {
+    let state = seed_state();
+    let text = render_to_text(&state, 160, 42).expect("render seed state");
+    assert!(
+        !text.contains("Waiting for data..."),
+        "seed state should include candles for chart rendering"
+    );
+    assert!(
+        text.contains("lat:180ms"),
+        "status bar should expose seeded price latency"
+    );
 }

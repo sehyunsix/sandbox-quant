@@ -6,6 +6,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use serde::Deserialize;
 
+use crate::model::candle::Candle;
 use crate::ui::{self, AppState, GridTab};
 
 const DEFAULT_SCENARIO_DIR: &str = "docs/ui/scenarios";
@@ -23,7 +24,7 @@ pub struct Scenario {
     pub height: u16,
     #[serde(default)]
     pub profiles: Vec<String>,
-    #[serde(default)]
+    #[serde(default, alias = "step")]
     pub steps: Vec<Step>,
 }
 
@@ -40,7 +41,13 @@ pub enum Step {
 pub struct RenderedScenario {
     pub id: String,
     pub title: String,
-    pub snapshot_paths: Vec<String>,
+    pub snapshot_paths: Vec<SnapshotArtifact>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotArtifact {
+    pub raw_path: String,
+    pub image_path: Option<String>,
 }
 
 fn default_width() -> u16 {
@@ -53,8 +60,7 @@ fn default_height() -> u16 {
 
 pub fn run_cli(args: &[String]) -> Result<()> {
     if args.is_empty() {
-        print_usage();
-        return Ok(());
+        return run_mode("full");
     }
     match args[0].as_str() {
         "smoke" => run_mode("smoke"),
@@ -172,7 +178,11 @@ fn run_scenario(s: &Scenario) -> Result<RenderedScenario> {
                 fs::write(&snapshot_path, text).with_context(|| {
                     format!("failed to write snapshot {}", snapshot_path.display())
                 })?;
-                snapshots.push(snapshot_path.to_string_lossy().to_string());
+                let image_path = write_svg_preview(&snapshot_path)?;
+                snapshots.push(SnapshotArtifact {
+                    raw_path: snapshot_path.to_string_lossy().to_string(),
+                    image_path,
+                });
             }
         }
     }
@@ -187,7 +197,11 @@ fn run_scenario(s: &Scenario) -> Result<RenderedScenario> {
         }
         fs::write(&default_path_buf, text)
             .with_context(|| format!("failed to write {}", default_path_buf.display()))?;
-        snapshots.push(default_path);
+        let image_path = write_svg_preview(&default_path_buf)?;
+        snapshots.push(SnapshotArtifact {
+            raw_path: default_path,
+            image_path,
+        });
     }
 
     Ok(RenderedScenario {
@@ -217,9 +231,17 @@ pub fn render_to_text(state: &AppState, width: u16, height: u16) -> Result<Strin
 
 pub fn seed_state() -> AppState {
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
     state.ws_connected = true;
     state.current_equity_usdt = Some(10_000.0);
     state.initial_equity_usdt = Some(9_800.0);
+    state.candles = seed_candles(now_ms, state.candle_interval_ms, 100, 67_000.0);
+    state.last_price_update_ms = Some(now_ms);
+    state.last_price_event_ms = Some(now_ms.saturating_sub(180));
+    state.last_price_latency_ms = Some(180);
+    state.last_order_history_update_ms = Some(now_ms.saturating_sub(1_100));
+    state.last_order_history_event_ms = Some(now_ms.saturating_sub(1_950));
+    state.last_order_history_latency_ms = Some(850);
     state.symbol_items = DEFAULT_SYMBOLS.iter().map(|v| v.to_string()).collect();
     state.strategy_item_symbols = vec![
         "BTCUSDT".to_string(),
@@ -233,7 +255,36 @@ pub fn seed_state() -> AppState {
     state.network_tick_latencies_ms = vec![120, 160, 170, 210, 300];
     state.network_fill_latencies_ms = vec![400, 600, 1200];
     state.network_order_sync_latencies_ms = vec![100, 130, 170];
+    state.network_last_fill_ms = Some(now_ms.saturating_sub(4_500));
+    state.fast_sma = state.candles.last().map(|c| c.close * 0.9992);
+    state.slow_sma = state.candles.last().map(|c| c.close * 0.9985);
     state
+}
+
+fn seed_candles(now_ms: u64, interval_ms: u64, count: usize, base_price: f64) -> Vec<Candle> {
+    let count = count.max(8);
+    let bucket_close = now_ms - (now_ms % interval_ms);
+    let mut candles = Vec::with_capacity(count);
+    for i in 0..count {
+        let remaining = (count - i) as u64;
+        let open_time = bucket_close.saturating_sub(remaining * interval_ms);
+        let close_time = open_time.saturating_add(interval_ms);
+        let drift = (i as f64) * 2.1;
+        let wave = ((i as f64) * 0.24).sin() * 18.0;
+        let open = base_price + drift + wave;
+        let close = open + (((i % 6) as f64) - 2.0) * 1.7;
+        let high = open.max(close) + 6.5;
+        let low = open.min(close) - 6.0;
+        candles.push(Candle {
+            open,
+            high,
+            low,
+            close,
+            open_time,
+            close_time,
+        });
+    }
+    candles
 }
 
 fn apply_key_action(state: &mut AppState, key: &str) -> Result<()> {
@@ -325,7 +376,13 @@ fn write_index<P: AsRef<Path>>(path: P, rendered: &[RenderedScenario]) -> Result
     for item in rendered {
         out.push_str(&format!("## {} (`{}`)\n\n", item.title, item.id));
         for snapshot in &item.snapshot_paths {
-            out.push_str(&format!("- `{}`\n", snapshot));
+            if let Some(image_path) = &snapshot.image_path {
+                let rel_image = image_path
+                    .strip_prefix("docs/ui/")
+                    .unwrap_or(image_path.as_str());
+                out.push_str(&format!("![{}]({})\n\n", item.id, xml_escape(rel_image)));
+            }
+            out.push_str(&format!("- raw: `{}`\n", snapshot.raw_path));
         }
         out.push('\n');
     }
@@ -358,11 +415,15 @@ fn collect_existing_rendered<P: AsRef<Path>>(index_path: P) -> Result<Vec<Render
             });
         } else if let Some(path) = line
             .trim()
-            .strip_prefix("- `")
+            .strip_prefix("- raw: `")
             .and_then(|v| v.strip_suffix('`'))
         {
             if let Some(curr) = current.as_mut() {
-                curr.snapshot_paths.push(path.to_string());
+                let image_path = infer_svg_path(Path::new(path));
+                curr.snapshot_paths.push(SnapshotArtifact {
+                    raw_path: path.to_string(),
+                    image_path,
+                });
             }
         }
     }
@@ -393,8 +454,15 @@ pub fn update_readme<P: AsRef<Path>>(readme_path: P, rendered: &[RenderedScenari
     block.push_str("- Generated by `cargo run --bin ui_docs -- smoke|full`\n");
     block.push_str("- Full index: `docs/ui/INDEX.md`\n\n");
     for item in rendered.iter().take(4) {
-        if let Some(path) = item.snapshot_paths.first() {
-            block.push_str(&format!("- {}: `{}`\n", item.title, path));
+        if let Some(snapshot) = item.snapshot_paths.first() {
+            if let Some(image_path) = &snapshot.image_path {
+                block.push_str(&format!(
+                    "![{}]({})\n\n",
+                    item.title,
+                    xml_escape(image_path)
+                ));
+            }
+            block.push_str(&format!("- {} raw: `{}`\n", item.title, snapshot.raw_path));
         }
     }
     block.push('\n');
@@ -412,8 +480,77 @@ pub fn update_readme<P: AsRef<Path>>(readme_path: P, rendered: &[RenderedScenari
 
 fn print_usage() {
     eprintln!("usage:");
+    eprintln!("  cargo run --bin ui-docs");
     eprintln!("  cargo run --bin ui_docs -- smoke");
     eprintln!("  cargo run --bin ui_docs -- full");
     eprintln!("  cargo run --bin ui_docs -- scenario <id>");
     eprintln!("  cargo run --bin ui_docs -- readme-only");
+}
+
+fn write_svg_preview(raw_snapshot_path: &Path) -> Result<Option<String>> {
+    let raw = fs::read_to_string(raw_snapshot_path)
+        .with_context(|| format!("failed to read {}", raw_snapshot_path.display()))?;
+    let svg_path = raw_snapshot_path.with_extension("svg");
+    let lines: Vec<&str> = raw.lines().collect();
+    let width_chars = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let height_chars = lines.len();
+    if width_chars == 0 || height_chars == 0 {
+        return Ok(None);
+    }
+    let cell_w = 9usize;
+    let cell_h = 18usize;
+    let px_w = (width_chars * cell_w + 24) as u32;
+    let px_h = (height_chars * cell_h + 24) as u32;
+
+    let mut svg = String::new();
+    svg.push_str(r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+    svg.push('\n');
+    svg.push_str(&format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">"#,
+        px_w, px_h, px_w, px_h
+    ));
+    svg.push('\n');
+    svg.push_str(&format!(
+        r##"<rect x="0" y="0" width="{}" height="{}" fill="#0f111a"/>"##,
+        px_w, px_h
+    ));
+    svg.push('\n');
+    svg.push_str(r##"<g font-family="Menlo, Monaco, 'Courier New', monospace" font-size="14" fill="#d8dee9">"##);
+    svg.push('\n');
+
+    for (i, line) in lines.iter().enumerate() {
+        let y = 18 + (i as u32) * (cell_h as u32);
+        svg.push_str(&format!(
+            r#"<text x="12" y="{}" xml:space="preserve">{}</text>"#,
+            y,
+            xml_escape(line)
+        ));
+        svg.push('\n');
+    }
+    svg.push_str("</g>\n</svg>\n");
+
+    fs::write(&svg_path, svg).with_context(|| format!("failed to write {}", svg_path.display()))?;
+    Ok(Some(svg_path.to_string_lossy().to_string()))
+}
+
+fn infer_svg_path(raw_path: &Path) -> Option<String> {
+    let svg = raw_path.with_extension("svg");
+    if svg.exists() {
+        Some(svg.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+fn xml_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
