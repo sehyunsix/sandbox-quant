@@ -9,4 +9,6 @@ pub mod order_store;
 pub mod risk_module;
 pub mod runtime;
 pub mod strategy;
+pub mod strategy_catalog;
+pub mod strategy_session;
 pub mod ui;

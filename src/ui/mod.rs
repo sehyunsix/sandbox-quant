@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
 use crate::event::{AppEvent, WsConnectionStatus};
@@ -72,6 +72,14 @@ pub struct AppState {
     pub account_popup_open: bool,
     pub history_popup_open: bool,
     pub focus_popup_open: bool,
+    pub strategy_editor_open: bool,
+    pub strategy_editor_index: usize,
+    pub strategy_editor_field: usize,
+    pub strategy_editor_symbol_index: usize,
+    pub strategy_editor_fast: usize,
+    pub strategy_editor_slow: usize,
+    pub strategy_editor_cooldown: u64,
+    pub v2_grid_symbol_index: usize,
     pub v2_grid_strategy_index: usize,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
@@ -142,6 +150,14 @@ impl AppState {
             account_popup_open: false,
             history_popup_open: false,
             focus_popup_open: false,
+            strategy_editor_open: false,
+            strategy_editor_index: 0,
+            strategy_editor_field: 0,
+            strategy_editor_symbol_index: 0,
+            strategy_editor_fast: 5,
+            strategy_editor_slow: 20,
+            strategy_editor_cooldown: 1,
+            v2_grid_symbol_index: 0,
             v2_grid_strategy_index: 0,
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
@@ -674,6 +690,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             state.symbol_selector_index,
             None,
             None,
+            None,
         );
     } else if state.strategy_selector_open {
         render_selector_popup(
@@ -688,6 +705,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 lose_count: state.history_lose_count,
                 realized_pnl: state.history_realized_pnl,
             }),
+            Some(state.symbol.as_str()),
         );
     } else if state.account_popup_open {
         render_account_popup(frame, &state.balances);
@@ -695,6 +713,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         render_history_popup(frame, &state.history_rows, state.history_bucket);
     } else if state.focus_popup_open {
         render_focus_popup(frame, state);
+    } else if state.strategy_editor_open {
+        render_strategy_editor_popup(frame, state);
     } else if state.v2_grid_open {
         render_v2_grid_popup(frame, state);
     }
@@ -815,10 +835,10 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
-            Constraint::Length(6),
-            Constraint::Length(5),
-            Constraint::Min(4),
+            Constraint::Length(4),
+            Constraint::Min(10),
+            Constraint::Length(3),
+            Constraint::Min(3),
         ])
         .split(inner);
 
@@ -840,46 +860,113 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     }
     frame.render_widget(Paragraph::new(asset_lines), chunks[0]);
 
-    let mut strategy_lines = vec![Line::from(Span::styled(
-        "Strategy Table",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-    ))];
-    for (idx, item) in state.strategy_items.iter().enumerate() {
-        let stats = strategy_stats_for_item(&state.strategy_stats, item);
-        let line = if let Some(s) = stats {
-            format!(
-                "{}  W:{} L:{} T:{}  PnL:{:+.4}",
-                item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
-            )
-        } else {
-            format!("{}  W:0 L:0 T:0  PnL:{:+.4}", item, 0.0)
-        };
-        let (prefix, style) = if idx == state.v2_grid_strategy_index {
-            (
-                "▶ ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            ("  ", Style::default().fg(Color::White))
-        };
-        strategy_lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(Color::Yellow)),
-            Span::styled(line, style),
-        ]));
+    let selected_symbol = state
+        .symbol_items
+        .get(state.v2_grid_symbol_index)
+        .map(String::as_str)
+        .unwrap_or(state.symbol.as_str());
+    let strategy_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(2)])
+        .split(chunks[1]);
+    let header = Row::new(vec![
+        Cell::from(" "),
+        Cell::from("Symbol"),
+        Cell::from("Strategy"),
+        Cell::from("W"),
+        Cell::from("L"),
+        Cell::from("T"),
+        Cell::from("PnL"),
+    ])
+    .style(Style::default().fg(Color::DarkGray));
+    let mut rows: Vec<Row> = state
+        .strategy_items
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let stats = strategy_stats_for_item(&state.strategy_stats, item);
+            let (w, l, t, pnl) = if let Some(s) = stats {
+                (
+                    s.win_count.to_string(),
+                    s.lose_count.to_string(),
+                    s.trade_count.to_string(),
+                    format!("{:+.4}", s.realized_pnl),
+                )
+            } else {
+                ("0".to_string(), "0".to_string(), "0".to_string(), "+0.0000".to_string())
+            };
+            let marker = if idx == state.v2_grid_strategy_index {
+                "▶"
+            } else {
+                " "
+            };
+            let mut row = Row::new(vec![
+                Cell::from(marker),
+                Cell::from(selected_symbol.to_string()),
+                Cell::from(item.clone()),
+                Cell::from(w),
+                Cell::from(l),
+                Cell::from(t),
+                Cell::from(pnl),
+            ]);
+            if idx == state.v2_grid_strategy_index {
+                row = row.style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            row
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(
+            Row::new(vec![
+                Cell::from(" "),
+                Cell::from("-"),
+                Cell::from("(no strategies configured)"),
+                Cell::from("-"),
+                Cell::from("-"),
+                Cell::from("-"),
+                Cell::from("-"),
+            ])
+            .style(Style::default().fg(Color::DarkGray)),
+        );
     }
-    if state.strategy_items.is_empty() {
-        strategy_lines.push(Line::from(Span::styled(
-            "(no strategies configured)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    strategy_lines.push(Line::from(Span::styled(
-        "Use [J/K] to select, [Enter/F] focus+run, [G/Esc] close.",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(Paragraph::new(strategy_lines), chunks[1]);
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(2),
+            Constraint::Length(16),
+            Constraint::Min(28),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(4),
+            Constraint::Length(11),
+        ],
+    )
+    .header(header)
+    .column_spacing(1);
+    frame.render_widget(table, strategy_chunks[0]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("Symbol: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    selected_symbol,
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  ([H/L] or [←/→])", Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(Span::styled(
+                "Use [N] new, [C] config, [J/K] strategy, [H/L] symbol, [Enter/F] run, [G/Esc] close.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]),
+        strategy_chunks[1],
+    );
 
     let heat = format!(
         "Risk/Rate Heatmap  global {}/{} | orders {}/{} | account {}/{} | mkt {}/{}",
@@ -927,6 +1014,76 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         )));
     }
     frame.render_widget(Paragraph::new(rejection_lines), chunks[3]);
+}
+
+fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 8,
+        y: area.y + 4,
+        width: area.width.saturating_sub(16).max(50),
+        height: area.height.saturating_sub(8).max(12),
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Strategy Config ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let selected_name = state
+        .strategy_items
+        .get(state.strategy_editor_index)
+        .map(String::as_str)
+        .unwrap_or("Unknown");
+    let rows = [
+        (
+            "Symbol",
+            state
+                .symbol_items
+                .get(state.strategy_editor_symbol_index)
+                .cloned()
+                .unwrap_or_else(|| state.symbol.clone()),
+        ),
+        ("Fast Period", state.strategy_editor_fast.to_string()),
+        ("Slow Period", state.strategy_editor_slow.to_string()),
+        ("Cooldown Tick", state.strategy_editor_cooldown.to_string()),
+    ];
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Target: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                selected_name,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Use [J/K] field, [H/L] value, [Enter] save+apply symbol, [Esc] cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    for (idx, (name, value)) in rows.iter().enumerate() {
+        let marker = if idx == state.strategy_editor_field {
+            "▶ "
+        } else {
+            "  "
+        };
+        let style = if idx == state.strategy_editor_field {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(marker, Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{:<14}", name), style),
+            Span::styled(value, style),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_account_popup(frame: &mut Frame, balances: &HashMap<String, f64>) {
@@ -1030,6 +1187,7 @@ fn render_selector_popup(
     selected: usize,
     stats: Option<&HashMap<String, OrderHistoryStats>>,
     total_stats: Option<OrderHistoryStats>,
+    selected_symbol: Option<&str>,
 ) {
     let area = frame.area();
     let available_width = area.width.saturating_sub(2).max(1);
@@ -1072,6 +1230,17 @@ fn render_selector_popup(
 
     let mut lines: Vec<Line> = Vec::new();
     if stats.is_some() {
+        if let Some(symbol) = selected_symbol {
+            lines.push(Line::from(vec![
+                Span::styled("  Symbol: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    symbol,
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
         lines.push(Line::from(vec![Span::styled(
             "  Strategy           W    L    T    PnL",
             Style::default()
@@ -1159,17 +1328,30 @@ fn strategy_stats_for_item<'a>(
     if let Some(s) = stats_map.get(item) {
         return Some(s);
     }
-    let source_tag = match item {
-        "MA(Config)" => Some("cfg"),
-        "MA(Fast 5/20)" => Some("fst"),
-        "MA(Slow 20/60)" => Some("slw"),
-        _ => None,
-    };
+    let source_tag = source_tag_for_strategy_item(item);
     source_tag.and_then(|tag| {
         stats_map
-            .get(tag)
+            .get(&tag)
             .or_else(|| stats_map.get(&tag.to_ascii_uppercase()))
     })
+}
+
+fn source_tag_for_strategy_item(item: &str) -> Option<String> {
+    match item {
+        "MA(Config)" => return Some("cfg".to_string()),
+        "MA(Fast 5/20)" => return Some("fst".to_string()),
+        "MA(Slow 20/60)" => return Some("slw".to_string()),
+        _ => {}
+    }
+    if let Some((_, tail)) = item.rsplit_once('[') {
+        if let Some(tag) = tail.strip_suffix(']') {
+            let tag = tag.trim();
+            if !tag.is_empty() {
+                return Some(tag.to_ascii_lowercase());
+            }
+        }
+    }
+    None
 }
 
 fn subtract_stats(total: &OrderHistoryStats, used: &OrderHistoryStats) -> OrderHistoryStats {
