@@ -290,46 +290,46 @@ fn seed_candles(now_ms: u64, interval_ms: u64, count: usize, base_price: f64) ->
 fn apply_key_action(state: &mut AppState, key: &str) -> Result<()> {
     match key.to_ascii_lowercase().as_str() {
         "g" => {
-            state.v2_grid_open = !state.v2_grid_open;
-            if !state.v2_grid_open {
+            state.grid_open = !state.grid_open;
+            if !state.grid_open {
                 state.strategy_editor_open = false;
             }
         }
         "1" => {
-            if state.v2_grid_open {
-                state.v2_grid_tab = GridTab::Assets;
+            if state.grid_open {
+                state.grid_tab = GridTab::Assets;
             }
         }
         "2" => {
-            if state.v2_grid_open {
-                state.v2_grid_tab = GridTab::Strategies;
+            if state.grid_open {
+                state.grid_tab = GridTab::Strategies;
             }
         }
         "3" => {
-            if state.v2_grid_open {
-                state.v2_grid_tab = GridTab::Risk;
+            if state.grid_open {
+                state.grid_tab = GridTab::Risk;
             }
         }
         "4" => {
-            if state.v2_grid_open {
-                state.v2_grid_tab = GridTab::Network;
+            if state.grid_open {
+                state.grid_tab = GridTab::Network;
             }
         }
         "tab" => {
-            if state.v2_grid_open && state.v2_grid_tab == GridTab::Strategies {
-                state.v2_grid_select_on_panel = !state.v2_grid_select_on_panel;
+            if state.grid_open && state.grid_tab == GridTab::Strategies {
+                state.grid_select_on_panel = !state.grid_select_on_panel;
             }
         }
         "c" => {
-            if state.v2_grid_open && state.v2_grid_tab == GridTab::Strategies {
+            if state.grid_open && state.grid_tab == GridTab::Strategies {
                 state.strategy_editor_open = true;
             }
         }
         "esc" => {
             if state.strategy_editor_open {
                 state.strategy_editor_open = false;
-            } else if state.v2_grid_open {
-                state.v2_grid_open = false;
+            } else if state.grid_open {
+                state.grid_open = false;
             } else if state.symbol_selector_open {
                 state.symbol_selector_open = false;
             } else if state.strategy_selector_open {
@@ -341,22 +341,22 @@ fn apply_key_action(state: &mut AppState, key: &str) -> Result<()> {
             }
         }
         "t" => {
-            if !state.v2_grid_open {
+            if !state.grid_open {
                 state.symbol_selector_open = true;
             }
         }
         "y" => {
-            if !state.v2_grid_open {
+            if !state.grid_open {
                 state.strategy_selector_open = true;
             }
         }
         "a" => {
-            if !state.v2_grid_open {
+            if !state.grid_open {
                 state.account_popup_open = true;
             }
         }
         "i" => {
-            if !state.v2_grid_open {
+            if !state.grid_open {
                 state.history_popup_open = true;
             }
         }

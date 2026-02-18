@@ -1,6 +1,6 @@
+pub mod ui_projection;
 pub mod chart;
 pub mod dashboard;
-pub mod app_state_v2;
 
 use std::collections::HashMap;
 
@@ -19,11 +19,10 @@ use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
 use crate::order_store;
 use crate::risk_module::RateBudgetSnapshot;
 
-use app_state_v2::AppStateV2;
+use ui_projection::UiProjection;
+use ui_projection::AssetEntry;
 use chart::{FillMarker, PriceChart};
-use dashboard::{
-    KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar,
-};
+use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
 
 const MAX_LOG_MESSAGES: usize = 200;
 const MAX_FILL_MARKERS: usize = 200;
@@ -33,6 +32,32 @@ pub enum GridTab {
     Assets,
     Strategies,
     Risk,
+    Network,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrategyLastEvent {
+    pub side: OrderSide,
+    pub price: Option<f64>,
+    pub timestamp_ms: u64,
+    pub is_filled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ViewState {
+    pub is_grid_open: bool,
+    pub selected_grid_tab: GridTab,
+    pub selected_symbol_index: usize,
+    pub selected_strategy_index: usize,
+    pub is_on_panel_selected: bool,
+    pub is_symbol_selector_open: bool,
+    pub selected_symbol_selector_index: usize,
+    pub is_strategy_selector_open: bool,
+    pub selected_strategy_selector_index: usize,
+    pub is_account_popup_open: bool,
+    pub is_history_popup_open: bool,
+    pub is_focus_popup_open: bool,
+    pub is_strategy_editor_open: bool,
 }
 
 pub struct AppState {
@@ -92,15 +117,23 @@ pub struct AppState {
     pub strategy_editor_fast: usize,
     pub strategy_editor_slow: usize,
     pub strategy_editor_cooldown: u64,
-    pub v2_grid_symbol_index: usize,
-    pub v2_grid_strategy_index: usize,
-    pub v2_grid_select_on_panel: bool,
-    pub v2_grid_tab: GridTab,
+    pub grid_symbol_index: usize,
+    pub grid_strategy_index: usize,
+    pub grid_select_on_panel: bool,
+    pub grid_tab: GridTab,
+    pub strategy_last_event_by_tag: HashMap<String, StrategyLastEvent>,
+    pub network_tick_drop_count: u64,
+    pub network_reconnect_count: u64,
+    pub network_tick_latencies_ms: Vec<u64>,
+    pub network_fill_latencies_ms: Vec<u64>,
+    pub network_order_sync_latencies_ms: Vec<u64>,
+    pub network_last_fill_ms: Option<u64>,
+    pub network_pending_submit_ms_by_intent: HashMap<String, u64>,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
     pub last_applied_fee: String,
-    pub v2_grid_open: bool,
-    pub v2_state: AppStateV2,
+    pub grid_open: bool,
+    pub ui_projection: UiProjection,
     pub rate_budget_global: RateBudgetSnapshot,
     pub rate_budget_orders: RateBudgetSnapshot,
     pub rate_budget_account: RateBudgetSnapshot,
@@ -180,15 +213,23 @@ impl AppState {
             strategy_editor_fast: 5,
             strategy_editor_slow: 20,
             strategy_editor_cooldown: 1,
-            v2_grid_symbol_index: 0,
-            v2_grid_strategy_index: 0,
-            v2_grid_select_on_panel: true,
-            v2_grid_tab: GridTab::Strategies,
+            grid_symbol_index: 0,
+            grid_strategy_index: 0,
+            grid_select_on_panel: true,
+            grid_tab: GridTab::Strategies,
+            strategy_last_event_by_tag: HashMap::new(),
+            network_tick_drop_count: 0,
+            network_reconnect_count: 0,
+            network_tick_latencies_ms: Vec::new(),
+            network_fill_latencies_ms: Vec::new(),
+            network_order_sync_latencies_ms: Vec::new(),
+            network_last_fill_ms: None,
+            network_pending_submit_ms_by_intent: HashMap::new(),
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
             last_applied_fee: "---".to_string(),
-            v2_grid_open: false,
-            v2_state: AppStateV2::new(),
+            grid_open: false,
+            ui_projection: UiProjection::new(),
             rate_budget_global: RateBudgetSnapshot {
                 used: 0,
                 limit: 0,
@@ -225,6 +266,135 @@ impl AppState {
         if self.log_messages.len() > MAX_LOG_MESSAGES {
             self.log_messages.remove(0);
         }
+    }
+
+    fn push_latency_sample(samples: &mut Vec<u64>, value: u64) {
+        const MAX_SAMPLES: usize = 200;
+        samples.push(value);
+        if samples.len() > MAX_SAMPLES {
+            let drop_n = samples.len() - MAX_SAMPLES;
+            samples.drain(..drop_n);
+        }
+    }
+
+    /// Transitional projection for RFC-0016 Phase 2.
+    /// Keeps runtime behavior unchanged while exposing normalized naming.
+    pub fn view_state(&self) -> ViewState {
+        ViewState {
+            is_grid_open: self.grid_open,
+            selected_grid_tab: self.grid_tab,
+            selected_symbol_index: self.grid_symbol_index,
+            selected_strategy_index: self.grid_strategy_index,
+            is_on_panel_selected: self.grid_select_on_panel,
+            is_symbol_selector_open: self.symbol_selector_open,
+            selected_symbol_selector_index: self.symbol_selector_index,
+            is_strategy_selector_open: self.strategy_selector_open,
+            selected_strategy_selector_index: self.strategy_selector_index,
+            is_account_popup_open: self.account_popup_open,
+            is_history_popup_open: self.history_popup_open,
+            is_focus_popup_open: self.focus_popup_open,
+            is_strategy_editor_open: self.strategy_editor_open,
+        }
+    }
+
+    pub fn is_grid_open(&self) -> bool {
+        self.grid_open
+    }
+    pub fn set_grid_open(&mut self, open: bool) {
+        self.grid_open = open;
+    }
+    pub fn grid_tab(&self) -> GridTab {
+        self.grid_tab
+    }
+    pub fn set_grid_tab(&mut self, tab: GridTab) {
+        self.grid_tab = tab;
+    }
+    pub fn selected_grid_symbol_index(&self) -> usize {
+        self.grid_symbol_index
+    }
+    pub fn set_selected_grid_symbol_index(&mut self, idx: usize) {
+        self.grid_symbol_index = idx;
+    }
+    pub fn selected_grid_strategy_index(&self) -> usize {
+        self.grid_strategy_index
+    }
+    pub fn set_selected_grid_strategy_index(&mut self, idx: usize) {
+        self.grid_strategy_index = idx;
+    }
+    pub fn is_on_panel_selected(&self) -> bool {
+        self.grid_select_on_panel
+    }
+    pub fn set_on_panel_selected(&mut self, selected: bool) {
+        self.grid_select_on_panel = selected;
+    }
+    pub fn is_symbol_selector_open(&self) -> bool {
+        self.symbol_selector_open
+    }
+    pub fn set_symbol_selector_open(&mut self, open: bool) {
+        self.symbol_selector_open = open;
+    }
+    pub fn symbol_selector_index(&self) -> usize {
+        self.symbol_selector_index
+    }
+    pub fn set_symbol_selector_index(&mut self, idx: usize) {
+        self.symbol_selector_index = idx;
+    }
+    pub fn is_strategy_selector_open(&self) -> bool {
+        self.strategy_selector_open
+    }
+    pub fn set_strategy_selector_open(&mut self, open: bool) {
+        self.strategy_selector_open = open;
+    }
+    pub fn strategy_selector_index(&self) -> usize {
+        self.strategy_selector_index
+    }
+    pub fn set_strategy_selector_index(&mut self, idx: usize) {
+        self.strategy_selector_index = idx;
+    }
+    pub fn is_account_popup_open(&self) -> bool {
+        self.account_popup_open
+    }
+    pub fn set_account_popup_open(&mut self, open: bool) {
+        self.account_popup_open = open;
+    }
+    pub fn is_history_popup_open(&self) -> bool {
+        self.history_popup_open
+    }
+    pub fn set_history_popup_open(&mut self, open: bool) {
+        self.history_popup_open = open;
+    }
+    pub fn is_focus_popup_open(&self) -> bool {
+        self.focus_popup_open
+    }
+    pub fn set_focus_popup_open(&mut self, open: bool) {
+        self.focus_popup_open = open;
+    }
+    pub fn is_strategy_editor_open(&self) -> bool {
+        self.strategy_editor_open
+    }
+    pub fn set_strategy_editor_open(&mut self, open: bool) {
+        self.strategy_editor_open = open;
+    }
+    pub fn focus_symbol(&self) -> Option<&str> {
+        self.ui_projection.focus.symbol.as_deref()
+    }
+    pub fn focus_strategy_id(&self) -> Option<&str> {
+        self.ui_projection.focus.strategy_id.as_deref()
+    }
+    pub fn set_focus_symbol(&mut self, symbol: Option<String>) {
+        self.ui_projection.focus.symbol = symbol;
+    }
+    pub fn set_focus_strategy_id(&mut self, strategy_id: Option<String>) {
+        self.ui_projection.focus.strategy_id = strategy_id;
+    }
+    pub fn focus_pair(&self) -> (Option<String>, Option<String>) {
+        (
+            self.ui_projection.focus.symbol.clone(),
+            self.ui_projection.focus.strategy_id.clone(),
+        )
+    }
+    pub fn assets_view(&self) -> &[AssetEntry] {
+        &self.ui_projection.assets
     }
 
     pub fn refresh_history_rows(&mut self) {
@@ -353,15 +523,48 @@ impl AppState {
         }
     }
 
+    fn sync_projection_portfolio_summary(&mut self) {
+        self.ui_projection.portfolio.total_equity_usdt = self.current_equity_usdt;
+        self.ui_projection.portfolio.total_realized_pnl_usdt = self.history_realized_pnl;
+        self.ui_projection.portfolio.total_unrealized_pnl_usdt = self.position.unrealized_pnl;
+        self.ui_projection.portfolio.ws_connected = self.ws_connected;
+    }
+
+    fn ensure_projection_focus_defaults(&mut self) {
+        if self.ui_projection.focus.symbol.is_none() {
+            self.ui_projection.focus.symbol = Some(self.symbol.clone());
+        }
+        if self.ui_projection.focus.strategy_id.is_none() {
+            self.ui_projection.focus.strategy_id = Some(self.strategy_label.clone());
+        }
+    }
+
+    fn rebuild_projection_preserve_focus(&mut self, prev_focus: (Option<String>, Option<String>)) {
+        let mut next = UiProjection::from_legacy(self);
+        if prev_focus.0.is_some() {
+            next.focus.symbol = prev_focus.0;
+        }
+        if prev_focus.1.is_some() {
+            next.focus.strategy_id = prev_focus.1;
+        }
+        self.ui_projection = next;
+        self.ensure_projection_focus_defaults();
+    }
+
     pub fn apply(&mut self, event: AppEvent) {
-        let prev_focus = self.v2_state.focus.clone();
+        let prev_focus = self.focus_pair();
+        let mut rebuild_projection = false;
         match event {
             AppEvent::MarketTick(tick) => {
+                rebuild_projection = true;
                 self.tick_count += 1;
                 let now_ms = chrono::Utc::now().timestamp_millis() as u64;
                 self.last_price_update_ms = Some(now_ms);
                 self.last_price_event_ms = Some(tick.timestamp_ms);
                 self.last_price_latency_ms = Some(now_ms.saturating_sub(tick.timestamp_ms));
+                if let Some(lat) = self.last_price_latency_ms {
+                    Self::push_latency_sample(&mut self.network_tick_latencies_ms, lat);
+                }
 
                 // Aggregate tick into candles
                 let should_new = match &self.current_candle {
@@ -404,14 +607,37 @@ impl AppState {
                 self.position.update_unrealized_pnl(tick.price);
                 self.refresh_equity_usdt();
             }
-            AppEvent::StrategySignal(ref signal) => {
+            AppEvent::StrategySignal {
+                ref signal,
+                source_tag,
+                price,
+                timestamp_ms,
+            } => {
                 self.last_signal = Some(signal.clone());
                 match signal {
                     Signal::Buy { .. } => {
                         self.push_log("Signal: BUY".to_string());
+                        self.strategy_last_event_by_tag.insert(
+                            source_tag.to_ascii_lowercase(),
+                            StrategyLastEvent {
+                                side: OrderSide::Buy,
+                                price,
+                                timestamp_ms,
+                                is_filled: false,
+                            },
+                        );
                     }
                     Signal::Sell { .. } => {
                         self.push_log("Signal: SELL".to_string());
+                        self.strategy_last_event_by_tag.insert(
+                            source_tag.to_ascii_lowercase(),
+                            StrategyLastEvent {
+                                side: OrderSide::Sell,
+                                price,
+                                timestamp_ms,
+                                is_filled: false,
+                            },
+                        );
                     }
                     Signal::Hold => {}
                 }
@@ -421,6 +647,7 @@ impl AppState {
                 self.slow_sma = slow_sma;
             }
             AppEvent::OrderUpdate(ref update) => {
+                rebuild_projection = true;
                 match update {
                     OrderUpdate::Filled {
                         intent_id,
@@ -429,6 +656,29 @@ impl AppState {
                         fills,
                         avg_price,
                     } => {
+                        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                        if let Some(submit_ms) =
+                            self.network_pending_submit_ms_by_intent.remove(intent_id)
+                        {
+                            Self::push_latency_sample(
+                                &mut self.network_fill_latencies_ms,
+                                now_ms.saturating_sub(submit_ms),
+                            );
+                        }
+                        self.network_last_fill_ms = Some(now_ms);
+                        if let Some(source_tag) =
+                            parse_source_tag_from_client_order_id(client_order_id)
+                        {
+                            self.strategy_last_event_by_tag.insert(
+                                source_tag.to_ascii_lowercase(),
+                                StrategyLastEvent {
+                                    side: *side,
+                                    price: Some(*avg_price),
+                                    timestamp_ms: now_ms,
+                                    is_filled: true,
+                                },
+                            );
+                        }
                         if let Some(summary) = format_last_applied_fee(&self.symbol, fills) {
                             self.last_applied_fee = summary;
                         }
@@ -457,6 +707,9 @@ impl AppState {
                         client_order_id,
                         server_order_id,
                     } => {
+                        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                        self.network_pending_submit_ms_by_intent
+                            .insert(intent_id.clone(), now_ms);
                         self.refresh_equity_usdt();
                         self.push_log(format!(
                             "Submitted {} (id: {}, {})",
@@ -488,6 +741,7 @@ impl AppState {
                 }
                 WsConnectionStatus::Reconnecting { attempt, delay_ms } => {
                     self.ws_connected = false;
+                    self.network_reconnect_count += 1;
                     self.push_log(format!(
                         "[WARN] Reconnecting (attempt {}, wait {}ms)",
                         attempt, delay_ms
@@ -499,6 +753,7 @@ impl AppState {
                 interval_ms,
                 interval,
             } => {
+                rebuild_projection = true;
                 self.candles = candles;
                 if self.candles.len() > self.price_history_len {
                     let excess = self.candles.len() - self.price_history_len;
@@ -516,10 +771,12 @@ impl AppState {
                 ));
             }
             AppEvent::BalanceUpdate(balances) => {
+                rebuild_projection = true;
                 self.balances = balances;
                 self.refresh_equity_usdt();
             }
             AppEvent::OrderHistoryUpdate(snapshot) => {
+                rebuild_projection = true;
                 let mut open = Vec::new();
                 let mut filled = Vec::new();
 
@@ -588,6 +845,10 @@ impl AppState {
                 self.last_order_history_update_ms = Some(snapshot.fetched_at_ms);
                 self.last_order_history_event_ms = snapshot.latest_event_ms;
                 self.last_order_history_latency_ms = Some(snapshot.fetch_latency_ms);
+                Self::push_latency_sample(
+                    &mut self.network_order_sync_latencies_ms,
+                    snapshot.fetch_latency_ms,
+                );
                 self.refresh_history_rows();
             }
             AppEvent::RiskRateSnapshot {
@@ -601,6 +862,9 @@ impl AppState {
                 self.rate_budget_account = account;
                 self.rate_budget_market_data = market_data;
             }
+            AppEvent::TickDropped => {
+                self.network_tick_drop_count = self.network_tick_drop_count.saturating_add(1);
+            }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
             }
@@ -608,20 +872,22 @@ impl AppState {
                 self.push_log(format!("[ERR] {}", msg));
             }
         }
-        let mut next = AppStateV2::from_legacy(self);
-        if prev_focus.symbol.is_some() {
-            next.focus.symbol = prev_focus.symbol;
+        self.sync_projection_portfolio_summary();
+        if rebuild_projection {
+            self.rebuild_projection_preserve_focus(prev_focus);
+        } else {
+            self.ensure_projection_focus_defaults();
         }
-        if prev_focus.strategy_id.is_some() {
-            next.focus.strategy_id = prev_focus.strategy_id;
-        }
-        self.v2_state = next;
     }
 }
 
 pub fn render(frame: &mut Frame, state: &AppState) {
-    if state.v2_grid_open {
-        render_v2_grid_popup(frame, state);
+    let view = state.view_state();
+    if view.is_grid_open {
+        render_grid_popup(frame, state);
+        if view.is_strategy_editor_open {
+            render_strategy_editor_popup(frame, state);
+        }
         return;
     }
 
@@ -712,27 +978,27 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     // Keybind bar
     frame.render_widget(KeybindBar, outer[5]);
 
-    if state.symbol_selector_open {
+    if view.is_symbol_selector_open {
         render_selector_popup(
             frame,
             " Select Symbol ",
             &state.symbol_items,
-            state.symbol_selector_index,
+            view.selected_symbol_selector_index,
             None,
             None,
             None,
         );
-    } else if state.strategy_selector_open {
+    } else if view.is_strategy_selector_open {
         let selected_strategy_symbol = state
             .strategy_item_symbols
-            .get(state.strategy_selector_index)
+            .get(view.selected_strategy_selector_index)
             .map(String::as_str)
             .unwrap_or(state.symbol.as_str());
         render_selector_popup(
             frame,
             " Select Strategy ",
             &state.strategy_items,
-            state.strategy_selector_index,
+            view.selected_strategy_selector_index,
             Some(&state.strategy_stats),
             Some(OrderHistoryStats {
                 trade_count: state.history_trade_count,
@@ -742,13 +1008,13 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             }),
             Some(selected_strategy_symbol),
         );
-    } else if state.account_popup_open {
+    } else if view.is_account_popup_open {
         render_account_popup(frame, &state.balances);
-    } else if state.history_popup_open {
+    } else if view.is_history_popup_open {
         render_history_popup(frame, &state.history_rows, state.history_bucket);
-    } else if state.focus_popup_open {
+    } else if view.is_focus_popup_open {
         render_focus_popup(frame, state);
-    } else if state.strategy_editor_open {
+    } else if view.is_strategy_editor_open {
         render_strategy_editor_popup(frame, state);
     }
 }
@@ -763,7 +1029,7 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
     };
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(" Focus View (V2 Drill-down) ")
+        .title(" Focus View (Drill-down) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green));
     let inner = block.inner(popup);
@@ -778,18 +1044,8 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
         ])
         .split(inner);
 
-    let focus_symbol = state
-        .v2_state
-        .focus
-        .symbol
-        .as_deref()
-        .unwrap_or(&state.symbol);
-    let focus_strategy = state
-        .v2_state
-        .focus
-        .strategy_id
-        .as_deref()
-        .unwrap_or(&state.strategy_label);
+    let focus_symbol = state.focus_symbol().unwrap_or(&state.symbol);
+    let focus_strategy = state.focus_strategy_id().unwrap_or(&state.strategy_label);
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -849,12 +1105,13 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
     );
 }
 
-fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
+fn render_grid_popup(frame: &mut Frame, state: &AppState) {
+    let view = state.view_state();
     let area = frame.area();
     let popup = area;
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(" Portfolio Grid (V2) ")
+        .title(" Portfolio Grid ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(popup);
@@ -868,7 +1125,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     let body_area = root[1];
 
     let tab_span = |tab: GridTab, key: &str, label: &str| -> Span<'_> {
-        let selected = state.v2_grid_tab == tab;
+        let selected = view.selected_grid_tab == tab;
         Span::styled(
             format!("[{} {}]", key, label),
             if selected {
@@ -887,6 +1144,8 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
             tab_span(GridTab::Strategies, "2", "Strategies"),
             Span::raw(" "),
             tab_span(GridTab::Risk, "3", "Risk"),
+            Span::raw(" "),
+            tab_span(GridTab::Network, "4", "Network"),
         ])),
         tab_area,
     );
@@ -911,7 +1170,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         ("OK", Color::Green)
     };
 
-    if state.v2_grid_tab == GridTab::Assets {
+    if view.selected_grid_tab == GridTab::Assets {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(3), Constraint::Length(1)])
@@ -925,8 +1184,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         ])
         .style(Style::default().fg(Color::DarkGray));
         let mut asset_rows: Vec<Row> = state
-            .v2_state
-            .assets
+            .assets_view()
             .iter()
             .map(|a| {
                 let price = a
@@ -969,20 +1227,17 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
             .column_spacing(1)
             .block(
                 Block::default()
-                    .title(format!(" Assets | Total {} ", state.v2_state.assets.len()))
+                    .title(format!(" Assets | Total {} ", state.assets_view().len()))
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::DarkGray)),
             ),
             chunks[0],
         );
-        frame.render_widget(
-            Paragraph::new("[1/2/3] tab  [G/Esc] close"),
-            chunks[1],
-        );
+        frame.render_widget(Paragraph::new("[1/2/3] tab  [G/Esc] close"), chunks[1]);
         return;
     }
 
-    if state.v2_grid_tab == GridTab::Risk {
+    if view.selected_grid_tab == GridTab::Risk {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -999,7 +1254,10 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
                     risk_label,
                     Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("  (70%=WARN, 90%=CRIT)", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "  (70%=WARN, 90%=CRIT)",
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])),
             chunks[0],
         );
@@ -1069,7 +1327,9 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
             .collect();
         let mut lines = vec![Line::from(Span::styled(
             "Recent Rejections",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ))];
         for msg in recent_rejections.into_iter().rev() {
             lines.push(Line::from(Span::styled(
@@ -1091,16 +1351,135 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
+        frame.render_widget(Paragraph::new("[1/2/3/4] tab  [G/Esc] close"), chunks[3]);
+        return;
+    }
+
+    if view.selected_grid_tab == GridTab::Network {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Min(6),
+                Constraint::Length(1),
+            ])
+            .split(body_area);
+        let network_state = if !state.ws_connected {
+            ("CRIT", Color::Red)
+        } else if state.network_tick_drop_count > 0 || state.network_reconnect_count > 0 {
+            ("WARN", Color::Yellow)
+        } else {
+            ("OK", Color::Green)
+        };
         frame.render_widget(
-            Paragraph::new("[1/2/3] tab  [G/Esc] close"),
-            chunks[3],
+            Paragraph::new(Line::from(vec![
+                Span::styled("Network: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    network_state.0,
+                    Style::default()
+                        .fg(network_state.1)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  WS: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if state.ws_connected {
+                        "CONNECTED"
+                    } else {
+                        "DISCONNECTED"
+                    },
+                    Style::default().fg(if state.ws_connected {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    }),
+                ),
+                Span::styled(
+                    format!(
+                        "  reconnect={}  tick_drop={}",
+                        state.network_reconnect_count, state.network_tick_drop_count
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])),
+            chunks[0],
         );
+
+        let tick_stats = latency_stats(&state.network_tick_latencies_ms);
+        let fill_stats = latency_stats(&state.network_fill_latencies_ms);
+        let sync_stats = latency_stats(&state.network_order_sync_latencies_ms);
+        let last_fill_age = state
+            .network_last_fill_ms
+            .map(|ts| {
+                format_age_ms((chrono::Utc::now().timestamp_millis() as u64).saturating_sub(ts))
+            })
+            .unwrap_or_else(|| "-".to_string());
+        let rows = vec![
+            Row::new(vec![
+                Cell::from("Tick Latency"),
+                Cell::from(tick_stats.0),
+                Cell::from(tick_stats.1),
+                Cell::from(tick_stats.2),
+                Cell::from(
+                    state
+                        .last_price_latency_ms
+                        .map(|v| format!("{}ms", v))
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+            ]),
+            Row::new(vec![
+                Cell::from("Fill Latency"),
+                Cell::from(fill_stats.0),
+                Cell::from(fill_stats.1),
+                Cell::from(fill_stats.2),
+                Cell::from(last_fill_age),
+            ]),
+            Row::new(vec![
+                Cell::from("Order Sync"),
+                Cell::from(sync_stats.0),
+                Cell::from(sync_stats.1),
+                Cell::from(sync_stats.2),
+                Cell::from(
+                    state
+                        .last_order_history_latency_ms
+                        .map(|v| format!("{}ms", v))
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+            ]),
+        ];
+        frame.render_widget(
+            Table::new(
+                rows,
+                [
+                    Constraint::Length(14),
+                    Constraint::Length(12),
+                    Constraint::Length(12),
+                    Constraint::Length(12),
+                    Constraint::Length(14),
+                ],
+            )
+            .header(Row::new(vec![
+                Cell::from("Metric"),
+                Cell::from("p50"),
+                Cell::from("p95"),
+                Cell::from("max"),
+                Cell::from("last/age"),
+            ]))
+            .column_spacing(1)
+            .block(
+                Block::default()
+                    .title(" Network Metrics ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[1],
+        );
+        frame.render_widget(Paragraph::new("[1/2/3/4] tab  [G/Esc] close"), chunks[2]);
         return;
     }
 
     let selected_symbol = state
         .symbol_items
-        .get(state.v2_grid_symbol_index)
+        .get(view.selected_symbol_index)
         .map(String::as_str)
         .unwrap_or(state.symbol.as_str());
     let strategy_chunks = Layout::default()
@@ -1116,7 +1495,12 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     let mut on_indices: Vec<usize> = Vec::new();
     let mut off_indices: Vec<usize> = Vec::new();
     for idx in 0..state.strategy_items.len() {
-        if state.strategy_item_active.get(idx).copied().unwrap_or(false) {
+        if state
+            .strategy_item_active
+            .get(idx)
+            .copied()
+            .unwrap_or(false)
+        {
             on_indices.push(idx);
         } else {
             off_indices.push(idx);
@@ -1272,156 +1656,211 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     );
     frame.render_widget(total_table, strategy_chunks[1]);
 
-    let render_strategy_window =
-        |frame: &mut Frame,
-         area: Rect,
-         title: &str,
-         indices: &[usize],
-         state: &AppState,
-         pnl_sum: f64,
-         selected_panel: bool| {
-            let inner_height = area.height.saturating_sub(2);
-            let row_capacity = inner_height.saturating_sub(1) as usize;
-            let selected_pos = indices
-                .iter()
-                .position(|idx| *idx == state.v2_grid_strategy_index);
-            let window_start = if row_capacity == 0 {
-                0
-            } else if let Some(pos) = selected_pos {
-                pos.saturating_sub(row_capacity.saturating_sub(1))
-            } else {
-                0
-            };
-            let window_end = if row_capacity == 0 {
-                0
-            } else {
-                (window_start + row_capacity).min(indices.len())
-            };
-            let visible_indices = if indices.is_empty() || row_capacity == 0 {
-                &indices[0..0]
-            } else {
-                &indices[window_start..window_end]
-            };
-            let header = Row::new(vec![
-                Cell::from(" "),
-                Cell::from("Symbol"),
-                Cell::from("Strategy"),
-                Cell::from("Run"),
-                Cell::from("W"),
-                Cell::from("L"),
-                Cell::from("T"),
-                Cell::from("PnL"),
-            ])
-            .style(Style::default().fg(Color::DarkGray));
-            let mut rows: Vec<Row> = visible_indices
-                .iter()
-                .map(|idx| {
-                    let row_symbol = state
-                        .strategy_item_symbols
-                        .get(*idx)
-                        .map(String::as_str)
-                        .unwrap_or("-");
-                    let item = state
-                        .strategy_items
-                        .get(*idx)
-                        .cloned()
-                        .unwrap_or_else(|| "-".to_string());
-                    let running = state
-                        .strategy_item_total_running_ms
-                        .get(*idx)
-                        .copied()
-                        .map(format_running_time)
-                        .unwrap_or_else(|| "-".to_string());
-                    let stats = strategy_stats_for_item(&state.strategy_stats, &item);
-                    let (w, l, t, pnl) = if let Some(s) = stats {
-                        (
-                            s.win_count.to_string(),
-                            s.lose_count.to_string(),
-                            s.trade_count.to_string(),
-                            format!("{:+.4}", s.realized_pnl),
-                        )
-                    } else {
-                        ("0".to_string(), "0".to_string(), "0".to_string(), "+0.0000".to_string())
-                    };
-                    let marker = if *idx == state.v2_grid_strategy_index {
-                        "▶"
-                    } else {
-                        " "
-                    };
-                    let mut row = Row::new(vec![
-                        Cell::from(marker),
-                        Cell::from(row_symbol.to_string()),
-                        Cell::from(item),
-                        Cell::from(running),
-                        Cell::from(w),
-                        Cell::from(l),
-                        Cell::from(t),
-                        Cell::from(pnl),
-                    ]);
-                    if *idx == state.v2_grid_strategy_index {
-                        row = row.style(
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        );
-                    }
-                    row
-                })
-                .collect();
-
-            if rows.is_empty() {
-                rows.push(
-                    Row::new(vec![
-                        Cell::from(" "),
-                        Cell::from("-"),
-                        Cell::from("(empty)"),
-                        Cell::from("-"),
-                        Cell::from("-"),
-                        Cell::from("-"),
-                        Cell::from("-"),
-                        Cell::from("-"),
-                    ])
-                    .style(Style::default().fg(Color::DarkGray)),
-                );
-            }
-
-            let table = Table::new(
-                rows,
-                [
-                    Constraint::Length(2),
-                    Constraint::Length(12),
-                    Constraint::Min(16),
-                    Constraint::Length(9),
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Length(4),
-                    Constraint::Length(11),
-                ],
-            )
-            .header(header)
-            .column_spacing(1)
-            .block(
-                Block::default()
-                    .title(format!(
-                        "{} | Total {:+.4} | {}/{}",
-                        title,
-                        pnl_sum,
-                        visible_indices.len(),
-                        indices.len()
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(if selected_panel {
-                        Style::default().fg(Color::Yellow)
-                    } else if risk_label == "CRIT" {
-                        Style::default().fg(Color::Red)
-                    } else if risk_label == "WARN" {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    }),
-            );
-            frame.render_widget(table, area);
+    let render_strategy_window = |frame: &mut Frame,
+                                  area: Rect,
+                                  title: &str,
+                                  indices: &[usize],
+                                  state: &AppState,
+                                  pnl_sum: f64,
+                                  selected_panel: bool| {
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        let inner_height = area.height.saturating_sub(2);
+        let row_capacity = inner_height.saturating_sub(1) as usize;
+        let selected_pos = indices
+            .iter()
+            .position(|idx| *idx == view.selected_strategy_index);
+        let window_start = if row_capacity == 0 {
+            0
+        } else if let Some(pos) = selected_pos {
+            pos.saturating_sub(row_capacity.saturating_sub(1))
+        } else {
+            0
         };
+        let window_end = if row_capacity == 0 {
+            0
+        } else {
+            (window_start + row_capacity).min(indices.len())
+        };
+        let visible_indices = if indices.is_empty() || row_capacity == 0 {
+            &indices[0..0]
+        } else {
+            &indices[window_start..window_end]
+        };
+        let header = Row::new(vec![
+            Cell::from(" "),
+            Cell::from("Symbol"),
+            Cell::from("Strategy"),
+            Cell::from("Run"),
+            Cell::from("Last"),
+            Cell::from("Px"),
+            Cell::from("Age"),
+            Cell::from("W"),
+            Cell::from("L"),
+            Cell::from("T"),
+            Cell::from("PnL"),
+        ])
+        .style(Style::default().fg(Color::DarkGray));
+        let mut rows: Vec<Row> = visible_indices
+            .iter()
+            .map(|idx| {
+                let row_symbol = state
+                    .strategy_item_symbols
+                    .get(*idx)
+                    .map(String::as_str)
+                    .unwrap_or("-");
+                let item = state
+                    .strategy_items
+                    .get(*idx)
+                    .cloned()
+                    .unwrap_or_else(|| "-".to_string());
+                let running = state
+                    .strategy_item_total_running_ms
+                    .get(*idx)
+                    .copied()
+                    .map(format_running_time)
+                    .unwrap_or_else(|| "-".to_string());
+                let stats = strategy_stats_for_item(&state.strategy_stats, &item);
+                let source_tag = source_tag_for_strategy_item(&item);
+                let last_evt = source_tag
+                    .as_ref()
+                    .and_then(|tag| state.strategy_last_event_by_tag.get(tag));
+                let (last_label, last_px, last_age, last_style) = if let Some(evt) = last_evt {
+                    let age = now_ms.saturating_sub(evt.timestamp_ms);
+                    let age_txt = if age < 1_000 {
+                        format!("{}ms", age)
+                    } else if age < 60_000 {
+                        format!("{}s", age / 1_000)
+                    } else {
+                        format!("{}m", age / 60_000)
+                    };
+                    let side_txt = match evt.side {
+                        OrderSide::Buy => "BUY",
+                        OrderSide::Sell => "SELL",
+                    };
+                    let px_txt = evt
+                        .price
+                        .map(|v| format!("{:.2}", v))
+                        .unwrap_or_else(|| "-".to_string());
+                    let style = match evt.side {
+                        OrderSide::Buy => Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                        OrderSide::Sell => {
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                        }
+                    };
+                    (side_txt.to_string(), px_txt, age_txt, style)
+                } else {
+                    (
+                        "-".to_string(),
+                        "-".to_string(),
+                        "-".to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    )
+                };
+                let (w, l, t, pnl) = if let Some(s) = stats {
+                    (
+                        s.win_count.to_string(),
+                        s.lose_count.to_string(),
+                        s.trade_count.to_string(),
+                        format!("{:+.4}", s.realized_pnl),
+                    )
+                } else {
+                    (
+                        "0".to_string(),
+                        "0".to_string(),
+                        "0".to_string(),
+                        "+0.0000".to_string(),
+                    )
+                };
+                let marker = if *idx == view.selected_strategy_index {
+                    "▶"
+                } else {
+                    " "
+                };
+                let mut row = Row::new(vec![
+                    Cell::from(marker),
+                    Cell::from(row_symbol.to_string()),
+                    Cell::from(item),
+                    Cell::from(running),
+                    Cell::from(last_label).style(last_style),
+                    Cell::from(last_px),
+                    Cell::from(last_age),
+                    Cell::from(w),
+                    Cell::from(l),
+                    Cell::from(t),
+                    Cell::from(pnl),
+                ]);
+                if *idx == view.selected_strategy_index {
+                    row = row.style(
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    );
+                }
+                row
+            })
+            .collect();
+
+        if rows.is_empty() {
+            rows.push(
+                Row::new(vec![
+                    Cell::from(" "),
+                    Cell::from("-"),
+                    Cell::from("(empty)"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                ])
+                .style(Style::default().fg(Color::DarkGray)),
+            );
+        }
+
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(2),
+                Constraint::Length(12),
+                Constraint::Min(14),
+                Constraint::Length(9),
+                Constraint::Length(5),
+                Constraint::Length(9),
+                Constraint::Length(6),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(4),
+                Constraint::Length(11),
+            ],
+        )
+        .header(header)
+        .column_spacing(1)
+        .block(
+            Block::default()
+                .title(format!(
+                    "{} | Total {:+.4} | {}/{}",
+                    title,
+                    pnl_sum,
+                    visible_indices.len(),
+                    indices.len()
+                ))
+                .borders(Borders::ALL)
+                .border_style(if selected_panel {
+                    Style::default().fg(Color::Yellow)
+                } else if risk_label == "CRIT" {
+                    Style::default().fg(Color::Red)
+                } else if risk_label == "WARN" {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                }),
+        );
+        frame.render_widget(table, area);
+    };
 
     render_strategy_window(
         frame,
@@ -1430,7 +1869,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         &on_indices,
         state,
         on_pnl_sum,
-        state.v2_grid_select_on_panel,
+        view.is_on_panel_selected,
     );
     render_strategy_window(
         frame,
@@ -1439,7 +1878,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         &off_indices,
         state,
         off_pnl_sum,
-        !state.v2_grid_select_on_panel,
+        !view.is_on_panel_selected,
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -1451,7 +1890,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "  [1/2/3]tab [Tab]panel [N]new [C]cfg [O]on/off [X]del [J/K]strategy [H/L]symbol [Enter/F]run [G/Esc]close",
+                "  [1/2/3/4]tab [Tab]panel [N]new [C]cfg [O]on/off [X]del [J/K]strategy [H/L]symbol [Enter/F]run [G/Esc]close",
                 Style::default().fg(Color::DarkGray),
             ),
         ])),
@@ -1469,6 +1908,33 @@ fn format_running_time(total_running_ms: u64) -> String {
     } else {
         format!("{:02}h {:02}m", hours, minutes)
     }
+}
+
+fn format_age_ms(age_ms: u64) -> String {
+    if age_ms < 1_000 {
+        format!("{}ms", age_ms)
+    } else if age_ms < 60_000 {
+        format!("{}s", age_ms / 1_000)
+    } else {
+        format!("{}m", age_ms / 60_000)
+    }
+}
+
+fn latency_stats(samples: &[u64]) -> (String, String, String) {
+    if samples.is_empty() {
+        return ("-".to_string(), "-".to_string(), "-".to_string());
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let len = sorted.len();
+    let p50 = sorted[(len * 50 / 100).min(len - 1)];
+    let p95 = sorted[(len * 95 / 100).min(len - 1)];
+    let max = *sorted.last().unwrap_or(&0);
+    (
+        format!("{}ms", p50),
+        format!("{}ms", p95),
+        format!("{}ms", max),
+    )
 }
 
 fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
@@ -1809,6 +2275,16 @@ fn source_tag_for_strategy_item(item: &str) -> Option<String> {
     None
 }
 
+fn parse_source_tag_from_client_order_id(client_order_id: &str) -> Option<&str> {
+    let body = client_order_id.strip_prefix("sq-")?;
+    let (source_tag, _) = body.split_once('-')?;
+    if source_tag.is_empty() {
+        None
+    } else {
+        Some(source_tag)
+    }
+}
+
 fn subtract_stats(total: &OrderHistoryStats, used: &OrderHistoryStats) -> OrderHistoryStats {
     OrderHistoryStats {
         trade_count: total.trade_count.saturating_sub(used.trade_count),
@@ -1849,7 +2325,9 @@ fn format_last_applied_fee(symbol: &str, fills: &[Fill]) -> Option<String> {
         if f.commission <= 0.0 {
             continue;
         }
-        *fee_by_asset.entry(f.commission_asset.clone()).or_insert(0.0) += f.commission;
+        *fee_by_asset
+            .entry(f.commission_asset.clone())
+            .or_insert(0.0) += f.commission;
         if !quote_asset.is_empty() && f.commission_asset.eq_ignore_ascii_case(&quote_asset) {
             fee_quote_equiv += f.commission;
         } else if !base_asset.is_empty() && f.commission_asset.eq_ignore_ascii_case(&base_asset) {
