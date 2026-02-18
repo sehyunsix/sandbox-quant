@@ -1,3 +1,10 @@
+## v0.7.0 - 2026-02-18
+
+- docs(rfc): propose strategy lifecycle metrics display (983562b)
+- fix(ui): allow quitting from any screen with q (afe53e4)
+- fix(strategy): keep symbol scoped per strategy profile (345408c)
+- feat(strategy): enforce fork-on-edit for config changes (40eb250)
+
 ## v0.6.0 - 2026-02-18
 
 - docs(rfc): require fork-on-edit for strategy config changes (643b7a0)
