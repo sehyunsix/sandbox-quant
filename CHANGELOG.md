@@ -1,3 +1,7 @@
+## v0.9.0 - 2026-02-18
+
+- feat(ui): add portfolio grid 3-tab layout and risk-focused views (c0c8894)
+
 ## v0.8.1 - 2026-02-18
 
 - docs(readme): add docs.rs link (74c3a05)
