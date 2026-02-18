@@ -615,7 +615,12 @@ async fn main() -> Result<()> {
                         let enabled = *strat_enabled_rx.borrow();
                         if signal != Signal::Hold && enabled {
                             let _ = strat_app_tx
-                                .send(AppEvent::StrategySignal(signal.clone()))
+                                .send(AppEvent::StrategySignal {
+                                    signal: signal.clone(),
+                                    source_tag: source_tag.clone(),
+                                    price: Some(tick.price),
+                                    timestamp_ms: tick.timestamp_ms,
+                                })
                                 .await;
                             if let Err(e) = risk_eval_tx
                                 .send((signal, source_tag.clone(), normalize_instrument_label(&profile.symbol)))
@@ -628,7 +633,12 @@ async fn main() -> Result<()> {
                 }
                 Some(signal) = manual_order_rx.recv() => {
                     let _ = strat_app_tx
-                        .send(AppEvent::StrategySignal(signal.clone()))
+                        .send(AppEvent::StrategySignal {
+                            signal: signal.clone(),
+                            source_tag: "mnl".to_string(),
+                            price: None,
+                            timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+                        })
                         .await;
                     if let Err(e) = risk_eval_tx
                         .send((signal, "mnl".to_string(), selected_symbol.clone()))

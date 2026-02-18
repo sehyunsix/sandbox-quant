@@ -16,7 +16,12 @@ pub enum WsConnectionStatus {
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     MarketTick(Tick),
-    StrategySignal(Signal),
+    StrategySignal {
+        signal: Signal,
+        source_tag: String,
+        price: Option<f64>,
+        timestamp_ms: u64,
+    },
     StrategyState {
         fast_sma: Option<f64>,
         slow_sma: Option<f64>,
@@ -36,6 +41,7 @@ pub enum AppEvent {
         account: RateBudgetSnapshot,
         market_data: RateBudgetSnapshot,
     },
+    TickDropped,
     LogMessage(String),
     Error(String),
 }
