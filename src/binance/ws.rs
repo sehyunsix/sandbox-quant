@@ -41,6 +41,7 @@ impl ExponentialBackoff {
     }
 }
 
+#[derive(Clone)]
 pub struct BinanceWsClient {
     spot_url: String,
     futures_url: String,
@@ -84,6 +85,7 @@ impl BinanceWsClient {
                 .connect_once(
                     ws_url,
                     &streams,
+                    &instrument,
                     &tick_tx,
                     &status_tx,
                     &mut symbol_rx,
@@ -137,6 +139,7 @@ impl BinanceWsClient {
         &self,
         ws_url: &str,
         streams: &[String],
+        display_symbol: &str,
         tick_tx: &mpsc::Sender<Tick>,
         status_tx: &mpsc::Sender<AppEvent>,
         symbol_rx: &mut watch::Receiver<String>,
@@ -192,7 +195,7 @@ impl BinanceWsClient {
                 msg = read.next() => {
                     match msg {
                         Some(Ok(tungstenite::Message::Text(text))) => {
-                            self.handle_text_message(&text, tick_tx, status_tx).await;
+                            self.handle_text_message(&text, display_symbol, tick_tx, status_tx).await;
                         }
                         Some(Ok(tungstenite::Message::Ping(_))) => {
                             // tokio-tungstenite handles pong automatically
@@ -252,6 +255,7 @@ impl BinanceWsClient {
     async fn handle_text_message(
         &self,
         text: &str,
+        display_symbol: &str,
         tick_tx: &mpsc::Sender<Tick>,
         status_tx: &mpsc::Sender<AppEvent>,
     ) {
@@ -266,7 +270,7 @@ impl BinanceWsClient {
         match serde_json::from_str::<BinanceTradeEvent>(text) {
             Ok(event) => {
                 let tick = Tick {
-                    symbol: event.symbol,
+                    symbol: display_symbol.to_string(),
                     price: event.price,
                     qty: event.qty,
                     timestamp_ms: event.event_time,

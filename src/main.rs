@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +15,6 @@ use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
 use sandbox_quant::order_manager::{MarketKind, OrderManager};
 use sandbox_quant::order_store;
-use sandbox_quant::runtime::strategy_registry::StrategyWorkerRegistry;
 use sandbox_quant::strategy::ma_crossover::MaCrossover;
 use sandbox_quant::strategy_catalog::{StrategyCatalog, StrategyProfile};
 use sandbox_quant::strategy_session;
@@ -23,14 +23,6 @@ use sandbox_quant::ui::AppState;
 
 const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
-
-fn strategy_worker_id(profile: &StrategyProfile, api_symbol: &str, market: MarketKind) -> String {
-    let market_tag = match market {
-        MarketKind::Spot => "spot",
-        MarketKind::Futures => "futures",
-    };
-    format!("{}:{}:{}", profile.source_tag, api_symbol, market_tag)
-}
 
 fn switch_timeframe(
     instrument: &str,
@@ -92,22 +84,93 @@ fn parse_instrument_label(label: &str) -> (String, MarketKind) {
     (trimmed.to_ascii_uppercase(), MarketKind::Spot)
 }
 
+fn normalize_instrument_label(label: &str) -> String {
+    let (symbol, market) = parse_instrument_label(label);
+    if market == MarketKind::Futures {
+        format!("{} (FUT)", symbol)
+    } else {
+        symbol
+    }
+}
+
+fn enabled_instruments(
+    strategy_catalog: &StrategyCatalog,
+    enabled_strategy_tags: &HashSet<String>,
+) -> Vec<String> {
+    let mut instruments: Vec<String> = strategy_catalog
+        .profiles()
+        .iter()
+        .filter(|profile| enabled_strategy_tags.contains(&profile.source_tag))
+        .map(|profile| normalize_instrument_label(&profile.symbol))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    instruments.sort();
+    instruments
+}
+
 fn persist_strategy_session_state(
     app_state: &mut AppState,
     strategy_catalog: &StrategyCatalog,
     current_strategy_profile: &StrategyProfile,
+    enabled_strategy_tags: &HashSet<String>,
 ) {
     if let Err(e) = strategy_session::persist_strategy_session(
         strategy_catalog,
         &current_strategy_profile.source_tag,
+        enabled_strategy_tags,
     ) {
         app_state.push_log(format!("[WARN] Failed to save strategy session: {}", e));
     }
 }
 
-fn refresh_strategy_lists(app_state: &mut AppState, strategy_catalog: &StrategyCatalog) {
+fn refresh_strategy_lists(
+    app_state: &mut AppState,
+    strategy_catalog: &StrategyCatalog,
+    enabled_strategy_tags: &HashSet<String>,
+) {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let lifecycle_rows = strategy_catalog.lifecycle_rows(now_ms);
     app_state.strategy_items = strategy_catalog.labels();
     app_state.strategy_item_symbols = strategy_catalog.symbols();
+    app_state.strategy_item_active = strategy_catalog
+        .profiles()
+        .iter()
+        .map(|row| enabled_strategy_tags.contains(&row.source_tag) && !app_state.paused)
+        .collect();
+    app_state.strategy_item_created_at_ms = lifecycle_rows
+        .iter()
+        .map(|row| row.created_at_ms)
+        .collect();
+    app_state.strategy_item_total_running_ms = lifecycle_rows
+        .iter()
+        .map(|row| row.total_running_ms)
+        .collect();
+}
+
+fn mark_strategy_running(strategy_catalog: &mut StrategyCatalog, source_tag: &str) {
+    let _ = strategy_catalog.mark_running(source_tag, chrono::Utc::now().timestamp_millis());
+}
+
+fn mark_strategy_stopped(strategy_catalog: &mut StrategyCatalog, source_tag: &str) {
+    let _ = strategy_catalog.mark_stopped(source_tag, chrono::Utc::now().timestamp_millis());
+}
+
+fn set_strategy_enabled(
+    strategy_catalog: &mut StrategyCatalog,
+    enabled_strategy_tags: &mut HashSet<String>,
+    source_tag: &str,
+    enabled: bool,
+    paused: bool,
+) {
+    if enabled {
+        enabled_strategy_tags.insert(source_tag.to_string());
+        if !paused {
+            mark_strategy_running(strategy_catalog, source_tag);
+        }
+    } else if enabled_strategy_tags.remove(source_tag) {
+        mark_strategy_stopped(strategy_catalog, source_tag);
+    }
 }
 
 fn apply_symbol_selection(
@@ -213,6 +276,7 @@ async fn main() -> Result<()> {
         config.strategy.min_ticks_between_signals,
     );
     let mut restored_selected_source_tag: Option<String> = None;
+    let mut restored_enabled_source_tags: HashSet<String> = HashSet::new();
     match strategy_session::load_strategy_session(
         &default_symbol,
         config.strategy.fast_period,
@@ -222,6 +286,7 @@ async fn main() -> Result<()> {
         Ok(Some(restored)) => {
             strategy_catalog = restored.catalog;
             restored_selected_source_tag = restored.selected_source_tag;
+            restored_enabled_source_tags = restored.enabled_source_tags;
         }
         Ok(None) => {}
         Err(e) => {
@@ -233,10 +298,28 @@ async fn main() -> Result<()> {
         .and_then(|source_tag| strategy_catalog.get_by_source_tag(source_tag).cloned())
         .or_else(|| strategy_catalog.get(0).cloned())
         .expect("strategy catalog must include default profile");
-    let initial_symbol = initial_strategy_profile.symbol.clone();
-    let (ws_symbol_tx, ws_symbol_rx) = watch::channel(initial_symbol.clone());
+    let mut enabled_strategy_tags: HashSet<String> = strategy_catalog
+        .profiles()
+        .iter()
+        .filter(|profile| restored_enabled_source_tags.contains(&profile.source_tag))
+        .map(|profile| profile.source_tag.clone())
+        .collect();
+    if enabled_strategy_tags.is_empty() {
+        enabled_strategy_tags.insert(initial_strategy_profile.source_tag.clone());
+    }
+    for source_tag in enabled_strategy_tags.clone() {
+        mark_strategy_running(&mut strategy_catalog, &source_tag);
+    }
+    let initial_symbol = normalize_instrument_label(&initial_strategy_profile.symbol);
+    let (ws_symbol_tx, _ws_symbol_rx) = watch::channel(initial_symbol.clone());
     let (strategy_profile_tx, mut strategy_profile_rx) =
         watch::channel(initial_strategy_profile.clone());
+    let (strategy_profiles_tx, mut strategy_profiles_rx) =
+        watch::channel(strategy_catalog.profiles().to_vec());
+    let (enabled_strategy_tags_tx, mut enabled_strategy_tags_rx) =
+        watch::channel(enabled_strategy_tags.clone());
+    let initial_ws_instruments = enabled_instruments(&strategy_catalog, &enabled_strategy_tags);
+    let (ws_instruments_tx, mut ws_instruments_rx) = watch::channel(initial_ws_instruments);
 
     // REST client
     let rest_client = Arc::new(BinanceRestClient::new(
@@ -299,25 +382,75 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Spawn WebSocket task
+    // Spawn WebSocket manager task (dynamic multi-symbol fanout)
     let ws_client = BinanceWsClient::new(
         &config.binance.ws_base_url,
         &config.binance.futures_ws_base_url,
     );
     let ws_tick_tx = tick_tx;
-    // ^ Move tick_tx into WS task. This way, when WS task drops ws_tick_tx,
-    //   the strategy task's tick_rx.recv() returns None → clean shutdown.
     let ws_app_tx = app_tx.clone();
-    let ws_shutdown = shutdown_rx.clone();
+    let mut ws_shutdown = shutdown_rx.clone();
     tokio::spawn(async move {
-        if let Err(e) = ws_client
-            .connect_and_run(ws_tick_tx, ws_app_tx.clone(), ws_symbol_rx, ws_shutdown)
-            .await
-        {
-            tracing::error!(error = %e, "WebSocket task failed");
-            let _ = ws_app_tx
-                .send(AppEvent::LogMessage(format!("[ERR] WS task failed: {}", e)))
-                .await;
+        let mut workers: HashMap<String, watch::Sender<bool>> = HashMap::new();
+        loop {
+            let target_instruments: HashSet<String> = ws_instruments_rx
+                .borrow()
+                .iter()
+                .map(|s| normalize_instrument_label(s))
+                .collect();
+
+            let existing: Vec<String> = workers.keys().cloned().collect();
+            for symbol in existing {
+                if !target_instruments.contains(&symbol) {
+                    if let Some(stop_tx) = workers.remove(&symbol) {
+                        let _ = stop_tx.send(true);
+                    }
+                    let _ = ws_app_tx
+                        .send(AppEvent::LogMessage(format!("WS unsubscribed: {}", symbol)))
+                        .await;
+                }
+            }
+
+            for symbol in target_instruments {
+                if workers.contains_key(&symbol) {
+                    continue;
+                }
+                let worker_symbol = symbol.clone();
+                let (symbol_tx, symbol_rx) = watch::channel(symbol.clone());
+                let _ = symbol_tx;
+                let (worker_stop_tx, worker_stop_rx) = watch::channel(false);
+                workers.insert(symbol.clone(), worker_stop_tx);
+                let worker_client = ws_client.clone();
+                let worker_tick_tx = ws_tick_tx.clone();
+                let worker_app_tx = ws_app_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = worker_client
+                        .connect_and_run(worker_tick_tx, worker_app_tx.clone(), symbol_rx, worker_stop_rx)
+                        .await
+                    {
+                        tracing::warn!(symbol = %worker_symbol, error = %e, "WS worker failed");
+                        let _ = worker_app_tx
+                            .send(AppEvent::LogMessage(format!(
+                                "[WARN] WS worker failed ({}): {}",
+                                worker_symbol, e
+                            )))
+                            .await;
+                    }
+                });
+                let _ = ws_app_tx
+                    .send(AppEvent::LogMessage(format!("WS subscribed: {}", symbol)))
+                    .await;
+            }
+
+            tokio::select! {
+                _ = ws_instruments_rx.changed() => {}
+                _ = ws_shutdown.changed() => {
+                    for (_, stop_tx) in workers {
+                        let _ = stop_tx.send(true);
+                    }
+                    break;
+                }
+            }
         }
     });
 
@@ -330,23 +463,23 @@ async fn main() -> Result<()> {
     let strat_enabled_rx = strategy_enabled_rx;
     let mut strat_symbol_rx = ws_symbol_tx.subscribe();
     tokio::spawn(async move {
-        let mut active_profile = strategy_profile_rx.borrow().clone();
-        let (mut fast_period, mut slow_period, mut min_ticks) = active_profile.periods_tuple();
-        let mut strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
-        let mut current_symbol = strat_symbol_rx.borrow().clone();
-        let (mut current_api_symbol, mut current_market) = parse_instrument_label(&current_symbol);
-        let mut order_mgr = OrderManager::new(
-            strat_rest.clone(),
-            &current_api_symbol,
-            current_market,
-            strat_config.strategy.order_amount_usdt,
-            &strat_config.risk,
-        );
-        let mut worker_registry = StrategyWorkerRegistry::default();
-        let mut worker_id = strategy_worker_id(&active_profile, &current_api_symbol, current_market);
-        let (worker_tick_tx, mut worker_tick_rx) = mpsc::channel::<Tick>(256);
-        worker_registry.register(worker_id.clone(), current_api_symbol.clone(), worker_tick_tx);
-        let (risk_eval_tx, mut risk_eval_rx) = mpsc::channel::<(Signal, String)>(64);
+        let mut selected_profile = strategy_profile_rx.borrow().clone();
+        let mut selected_symbol = normalize_instrument_label(strat_symbol_rx.borrow().as_str());
+        let mut profiles_by_tag: HashMap<String, StrategyProfile> = strategy_profiles_rx
+            .borrow()
+            .iter()
+            .map(|profile| (profile.source_tag.clone(), profile.clone()))
+            .collect();
+        let mut enabled_strategy_tags = enabled_strategy_tags_rx.borrow().clone();
+        let mut strategies: HashMap<String, MaCrossover> = profiles_by_tag
+            .iter()
+            .map(|(source_tag, profile)| {
+                let (fast, slow, min_ticks) = profile.periods_tuple();
+                (source_tag.clone(), MaCrossover::new(fast, slow, min_ticks))
+            })
+            .collect();
+        let mut order_managers: HashMap<String, OrderManager> = HashMap::new();
+        let (risk_eval_tx, mut risk_eval_rx) = mpsc::channel::<(Signal, String, String)>(64);
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
 
@@ -368,70 +501,66 @@ async fn main() -> Result<()> {
             });
         };
 
-        // Fetch initial balances
-        match order_mgr.refresh_balances().await {
-            Ok(balances) => {
-                let usdt = balances.get("USDT").copied().unwrap_or(0.0);
-                let btc = balances.get("BTC").copied().unwrap_or(0.0);
-                let _ = strat_app_tx
-                    .send(AppEvent::LogMessage(format!(
-                        "Balances: {:.2} USDT, {:.5} BTC",
-                        usdt, btc
-                    )))
-                    .await;
-                let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to fetch initial balances");
-                let _ = strat_app_tx
-                    .send(AppEvent::LogMessage(format!(
-                        "[WARN] Balance fetch failed: {}",
-                        e
-                    )))
-                    .await;
-            }
+        if !order_managers.contains_key(&selected_symbol) {
+            let (api_symbol, market) = parse_instrument_label(&selected_symbol);
+            order_managers.insert(
+                selected_symbol.clone(),
+                OrderManager::new(
+                    strat_rest.clone(),
+                    &api_symbol,
+                    market,
+                    strat_config.strategy.order_amount_usdt,
+                    &strat_config.risk,
+                ),
+            );
         }
-        match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-            Ok(history) => {
-                let _ = strat_app_tx
-                    .send(AppEvent::OrderHistoryUpdate(history))
-                    .await;
+        if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
+            match mgr.refresh_balances().await {
+                Ok(balances) => {
+                    let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                }
+                Err(e) => {
+                    let _ = strat_app_tx
+                        .send(AppEvent::LogMessage(format!("[WARN] Balance fetch failed: {}", e)))
+                        .await;
+                }
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to fetch initial order history");
-                let _ = strat_app_tx
-                    .send(AppEvent::LogMessage(format!(
-                        "[WARN] Order history fetch failed: {}",
-                        e
-                    )))
-                    .await;
+            match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                Ok(history) => {
+                    let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                }
+                Err(e) => {
+                    let _ = strat_app_tx
+                        .send(AppEvent::LogMessage(format!(
+                            "[WARN] Order history fetch failed: {}",
+                            e
+                        )))
+                        .await;
+                }
             }
+            emit_rate_snapshot(&strat_app_tx, mgr);
         }
-        emit_rate_snapshot(&strat_app_tx, &order_mgr);
 
         let _ = strat_app_tx
             .send(AppEvent::LogMessage(format!(
-                "Strategy: MA({}/{}) usdt={} cooldown={}",
-                fast_period, slow_period, strat_config.strategy.order_amount_usdt, min_ticks,
+                "Strategies loaded: {} | usdt={}",
+                profiles_by_tag.len(),
+                strat_config.strategy.order_amount_usdt,
             )))
             .await;
 
-        // Warm up SMA indicators with historical kline close prices (no orders)
         for price in &strat_historical_closes {
             let tick = Tick::from_price(*price);
-            strategy.on_tick(&tick);
+            for strategy in strategies.values_mut() {
+                strategy.on_tick(&tick);
+            }
         }
         if !strat_historical_closes.is_empty() {
-            tracing::info!(
-                count = strat_historical_closes.len(),
-                fast_sma = ?strategy.fast_sma_value(),
-                slow_sma = ?strategy.slow_sma_value(),
-                "SMA indicators warmed up from historical klines"
-            );
+            let selected_state = strategies.get(&selected_profile.source_tag);
             let _ = strat_app_tx
                 .send(AppEvent::StrategyState {
-                    fast_sma: strategy.fast_sma_value(),
-                    slow_sma: strategy.slow_sma_value(),
+                    fast_sma: selected_state.and_then(MaCrossover::fast_sma_value),
+                    slow_sma: selected_state.and_then(MaCrossover::slow_sma_value),
                 })
                 .await;
         }
@@ -446,193 +575,193 @@ async fn main() -> Result<()> {
                             break;
                         }
                     };
+                    let tick_symbol = normalize_instrument_label(&tick.symbol);
 
-                    // Forward tick to UI
-                    let _ = strat_app_tx
-                        .send(AppEvent::MarketTick(tick.clone()))
-                        .await;
-                    worker_registry.dispatch_tick(tick);
-                }
-                result = worker_tick_rx.recv() => {
-                    let tick = match result {
-                        Some(t) => t,
-                        None => {
-                            tracing::warn!("Worker tick channel closed; skipping tick");
+                    if tick_symbol == selected_symbol {
+                        let _ = strat_app_tx
+                            .send(AppEvent::MarketTick(tick.clone()))
+                            .await;
+                    }
+
+                    if let Some(mgr) = order_managers.get_mut(&tick_symbol) {
+                        mgr.update_unrealized_pnl(tick.price);
+                        if tick_symbol == selected_symbol {
+                            emit_rate_snapshot(&strat_app_tx, mgr);
+                        }
+                    }
+
+                    for (source_tag, profile) in &profiles_by_tag {
+                        if !enabled_strategy_tags.contains(source_tag) {
                             continue;
                         }
-                    };
+                        if normalize_instrument_label(&profile.symbol) != tick_symbol {
+                            continue;
+                        }
+                        let strategy = strategies.entry(source_tag.clone()).or_insert_with(|| {
+                            let (fast, slow, min_ticks) = profile.periods_tuple();
+                            MaCrossover::new(fast, slow, min_ticks)
+                        });
+                        let signal = strategy.on_tick(&tick);
 
-                    // Always run strategy to keep SMA state updated, but skip orders if paused.
-                    let signal = strategy.on_tick(&tick);
+                        if selected_profile.source_tag == *source_tag {
+                            let _ = strat_app_tx
+                                .send(AppEvent::StrategyState {
+                                    fast_sma: strategy.fast_sma_value(),
+                                    slow_sma: strategy.slow_sma_value(),
+                                })
+                                .await;
+                        }
 
-                    let _ = strat_app_tx
-                        .send(AppEvent::StrategyState {
-                            fast_sma: strategy.fast_sma_value(),
-                            slow_sma: strategy.slow_sma_value(),
-                        })
-                        .await;
-
-                    order_mgr.update_unrealized_pnl(tick.price);
-                    emit_rate_snapshot(&strat_app_tx, &order_mgr);
-
-                    let enabled = *strat_enabled_rx.borrow();
-                    if signal != Signal::Hold && enabled {
-                        let _ = strat_app_tx
-                            .send(AppEvent::StrategySignal(signal.clone()))
-                            .await;
-                        if let Err(e) = risk_eval_tx
-                            .send((signal, active_profile.source_tag.clone()))
-                            .await
-                        {
-                            tracing::error!(error = %e, "Failed to enqueue strategy signal");
+                        let enabled = *strat_enabled_rx.borrow();
+                        if signal != Signal::Hold && enabled {
+                            let _ = strat_app_tx
+                                .send(AppEvent::StrategySignal(signal.clone()))
+                                .await;
+                            if let Err(e) = risk_eval_tx
+                                .send((signal, source_tag.clone(), normalize_instrument_label(&profile.symbol)))
+                                .await
+                            {
+                                tracing::error!(error = %e, "Failed to enqueue strategy signal");
+                            }
                         }
                     }
                 }
                 Some(signal) = manual_order_rx.recv() => {
-                    tracing::info!(signal = ?signal, "Manual order received");
                     let _ = strat_app_tx
                         .send(AppEvent::StrategySignal(signal.clone()))
                         .await;
-                    if let Err(e) = risk_eval_tx.send((signal, "mnl".to_string())).await {
+                    if let Err(e) = risk_eval_tx
+                        .send((signal, "mnl".to_string(), selected_symbol.clone()))
+                        .await
+                    {
                         tracing::error!(error = %e, "Failed to enqueue manual signal");
                     }
                 }
-                Some((signal, source_tag)) = risk_eval_rx.recv() => {
-                    match order_mgr.submit_order(signal, &source_tag).await {
-                        Ok(Some(ref update)) => {
-                            let _ = strat_app_tx
-                                .send(AppEvent::OrderUpdate(update.clone()))
-                                .await;
-                            match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                                Ok(history) => {
+                Some((signal, source_tag, instrument)) = risk_eval_rx.recv() => {
+                    if !order_managers.contains_key(&instrument) {
+                        let (api_symbol, market) = parse_instrument_label(&instrument);
+                        order_managers.insert(
+                            instrument.clone(),
+                            OrderManager::new(
+                                strat_rest.clone(),
+                                &api_symbol,
+                                market,
+                                strat_config.strategy.order_amount_usdt,
+                                &strat_config.risk,
+                            ),
+                        );
+                    }
+                    if let Some(mgr) = order_managers.get_mut(&instrument) {
+                        match mgr.submit_order(signal, &source_tag).await {
+                            Ok(Some(ref update)) => {
+                                if instrument == selected_symbol {
                                     let _ = strat_app_tx
-                                        .send(AppEvent::OrderHistoryUpdate(history))
+                                        .send(AppEvent::OrderUpdate(update.clone()))
                                         .await;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "Failed to refresh order history");
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::LogMessage(format!(
-                                            "[WARN] Order history refresh failed: {}",
-                                            e
-                                        )))
-                                        .await;
+                                    match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                        Ok(history) => {
+                                            let _ = strat_app_tx
+                                                .send(AppEvent::OrderHistoryUpdate(history))
+                                                .await;
+                                        }
+                                        Err(e) => {
+                                            let _ = strat_app_tx
+                                                .send(AppEvent::LogMessage(format!(
+                                                    "[WARN] Order history refresh failed: {}",
+                                                    e
+                                                )))
+                                                .await;
+                                        }
+                                    }
+                                    if matches!(update, sandbox_quant::order_manager::OrderUpdate::Filled { .. }) {
+                                        let _ = strat_app_tx
+                                            .send(AppEvent::BalanceUpdate(mgr.balances().clone()))
+                                            .await;
+                                    }
+                                    emit_rate_snapshot(&strat_app_tx, mgr);
                                 }
                             }
-                            if matches!(
-                                update,
-                                sandbox_quant::order_manager::OrderUpdate::Filled { .. }
-                            ) {
-                                let _ = strat_app_tx
-                                    .send(AppEvent::BalanceUpdate(order_mgr.balances().clone()))
-                                    .await;
+                            Ok(None) => {}
+                            Err(e) => {
+                                let _ = strat_app_tx.send(AppEvent::Error(e.to_string())).await;
                             }
-                            emit_rate_snapshot(&strat_app_tx, &order_mgr);
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            tracing::error!(error = %e, "Queued order submission failed");
-                            let _ = strat_app_tx
-                                .send(AppEvent::Error(e.to_string()))
-                                .await;
                         }
                     }
                 }
                 _ = order_history_sync.tick() => {
-                    match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                        Ok(history) => {
-                            let _ = strat_app_tx
-                                .send(AppEvent::OrderHistoryUpdate(history))
-                                .await;
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Periodic order history sync failed");
-                            let _ = strat_app_tx
-                                .send(AppEvent::LogMessage(format!(
-                                    "[WARN] Periodic order history sync failed: {}",
-                                    e
-                                )))
-                                .await;
-                        }
-                    }
-                    emit_rate_snapshot(&strat_app_tx, &order_mgr);
-                }
-                _ = strat_symbol_rx.changed() => {
-                    current_symbol = strat_symbol_rx.borrow().clone();
-                    let (api_symbol, market) = parse_instrument_label(&current_symbol);
-                    current_api_symbol = api_symbol.clone();
-                    current_market = market;
-                    order_mgr = OrderManager::new(
-                        strat_rest.clone(),
-                        &api_symbol,
-                        current_market,
-                        strat_config.strategy.order_amount_usdt,
-                        &strat_config.risk,
-                    );
-                    worker_registry.unregister(&worker_id);
-                    let (next_worker_tick_tx, next_worker_tick_rx) = mpsc::channel::<Tick>(256);
-                    worker_id = strategy_worker_id(&active_profile, &current_api_symbol, current_market);
-                    worker_registry.register(
-                        worker_id.clone(),
-                        current_api_symbol.clone(),
-                        next_worker_tick_tx,
-                    );
-                    worker_tick_rx = next_worker_tick_rx;
-                    strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
-                    let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!("Switched symbol to {}", current_symbol)))
-                        .await;
-                    match order_mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                        Ok(history) => {
-                            let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
-                        }
-                        Err(e) => {
-                            let _ = strat_app_tx
-                                .send(AppEvent::LogMessage(format!(
-                                    "[WARN] Symbol switch history refresh failed: {}",
-                                    e
-                                )))
-                                .await;
-                        }
-                    }
-                    if current_market == MarketKind::Spot {
-                        match order_mgr.refresh_balances().await {
-                            Ok(balances) => {
-                                let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                    if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
+                        match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                            Ok(history) => {
+                                let _ = strat_app_tx
+                                    .send(AppEvent::OrderHistoryUpdate(history))
+                                    .await;
                             }
                             Err(e) => {
                                 let _ = strat_app_tx
                                     .send(AppEvent::LogMessage(format!(
-                                        "[WARN] Balance refresh failed after symbol switch: {}",
+                                        "[WARN] Periodic order history sync failed: {}",
                                         e
                                     )))
                                     .await;
                             }
                         }
+                        emit_rate_snapshot(&strat_app_tx, mgr);
                     }
-                    emit_rate_snapshot(&strat_app_tx, &order_mgr);
+                }
+                _ = strat_symbol_rx.changed() => {
+                    selected_symbol = normalize_instrument_label(strat_symbol_rx.borrow().as_str());
+                    if !order_managers.contains_key(&selected_symbol) {
+                        let (api_symbol, market) = parse_instrument_label(&selected_symbol);
+                        order_managers.insert(
+                            selected_symbol.clone(),
+                            OrderManager::new(
+                                strat_rest.clone(),
+                                &api_symbol,
+                                market,
+                                strat_config.strategy.order_amount_usdt,
+                                &strat_config.risk,
+                            ),
+                        );
+                    }
+                    let _ = strat_app_tx
+                        .send(AppEvent::LogMessage(format!("Switched symbol to {}", selected_symbol)))
+                        .await;
+                    if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
+                        if let Ok(history) = mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                            let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                        }
+                        if let Ok(balances) = mgr.refresh_balances().await {
+                            let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                        }
+                        emit_rate_snapshot(&strat_app_tx, mgr);
+                    }
                 }
                 _ = strategy_profile_rx.changed() => {
-                    active_profile = strategy_profile_rx.borrow().clone();
-                    (fast_period, slow_period, min_ticks) = active_profile.periods_tuple();
-                    strategy = MaCrossover::new(fast_period, slow_period, min_ticks);
-                    worker_registry.unregister(&worker_id);
-                    let (next_worker_tick_tx, next_worker_tick_rx) = mpsc::channel::<Tick>(256);
-                    worker_id = strategy_worker_id(&active_profile, &current_api_symbol, current_market);
-                    worker_registry.register(
-                        worker_id.clone(),
-                        current_api_symbol.clone(),
-                        next_worker_tick_tx,
-                    );
-                    worker_tick_rx = next_worker_tick_rx;
+                    selected_profile = strategy_profile_rx.borrow().clone();
                     let _ = strat_app_tx
                         .send(AppEvent::LogMessage(format!(
-                            "Strategy switched: {} ({}/{})",
-                            active_profile.label,
-                            fast_period,
-                            slow_period
+                            "Strategy switched: {}",
+                            selected_profile.label
                         )))
                         .await;
+                }
+                _ = strategy_profiles_rx.changed() => {
+                    let next_profiles = strategy_profiles_rx.borrow().clone();
+                    profiles_by_tag = next_profiles
+                        .iter()
+                        .map(|profile| (profile.source_tag.clone(), profile.clone()))
+                        .collect();
+                    let existing: HashSet<String> = profiles_by_tag.keys().cloned().collect();
+                    strategies.retain(|source_tag, _| existing.contains(source_tag));
+                    for (source_tag, profile) in &profiles_by_tag {
+                        strategies.entry(source_tag.clone()).or_insert_with(|| {
+                            let (fast, slow, min_ticks) = profile.periods_tuple();
+                            MaCrossover::new(fast, slow, min_ticks)
+                        });
+                    }
+                }
+                _ = enabled_strategy_tags_rx.changed() => {
+                    enabled_strategy_tags = enabled_strategy_tags_rx.borrow().clone();
                 }
                 _ = strat_shutdown.changed() => {
                     tracing::info!("Strategy task shutting down");
@@ -665,7 +794,22 @@ async fn main() -> Result<()> {
     );
     app_state.refresh_history_rows();
     app_state.symbol_items = tradable_symbols.clone();
-    refresh_strategy_lists(&mut app_state, &strategy_catalog);
+    refresh_strategy_lists(
+        &mut app_state,
+        &strategy_catalog,
+        &enabled_strategy_tags,
+    );
+    app_state.v2_grid_strategy_index = app_state
+        .strategy_items
+        .iter()
+        .position(|item| item == &initial_strategy_profile.label)
+        .unwrap_or(0);
+    app_state.v2_grid_symbol_index = app_state
+        .symbol_items
+        .iter()
+        .position(|item| item == &initial_strategy_profile.symbol)
+        .unwrap_or(0);
+    app_state.v2_grid_open = true;
 
     // Pre-fill chart with historical candles
     if !historical_candles.is_empty() {
@@ -681,6 +825,11 @@ async fn main() -> Result<()> {
     let mut current_strategy_profile = initial_strategy_profile;
 
     loop {
+        refresh_strategy_lists(
+            &mut app_state,
+            &strategy_catalog,
+            &enabled_strategy_tags,
+        );
         // Draw
         terminal.draw(|frame| ui::render(frame, &app_state))?;
 
@@ -745,6 +894,13 @@ async fn main() -> Result<()> {
                                 .get(app_state.strategy_selector_index)
                                 .cloned()
                             {
+                                set_strategy_enabled(
+                                    &mut strategy_catalog,
+                                    &mut enabled_strategy_tags,
+                                    &next_profile.source_tag,
+                                    true,
+                                    app_state.paused,
+                                );
                                 apply_symbol_selection(
                                     &next_profile.symbol,
                                     &mut current_symbol,
@@ -754,28 +910,34 @@ async fn main() -> Result<()> {
                                     &config,
                                     &app_tx,
                                 );
-                                if next_profile != current_strategy_profile {
-                                    current_strategy_profile = next_profile.clone();
-                                    app_state.strategy_label = next_profile.label.clone();
-                                    app_state.v2_state.focus.strategy_id =
-                                        Some(next_profile.label.clone());
-                                    refresh_strategy_lists(&mut app_state, &strategy_catalog);
-                                    app_state.v2_grid_strategy_index = strategy_catalog
-                                        .index_of_label(&next_profile.label)
-                                        .unwrap_or(0);
-                                    app_state.fast_sma = None;
-                                    app_state.slow_sma = None;
-                                    let _ = strategy_profile_tx.send(next_profile.clone());
-                                    app_state.push_log(format!(
-                                        "Strategy selected: {}",
-                                        next_profile.label
-                                    ));
-                                    persist_strategy_session_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
-                                    );
-                                }
+                                current_strategy_profile = next_profile.clone();
+                                app_state.strategy_label = next_profile.label.clone();
+                                app_state.v2_state.focus.strategy_id =
+                                    Some(next_profile.label.clone());
+                                refresh_strategy_lists(
+                                    &mut app_state,
+                                    &strategy_catalog,
+                                    &enabled_strategy_tags,
+                                );
+                                app_state.v2_grid_strategy_index = strategy_catalog
+                                    .index_of_label(&next_profile.label)
+                                    .unwrap_or(0);
+                                app_state.fast_sma = None;
+                                app_state.slow_sma = None;
+                                let _ = strategy_profile_tx.send(next_profile.clone());
+                                let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
+                                let _ = enabled_strategy_tags_tx.send(enabled_strategy_tags.clone());
+                                let _ = ws_instruments_tx.send(enabled_instruments(&strategy_catalog, &enabled_strategy_tags));
+                                app_state.push_log(format!(
+                                    "Strategy selected: {} (ON)",
+                                    next_profile.label
+                                ));
+                                persist_strategy_session_state(
+                                    &mut app_state,
+                                    &strategy_catalog,
+                                    &current_strategy_profile,
+                                    &enabled_strategy_tags,
+                                );
                             }
                             app_state.strategy_selector_open = false;
                         }
@@ -885,7 +1047,11 @@ async fn main() -> Result<()> {
                                 app_state.strategy_editor_cooldown,
                             );
                             if let Some(updated) = maybe_updated {
-                                refresh_strategy_lists(&mut app_state, &strategy_catalog);
+                                refresh_strategy_lists(
+                                    &mut app_state,
+                                    &strategy_catalog,
+                                    &enabled_strategy_tags,
+                                );
                                 app_state.v2_grid_strategy_index = strategy_catalog
                                     .index_of_label(&updated.label)
                                     .unwrap_or(0);
@@ -894,6 +1060,20 @@ async fn main() -> Result<()> {
                                     .map(|p| p.source_tag.as_str())
                                     == Some(current_strategy_profile.source_tag.as_str())
                                 {
+                                    set_strategy_enabled(
+                                        &mut strategy_catalog,
+                                        &mut enabled_strategy_tags,
+                                        &current_strategy_profile.source_tag,
+                                        false,
+                                        app_state.paused,
+                                    );
+                                    set_strategy_enabled(
+                                        &mut strategy_catalog,
+                                        &mut enabled_strategy_tags,
+                                        &updated.source_tag,
+                                        true,
+                                        app_state.paused,
+                                    );
                                     current_strategy_profile = updated.clone();
                                     app_state.strategy_label = updated.label.clone();
                                     app_state.v2_state.focus.strategy_id =
@@ -926,7 +1106,11 @@ async fn main() -> Result<()> {
                                     &mut app_state,
                                     &strategy_catalog,
                                     &current_strategy_profile,
+                                    &enabled_strategy_tags,
                                 );
+                                let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
+                                let _ = enabled_strategy_tags_tx.send(enabled_strategy_tags.clone());
+                                let _ = ws_instruments_tx.send(enabled_instruments(&strategy_catalog, &enabled_strategy_tags));
                             }
                             app_state.strategy_editor_open = false;
                         }
@@ -958,7 +1142,11 @@ async fn main() -> Result<()> {
                                 .v2_grid_strategy_index
                                 .min(strategy_catalog.len().saturating_sub(1));
                             let created = strategy_catalog.add_custom_from_index(base_index);
-                            refresh_strategy_lists(&mut app_state, &strategy_catalog);
+                            refresh_strategy_lists(
+                                &mut app_state,
+                                &strategy_catalog,
+                                &enabled_strategy_tags,
+                            );
                             app_state.v2_grid_strategy_index = strategy_catalog
                                 .index_of_label(&created.label)
                                 .unwrap_or(0);
@@ -977,10 +1165,14 @@ async fn main() -> Result<()> {
                                 "Grid strategy registered: {}",
                                 created.label
                             ));
+                            let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
+                            let _ = enabled_strategy_tags_tx.send(enabled_strategy_tags.clone());
+                            let _ = ws_instruments_tx.send(enabled_instruments(&strategy_catalog, &enabled_strategy_tags));
                             persist_strategy_session_state(
                                 &mut app_state,
                                 &strategy_catalog,
                                 &current_strategy_profile,
+                                &enabled_strategy_tags,
                             );
                         }
                         KeyCode::Char('c') | KeyCode::Char('C') => {
@@ -1008,6 +1200,146 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
+                        KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                            let selected_idx = app_state
+                                .v2_grid_strategy_index
+                                .min(strategy_catalog.len().saturating_sub(1));
+                            let selected_profile = strategy_catalog.get(selected_idx).cloned();
+                            if let Some(profile) = selected_profile {
+                                if !StrategyCatalog::is_custom_source_tag(&profile.source_tag) {
+                                    app_state.push_log(format!(
+                                        "Strategy delete blocked (builtin): {}",
+                                        profile.label
+                                    ));
+                                } else if strategy_catalog.remove_custom_profile(selected_idx).is_some()
+                                {
+                                    enabled_strategy_tags.remove(&profile.source_tag);
+                                    let mut fallback_idx = selected_idx.saturating_sub(1);
+                                    if strategy_catalog.len() > 0 {
+                                        fallback_idx =
+                                            fallback_idx.min(strategy_catalog.len().saturating_sub(1));
+                                    }
+                                    if profile.source_tag == current_strategy_profile.source_tag {
+                                        set_strategy_enabled(
+                                            &mut strategy_catalog,
+                                            &mut enabled_strategy_tags,
+                                            &current_strategy_profile.source_tag,
+                                            false,
+                                            app_state.paused,
+                                        );
+                                        if let Some(next_profile) =
+                                            strategy_catalog.get(fallback_idx).cloned()
+                                        {
+                                            set_strategy_enabled(
+                                                &mut strategy_catalog,
+                                                &mut enabled_strategy_tags,
+                                                &next_profile.source_tag,
+                                                true,
+                                                app_state.paused,
+                                            );
+                                            current_strategy_profile = next_profile.clone();
+                                            app_state.strategy_label = next_profile.label.clone();
+                                            app_state.v2_state.focus.strategy_id =
+                                                Some(next_profile.label.clone());
+                                            apply_symbol_selection(
+                                                &next_profile.symbol,
+                                                &mut current_symbol,
+                                                &mut app_state,
+                                                &ws_symbol_tx,
+                                                &rest_client,
+                                                &config,
+                                                &app_tx,
+                                            );
+                                            app_state.fast_sma = None;
+                                            app_state.slow_sma = None;
+                                            let _ = strategy_profile_tx.send(next_profile);
+                                        }
+                                    }
+                                    let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
+                                    let _ = enabled_strategy_tags_tx.send(enabled_strategy_tags.clone());
+                                    let _ = ws_instruments_tx.send(enabled_instruments(&strategy_catalog, &enabled_strategy_tags));
+                                    refresh_strategy_lists(
+                                        &mut app_state,
+                                        &strategy_catalog,
+                                        &enabled_strategy_tags,
+                                    );
+                                    app_state.v2_grid_strategy_index =
+                                        fallback_idx.min(strategy_catalog.len().saturating_sub(1));
+                                    app_state.push_log(format!("Strategy deleted: {}", profile.label));
+                                    persist_strategy_session_state(
+                                        &mut app_state,
+                                        &strategy_catalog,
+                                        &current_strategy_profile,
+                                        &enabled_strategy_tags,
+                                    );
+                                }
+                            }
+                        }
+                        KeyCode::Char('o') | KeyCode::Char('O') => {
+                            if let Some(item) = app_state
+                                .strategy_items
+                                .get(app_state.v2_grid_strategy_index)
+                                .cloned()
+                            {
+                                if let Some(next_profile) = strategy_catalog
+                                    .index_of_label(&item)
+                                    .and_then(|idx| strategy_catalog.get(idx).cloned())
+                                {
+                                    if enabled_strategy_tags.contains(&next_profile.source_tag) {
+                                        set_strategy_enabled(
+                                            &mut strategy_catalog,
+                                            &mut enabled_strategy_tags,
+                                            &next_profile.source_tag,
+                                            false,
+                                            app_state.paused,
+                                        );
+                                        app_state.push_log(format!("Strategy OFF: {}", next_profile.label));
+                                    } else {
+                                        set_strategy_enabled(
+                                            &mut strategy_catalog,
+                                            &mut enabled_strategy_tags,
+                                            &next_profile.source_tag,
+                                            true,
+                                            app_state.paused,
+                                        );
+                                        apply_symbol_selection(
+                                            &next_profile.symbol,
+                                            &mut current_symbol,
+                                            &mut app_state,
+                                            &ws_symbol_tx,
+                                            &rest_client,
+                                            &config,
+                                            &app_tx,
+                                        );
+                                        current_strategy_profile = next_profile.clone();
+                                        app_state.strategy_label = next_profile.label.clone();
+                                        app_state.fast_sma = None;
+                                        app_state.slow_sma = None;
+                                        let _ = strategy_profile_tx.send(next_profile.clone());
+                                        app_state.paused = false;
+                                        let _ = strategy_enabled_tx.send(true);
+                                        app_state.push_log(format!(
+                                            "Strategy ON from grid: {}",
+                                            next_profile.label
+                                        ));
+                                    }
+                                    let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
+                                    let _ = enabled_strategy_tags_tx.send(enabled_strategy_tags.clone());
+                                    let _ = ws_instruments_tx.send(enabled_instruments(&strategy_catalog, &enabled_strategy_tags));
+                                    refresh_strategy_lists(
+                                        &mut app_state,
+                                        &strategy_catalog,
+                                        &enabled_strategy_tags,
+                                    );
+                                    persist_strategy_session_state(
+                                        &mut app_state,
+                                        &strategy_catalog,
+                                        &current_strategy_profile,
+                                        &enabled_strategy_tags,
+                                    );
+                                }
+                            }
+                        }
                         KeyCode::Enter | KeyCode::Char('f') | KeyCode::Char('F') => {
                             if let Some(item) = app_state
                                 .strategy_items
@@ -1020,6 +1352,13 @@ async fn main() -> Result<()> {
                                     .index_of_label(&item)
                                     .and_then(|idx| strategy_catalog.get(idx).cloned())
                                 {
+                                    set_strategy_enabled(
+                                        &mut strategy_catalog,
+                                        &mut enabled_strategy_tags,
+                                        &next_profile.source_tag,
+                                        true,
+                                        app_state.paused,
+                                    );
                                     apply_symbol_selection(
                                         &next_profile.symbol,
                                         &mut current_symbol,
@@ -1029,25 +1368,27 @@ async fn main() -> Result<()> {
                                         &config,
                                         &app_tx,
                                     );
-                                    if next_profile != current_strategy_profile {
-                                        current_strategy_profile = next_profile.clone();
-                                        app_state.strategy_label = next_profile.label.clone();
-                                        app_state.fast_sma = None;
-                                        app_state.slow_sma = None;
-                                        let _ = strategy_profile_tx.send(next_profile.clone());
-                                        app_state.push_log(format!(
-                                            "Strategy selected from grid: {}",
-                                            next_profile.label
-                                        ));
-                                        persist_strategy_session_state(
-                                            &mut app_state,
-                                            &strategy_catalog,
-                                            &current_strategy_profile,
-                                        );
-                                    }
+                                    current_strategy_profile = next_profile.clone();
+                                    app_state.strategy_label = next_profile.label.clone();
+                                    app_state.fast_sma = None;
+                                    app_state.slow_sma = None;
+                                    let _ = strategy_profile_tx.send(next_profile.clone());
+                                    let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
+                                    let _ = enabled_strategy_tags_tx.send(enabled_strategy_tags.clone());
+                                    let _ = ws_instruments_tx.send(enabled_instruments(&strategy_catalog, &enabled_strategy_tags));
+                                    app_state.push_log(format!(
+                                        "Strategy selected from grid: {} (ON)",
+                                        next_profile.label
+                                    ));
+                                    persist_strategy_session_state(
+                                        &mut app_state,
+                                        &strategy_catalog,
+                                        &current_strategy_profile,
+                                        &enabled_strategy_tags,
+                                    );
                                 }
                                 app_state.v2_grid_open = false;
-                                app_state.focus_popup_open = true;
+                                app_state.focus_popup_open = false;
                             }
                         }
                         KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('G') => {
@@ -1058,23 +1399,26 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => {
-                        tracing::info!("User quit");
-                        let _ = shutdown_tx.send(true);
-                        break;
-                    }
                     KeyCode::Char('p') | KeyCode::Char('P') => {
                         if !app_state.paused {
+                            for source_tag in enabled_strategy_tags.clone() {
+                                mark_strategy_stopped(&mut strategy_catalog, &source_tag);
+                            }
                             app_state.paused = true;
                             let _ = strategy_enabled_tx.send(false);
                             app_state.push_log("Strategy OFF".to_string());
+                            let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         if app_state.paused {
+                            for source_tag in enabled_strategy_tags.clone() {
+                                mark_strategy_running(&mut strategy_catalog, &source_tag);
+                            }
                             app_state.paused = false;
                             let _ = strategy_enabled_tx.send(true);
                             app_state.push_log("Strategy ON".to_string());
+                            let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
                         }
                     }
                     KeyCode::Char('b') | KeyCode::Char('B') => {
@@ -1142,9 +1486,17 @@ async fn main() -> Result<()> {
                         app_state.v2_grid_open = true;
                     }
                     KeyCode::Char('f') | KeyCode::Char('F') => {
-                        app_state.v2_state.focus.symbol = Some(app_state.symbol.clone());
-                        app_state.v2_state.focus.strategy_id = Some(app_state.strategy_label.clone());
-                        app_state.focus_popup_open = true;
+                        app_state.v2_grid_symbol_index = app_state
+                            .symbol_items
+                            .iter()
+                            .position(|item| item == &current_symbol)
+                            .unwrap_or(0);
+                        app_state.v2_grid_strategy_index = app_state
+                            .strategy_items
+                            .iter()
+                            .position(|item| item == &app_state.strategy_label)
+                            .unwrap_or(0);
+                        app_state.v2_grid_open = true;
                     }
                     _ => {}
                 }
@@ -1162,9 +1514,11 @@ async fn main() -> Result<()> {
         }
     }
 
+    strategy_catalog.stop_all_running(chrono::Utc::now().timestamp_millis());
     if let Err(e) = strategy_session::persist_strategy_session(
         &strategy_catalog,
         &current_strategy_profile.source_tag,
+        &enabled_strategy_tags,
     ) {
         tracing::warn!(error = %e, "Failed to persist strategy session during shutdown");
     }
