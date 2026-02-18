@@ -75,6 +75,7 @@ pub struct AppState {
     pub strategy_editor_open: bool,
     pub strategy_editor_index: usize,
     pub strategy_editor_field: usize,
+    pub strategy_editor_symbol_index: usize,
     pub strategy_editor_fast: usize,
     pub strategy_editor_slow: usize,
     pub strategy_editor_cooldown: u64,
@@ -152,6 +153,7 @@ impl AppState {
             strategy_editor_open: false,
             strategy_editor_index: 0,
             strategy_editor_field: 0,
+            strategy_editor_symbol_index: 0,
             strategy_editor_fast: 5,
             strategy_editor_slow: 20,
             strategy_editor_cooldown: 1,
@@ -981,6 +983,14 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
         .map(String::as_str)
         .unwrap_or("Unknown");
     let rows = [
+        (
+            "Symbol",
+            state
+                .symbol_items
+                .get(state.strategy_editor_symbol_index)
+                .cloned()
+                .unwrap_or_else(|| state.symbol.clone()),
+        ),
         ("Fast Period", state.strategy_editor_fast.to_string()),
         ("Slow Period", state.strategy_editor_slow.to_string()),
         ("Cooldown Tick", state.strategy_editor_cooldown.to_string()),
@@ -996,7 +1006,7 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
             ),
         ]),
         Line::from(Span::styled(
-            "Use [J/K] field, [H/L] value, [Enter] save, [Esc] cancel",
+            "Use [J/K] field, [H/L] value, [Enter] save+apply symbol, [Esc] cancel",
             Style::default().fg(Color::DarkGray),
         )),
     ];

@@ -811,15 +811,20 @@ async fn main() -> Result<()> {
                         }
                         KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
                             app_state.strategy_editor_field =
-                                (app_state.strategy_editor_field + 1).min(2);
+                                (app_state.strategy_editor_field + 1).min(3);
                         }
                         KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
                             match app_state.strategy_editor_field {
                                 0 => {
+                                    app_state.strategy_editor_symbol_index = app_state
+                                        .strategy_editor_symbol_index
+                                        .saturating_sub(1)
+                                }
+                                1 => {
                                     app_state.strategy_editor_fast =
                                         app_state.strategy_editor_fast.saturating_sub(1).max(2)
                                 }
-                                1 => {
+                                2 => {
                                     app_state.strategy_editor_slow =
                                         app_state.strategy_editor_slow.saturating_sub(1).max(3)
                                 }
@@ -831,12 +836,32 @@ async fn main() -> Result<()> {
                         }
                         KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
                             match app_state.strategy_editor_field {
-                                0 => app_state.strategy_editor_fast += 1,
-                                1 => app_state.strategy_editor_slow += 1,
+                                0 => {
+                                    app_state.strategy_editor_symbol_index =
+                                        (app_state.strategy_editor_symbol_index + 1)
+                                            .min(app_state.symbol_items.len().saturating_sub(1))
+                                }
+                                1 => app_state.strategy_editor_fast += 1,
+                                2 => app_state.strategy_editor_slow += 1,
                                 _ => app_state.strategy_editor_cooldown += 1,
                             }
                         }
                         KeyCode::Enter => {
+                            if let Some(selected_symbol) = app_state
+                                .symbol_items
+                                .get(app_state.strategy_editor_symbol_index)
+                                .cloned()
+                            {
+                                apply_symbol_selection(
+                                    &selected_symbol,
+                                    &mut current_symbol,
+                                    &mut app_state,
+                                    &ws_symbol_tx,
+                                    &rest_client,
+                                    &config,
+                                    &app_tx,
+                                );
+                            }
                             let maybe_updated = strategy_catalog.update_profile(
                                 app_state.strategy_editor_index,
                                 app_state.strategy_editor_fast,
@@ -901,6 +926,7 @@ async fn main() -> Result<()> {
                             app_state.strategy_editor_open = true;
                             app_state.strategy_editor_index = app_state.v2_grid_strategy_index;
                             app_state.strategy_editor_field = 0;
+                            app_state.strategy_editor_symbol_index = app_state.v2_grid_symbol_index;
                             app_state.strategy_editor_fast = created.fast_period;
                             app_state.strategy_editor_slow = created.slow_period;
                             app_state.strategy_editor_cooldown = created.min_ticks_between_signals;
@@ -925,6 +951,8 @@ async fn main() -> Result<()> {
                                         app_state.strategy_editor_open = true;
                                         app_state.strategy_editor_index = idx;
                                         app_state.strategy_editor_field = 0;
+                                        app_state.strategy_editor_symbol_index =
+                                            app_state.v2_grid_symbol_index;
                                         app_state.strategy_editor_fast = profile.fast_period;
                                         app_state.strategy_editor_slow = profile.slow_period;
                                         app_state.strategy_editor_cooldown =
