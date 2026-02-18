@@ -1,3 +1,8 @@
+## v0.12.0 - 2026-02-18
+
+- feat(ui): add rate-based network SLI metrics and health view (d4c4547)
+- docs(rfc): add network monitoring rate and SLI upgrade proposal (a1a1099)
+
 ## v0.11.0 - 2026-02-18
 
 - feat(ui): split right panel semantics and stack strategy metrics vertically (454ba2b)
