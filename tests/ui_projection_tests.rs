@@ -1,5 +1,5 @@
 use sandbox_quant::order_manager::OrderHistoryStats;
-use sandbox_quant::ui::app_state_v2::AppStateV2;
+use sandbox_quant::ui::ui_projection::UiProjection;
 use sandbox_quant::ui::AppState;
 
 fn sample_app_state() -> AppState {
@@ -31,10 +31,10 @@ fn sample_app_state() -> AppState {
 }
 
 #[test]
-/// Verifies AppStateV2 baseline shape:
+/// Verifies UiProjection baseline shape:
 /// new() should initialize all top-level buckets for portfolio/grid/focus rendering.
-fn app_state_v2_new_starts_empty() {
-    let v2 = AppStateV2::new();
+fn ui_projection_new_starts_empty() {
+    let v2 = UiProjection::new();
     assert!(v2.assets.is_empty());
     assert!(v2.strategies.is_empty());
     assert!(v2.matrix.is_empty());
@@ -45,9 +45,9 @@ fn app_state_v2_new_starts_empty() {
 #[test]
 /// Verifies legacy-to-v2 projection:
 /// existing AppState stats should populate portfolio/assets/strategies/matrix/focus fields.
-fn app_state_v2_from_legacy_maps_core_fields() {
+fn ui_projection_from_legacy_maps_core_fields() {
     let legacy = sample_app_state();
-    let v2 = AppStateV2::from_legacy(&legacy);
+    let v2 = UiProjection::from_legacy(&legacy);
 
     assert_eq!(v2.portfolio.total_equity_usdt, Some(1200.0));
     assert_eq!(v2.portfolio.total_realized_pnl_usdt, 42.5);
@@ -67,9 +67,9 @@ fn app_state_v2_from_legacy_maps_core_fields() {
 #[test]
 /// Verifies strategy lookup helper:
 /// strategy ids should be queryable in O(1)-style map form for table/grid rendering.
-fn app_state_v2_strategy_lookup_returns_indexed_map() {
+fn ui_projection_strategy_lookup_returns_indexed_map() {
     let legacy = sample_app_state();
-    let v2 = AppStateV2::from_legacy(&legacy);
+    let v2 = UiProjection::from_legacy(&legacy);
     let lookup = v2.strategy_lookup();
 
     let cfg = lookup.get("MA(Config)").expect("missing MA(Config)");
@@ -77,8 +77,6 @@ fn app_state_v2_strategy_lookup_returns_indexed_map() {
     assert_eq!(cfg.win_count, 3);
     assert_eq!(cfg.lose_count, 2);
 
-    let fast = lookup
-        .get("MA(Fast 5/20)")
-        .expect("missing MA(Fast 5/20)");
+    let fast = lookup.get("MA(Fast 5/20)").expect("missing MA(Fast 5/20)");
     assert!((fast.realized_pnl_usdt + 1.5).abs() < f64::EPSILON);
 }

@@ -43,7 +43,7 @@ pub struct FocusState {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct AppStateV2 {
+pub struct UiProjection {
     pub portfolio: PortfolioSummary,
     pub assets: Vec<AssetEntry>,
     pub strategies: Vec<StrategyEntry>,
@@ -51,7 +51,7 @@ pub struct AppStateV2 {
     pub focus: FocusState,
 }
 
-impl AppStateV2 {
+impl UiProjection {
     pub fn new() -> Self {
         Self::default()
     }

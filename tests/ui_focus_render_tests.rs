@@ -1,8 +1,8 @@
-use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::Terminal;
 
 use sandbox_quant::order_manager::OrderHistoryStats;
-use sandbox_quant::ui::app_state_v2::AppStateV2;
+use sandbox_quant::ui::ui_projection::UiProjection;
 use sandbox_quant::ui::{self, AppState};
 
 fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
@@ -34,7 +34,7 @@ fn render_focus_popup_when_enabled() {
 
     let text = buffer_text(&terminal);
     assert!(
-        text.contains("Focus View (V2 Drill-down)"),
+        text.contains("Focus View (Drill-down)"),
         "focus popup title should be present in frame buffer"
     );
 }
@@ -46,8 +46,8 @@ fn render_grid_popup_with_strategy_selector() {
     let backend = TestBackend::new(120, 40);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
-    state.v2_grid_open = true;
-    state.v2_grid_strategy_index = 1;
+    state.grid_open = true;
+    state.grid_strategy_index = 1;
 
     terminal
         .draw(|frame| ui::render(frame, &state))
@@ -55,14 +55,17 @@ fn render_grid_popup_with_strategy_selector() {
 
     let text = buffer_text(&terminal);
     assert!(
-        text.contains("Portfolio Grid (V2)"),
+        text.contains("Portfolio Grid"),
         "grid popup title should be present"
     );
     assert!(
         text.contains("MA(Fast 5/20)"),
         "strategy table should include selectable configured strategies"
     );
-    assert!(text.contains("BTCUSDT"), "strategy table should show selected symbol");
+    assert!(
+        text.contains("BTCUSDT"),
+        "strategy table should show selected symbol"
+    );
     assert!(
         text.contains("Strategy"),
         "grid strategy navigation hint should be visible"
@@ -76,13 +79,13 @@ fn render_grid_popup_with_registered_custom_strategy() {
     let backend = TestBackend::new(160, 40);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
-    state.v2_grid_open = true;
+    state.grid_open = true;
     state.strategy_items = vec!["MA(Custom 8/29) [c01]".to_string()];
     state.strategy_item_symbols = vec!["BTCUSDT".to_string()];
     state.strategy_item_active = vec![false];
     state.strategy_item_created_at_ms = vec![0];
     state.strategy_item_total_running_ms = vec![0];
-    state.v2_grid_strategy_index = 0;
+    state.grid_strategy_index = 0;
     state.strategy_stats.insert(
         "c01".to_string(),
         OrderHistoryStats {
@@ -108,7 +111,9 @@ fn render_strategy_editor_popup_when_enabled() {
     let backend = TestBackend::new(120, 40);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
-    state.strategy_items.push("MA(Custom 8/29) [c01]".to_string());
+    state
+        .strategy_items
+        .push("MA(Custom 8/29) [c01]".to_string());
     state.strategy_editor_open = true;
     state.strategy_editor_index = state.strategy_items.len() - 1;
     state.strategy_editor_fast = 8;
@@ -127,13 +132,35 @@ fn render_strategy_editor_popup_when_enabled() {
 }
 
 #[test]
+/// Verifies popup layering in grid mode:
+/// when grid and strategy editor are both open, strategy config popup must still be visible.
+fn render_strategy_editor_popup_over_grid() {
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.grid_open = true;
+    state.strategy_editor_open = true;
+    state.strategy_editor_fast = 8;
+    state.strategy_editor_slow = 29;
+    state.strategy_editor_cooldown = 3;
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Strategy Config"));
+    assert!(text.contains("Fast Period"));
+}
+
+#[test]
 /// Verifies split ON/OFF grid layout:
 /// total summary row and both strategy panels must render alongside strategy rows.
 fn render_grid_popup_with_total_and_split_panels() {
     let backend = TestBackend::new(140, 40);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
-    state.v2_grid_open = true;
+    state.grid_open = true;
     state.strategy_item_active = vec![true, false, false];
 
     terminal
@@ -155,13 +182,13 @@ fn render_grid_popup_scrolls_to_selected_strategy_row() {
     let backend = TestBackend::new(120, 32);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT", "S00", 120, 60_000, "1m");
-    state.v2_grid_open = true;
+    state.grid_open = true;
     state.strategy_items = (0..15).map(|n| format!("S{:02}", n)).collect();
     state.strategy_item_symbols = vec!["BTCUSDT".to_string(); 15];
     state.strategy_item_active = vec![true; 15];
     state.strategy_item_created_at_ms = vec![0; 15];
     state.strategy_item_total_running_ms = vec![0; 15];
-    state.v2_grid_strategy_index = 12;
+    state.grid_strategy_index = 12;
 
     terminal
         .draw(|frame| ui::render(frame, &state))
@@ -181,7 +208,7 @@ fn render_grid_popup_asset_table_includes_multiple_symbols() {
     let backend = TestBackend::new(140, 36);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
-    state.v2_grid_open = true;
+    state.grid_open = true;
     state.symbol_items = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
     state.strategy_item_symbols = vec![
         "BTCUSDT".to_string(),
@@ -210,9 +237,9 @@ fn render_grid_popup_asset_table_includes_multiple_symbols() {
 }
 
 #[test]
-/// Verifies V2 asset aggregation:
+/// Verifies projection asset aggregation:
 /// balances and configured symbols should both contribute to asset row count.
-fn v2_asset_aggregation_includes_balance_assets() {
+fn projection_asset_aggregation_includes_balance_assets() {
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
     state.symbol_items = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
     state.strategy_item_symbols = vec![
@@ -223,7 +250,7 @@ fn v2_asset_aggregation_includes_balance_assets() {
     state.balances.insert("USDT".to_string(), 120.0);
     state.balances.insert("XRP".to_string(), 30.0);
 
-    let v2 = AppStateV2::from_legacy(&state);
+    let v2 = UiProjection::from_legacy(&state);
     let symbols: Vec<String> = v2.assets.iter().map(|a| a.symbol.clone()).collect();
     assert_eq!(v2.assets.len(), 5);
     assert!(symbols.iter().any(|s| s == "BTCUSDT"));
