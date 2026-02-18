@@ -33,6 +33,7 @@ pub enum GridTab {
     Strategies,
     Risk,
     Network,
+    SystemLog,
 }
 
 #[derive(Debug, Clone)]
@@ -657,20 +658,29 @@ impl AppState {
                         avg_price,
                     } => {
                         let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                        if let Some(submit_ms) =
-                            self.network_pending_submit_ms_by_intent.remove(intent_id)
+                        let source_tag = parse_source_tag_from_client_order_id(client_order_id)
+                            .map(|s| s.to_ascii_lowercase());
+                        if let Some(submit_ms) = self.network_pending_submit_ms_by_intent.remove(intent_id)
                         {
                             Self::push_latency_sample(
                                 &mut self.network_fill_latencies_ms,
                                 now_ms.saturating_sub(submit_ms),
                             );
+                        } else if let Some(signal_ms) = source_tag
+                            .as_deref()
+                            .and_then(|tag| self.strategy_last_event_by_tag.get(tag))
+                            .map(|e| e.timestamp_ms)
+                        {
+                            // Fallback for immediate-fill paths where Submitted is not emitted.
+                            Self::push_latency_sample(
+                                &mut self.network_fill_latencies_ms,
+                                now_ms.saturating_sub(signal_ms),
+                            );
                         }
                         self.network_last_fill_ms = Some(now_ms);
-                        if let Some(source_tag) =
-                            parse_source_tag_from_client_order_id(client_order_id)
-                        {
+                        if let Some(source_tag) = source_tag {
                             self.strategy_last_event_by_tag.insert(
-                                source_tag.to_ascii_lowercase(),
+                                source_tag,
                                 StrategyLastEvent {
                                     side: *side,
                                     price: Some(*avg_price),
@@ -817,7 +827,6 @@ impl AppState {
                         self.history_win_count = snapshot.stats.win_count;
                         self.history_lose_count = snapshot.stats.lose_count;
                         self.history_realized_pnl = snapshot.stats.realized_pnl;
-                        self.strategy_stats = snapshot.strategy_stats;
                         // Keep position panel aligned with exchange history state
                         // so Qty/Entry/UnrPL reflect actual holdings, not only session fills.
                         if snapshot.open_qty > f64::EPSILON {
@@ -850,6 +859,10 @@ impl AppState {
                     snapshot.fetch_latency_ms,
                 );
                 self.refresh_history_rows();
+            }
+            AppEvent::StrategyStatsUpdate { strategy_stats } => {
+                rebuild_projection = true;
+                self.strategy_stats = strategy_stats;
             }
             AppEvent::RiskRateSnapshot {
                 global,
@@ -1146,6 +1159,8 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             tab_span(GridTab::Risk, "3", "Risk"),
             Span::raw(" "),
             tab_span(GridTab::Network, "4", "Network"),
+            Span::raw(" "),
+            tab_span(GridTab::SystemLog, "5", "SystemLog"),
         ])),
         tab_area,
     );
@@ -1351,7 +1366,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4] tab  [G/Esc] close"), chunks[3]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[3]);
         return;
     }
 
@@ -1473,7 +1488,43 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[1],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4] tab  [G/Esc] close"), chunks[2]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[2]);
+        return;
+    }
+
+    if view.selected_grid_tab == GridTab::SystemLog {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6), Constraint::Length(1)])
+            .split(body_area);
+        let max_rows = chunks[0].height.saturating_sub(2) as usize;
+        let mut log_rows: Vec<Row> = state
+            .log_messages
+            .iter()
+            .rev()
+            .take(max_rows.max(1))
+            .rev()
+            .map(|line| Row::new(vec![Cell::from(line.clone())]))
+            .collect();
+        if log_rows.is_empty() {
+            log_rows.push(
+                Row::new(vec![Cell::from("(no system logs yet)")])
+                    .style(Style::default().fg(Color::DarkGray)),
+            );
+        }
+        frame.render_widget(
+            Table::new(log_rows, [Constraint::Min(1)])
+                .header(Row::new(vec![Cell::from("Message")]).style(Style::default().fg(Color::DarkGray)))
+                .column_spacing(1)
+                .block(
+                    Block::default()
+                        .title(" System Log ")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray)),
+                ),
+            chunks[0],
+        );
+        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[1]);
         return;
     }
 

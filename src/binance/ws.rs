@@ -186,9 +186,6 @@ impl BinanceWsClient {
         let _ = status_tx
             .send(AppEvent::WsStatus(WsConnectionStatus::Connected))
             .await;
-        let _ = status_tx
-            .send(AppEvent::LogMessage("WebSocket connected".to_string()))
-            .await;
 
         loop {
             tokio::select! {
@@ -246,7 +243,8 @@ impl BinanceWsClient {
                 }
                 _ = symbol_rx.changed() => {
                     let _ = write.send(tungstenite::Message::Close(None)).await;
-                    return Err(anyhow::anyhow!("Symbol changed, reconnecting WebSocket"));
+                    // In multi-worker mode, symbol channel closure means this worker is being retired.
+                    return Ok(());
                 }
             }
         }
@@ -279,6 +277,7 @@ impl BinanceWsClient {
                 };
                 if tick_tx.try_send(tick).is_err() {
                     tracing::warn!("Tick channel full, dropping tick");
+                    let _ = status_tx.try_send(AppEvent::TickDropped);
                 }
             }
             Err(e) => {

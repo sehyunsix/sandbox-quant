@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::model::candle::Candle;
 use crate::model::signal::Signal;
 use crate::model::tick::Tick;
-use crate::order_manager::{OrderHistorySnapshot, OrderUpdate};
+use crate::order_manager::{OrderHistorySnapshot, OrderHistoryStats, OrderUpdate};
 use crate::risk_module::RateBudgetSnapshot;
 
 #[derive(Debug, Clone)]
@@ -35,6 +35,9 @@ pub enum AppEvent {
     },
     BalanceUpdate(HashMap<String, f64>),
     OrderHistoryUpdate(OrderHistorySnapshot),
+    StrategyStatsUpdate {
+        strategy_stats: HashMap<String, OrderHistoryStats>,
+    },
     RiskRateSnapshot {
         global: RateBudgetSnapshot,
         orders: RateBudgetSnapshot,

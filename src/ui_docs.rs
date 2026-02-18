@@ -315,6 +315,11 @@ fn apply_key_action(state: &mut AppState, key: &str) -> Result<()> {
                 state.grid_tab = GridTab::Network;
             }
         }
+        "5" => {
+            if state.grid_open {
+                state.grid_tab = GridTab::SystemLog;
+            }
+        }
         "tab" => {
             if state.grid_open && state.grid_tab == GridTab::Strategies {
                 state.grid_select_on_panel = !state.grid_select_on_panel;
