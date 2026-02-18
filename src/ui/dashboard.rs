@@ -564,41 +564,52 @@ impl Widget for KeybindBar {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let line = Line::from(vec![
             Span::styled(" [Q]", Style::default().fg(Color::Yellow)),
-            Span::styled("uit ", Style::default().fg(Color::DarkGray)),
+            Span::styled("quit ", Style::default().fg(Color::DarkGray)),
             Span::styled("[P]", Style::default().fg(Color::Yellow)),
-            Span::styled("ause ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[R]", Style::default().fg(Color::Yellow)),
-            Span::styled("esume ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[O]", Style::default().fg(Color::Yellow)),
-            Span::styled("n/off(grid) ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/[R] ", Style::default().fg(Color::DarkGray)),
+            Span::styled("pause/resume ", Style::default().fg(Color::DarkGray)),
             Span::styled("[B]", Style::default().fg(Color::Green)),
-            Span::styled("uy ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[S]", Style::default().fg(Color::Red)),
-            Span::styled("ell ", Style::default().fg(Color::DarkGray)),
-            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[1]", Style::default().fg(Color::Cyan)),
-            Span::styled("min ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[0]", Style::default().fg(Color::Cyan)),
-            Span::styled("sec ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[H]", Style::default().fg(Color::Cyan)),
-            Span::styled("our ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[D]", Style::default().fg(Color::Cyan)),
-            Span::styled("ay ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[W]", Style::default().fg(Color::Cyan)),
-            Span::styled("eek ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[M]", Style::default().fg(Color::Cyan)),
-            Span::styled("onth ", Style::default().fg(Color::DarkGray)),
-            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[T]", Style::default().fg(Color::Magenta)),
-            Span::styled("icker ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[Y]", Style::default().fg(Color::Magenta)),
-            Span::styled("strategy ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[A]", Style::default().fg(Color::Magenta)),
-            Span::styled("ccount ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[I]", Style::default().fg(Color::Magenta)),
-            Span::styled("history ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/[S] ", Style::default().fg(Color::DarkGray)),
+            Span::styled("buy/sell ", Style::default().fg(Color::DarkGray)),
             Span::styled("[G]", Style::default().fg(Color::Magenta)),
-            Span::styled("rid ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" grid ", Style::default().fg(Color::DarkGray)),
+            Span::styled("| ", Style::default().fg(Color::DarkGray)),
+            Span::styled("TF:", Style::default().fg(Color::Cyan)),
+            Span::styled(" 0/1/H/D/W/M ", Style::default().fg(Color::DarkGray)),
+            Span::styled("| ", Style::default().fg(Color::DarkGray)),
+            Span::styled("More:", Style::default().fg(Color::Magenta)),
+            Span::styled(" T/Y/A/I ", Style::default().fg(Color::DarkGray)),
+        ]);
+
+        buf.set_line(area.x, area.y, &line, area.width);
+    }
+}
+
+pub struct GridKeybindBar;
+
+impl Widget for GridKeybindBar {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let line = Line::from(vec![
+            Span::styled(" [Q]", Style::default().fg(Color::Yellow)),
+            Span::styled("quit ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Tab]", Style::default().fg(Color::Yellow)),
+            Span::styled(" panel ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[J/K]", Style::default().fg(Color::Yellow)),
+            Span::styled(" select ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[H/L]", Style::default().fg(Color::Yellow)),
+            Span::styled(" symbol ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[O]", Style::default().fg(Color::Yellow)),
+            Span::styled(" toggle ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[N]", Style::default().fg(Color::Yellow)),
+            Span::styled(" new ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[C]", Style::default().fg(Color::Yellow)),
+            Span::styled(" cfg ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[X]", Style::default().fg(Color::Yellow)),
+            Span::styled(" del ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Enter]", Style::default().fg(Color::Yellow)),
+            Span::styled(" run ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
+            Span::styled(" close ", Style::default().fg(Color::DarkGray)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);
