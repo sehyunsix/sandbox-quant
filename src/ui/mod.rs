@@ -70,6 +70,9 @@ pub struct AppState {
     pub strategy_selector_index: usize,
     pub strategy_items: Vec<String>,
     pub strategy_item_symbols: Vec<String>,
+    pub strategy_item_active: Vec<bool>,
+    pub strategy_item_created_at_ms: Vec<i64>,
+    pub strategy_item_total_running_ms: Vec<u64>,
     pub account_popup_open: bool,
     pub history_popup_open: bool,
     pub focus_popup_open: bool,
@@ -82,6 +85,7 @@ pub struct AppState {
     pub strategy_editor_cooldown: u64,
     pub v2_grid_symbol_index: usize,
     pub v2_grid_strategy_index: usize,
+    pub v2_grid_select_on_panel: bool,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
     pub last_applied_fee: String,
@@ -153,6 +157,9 @@ impl AppState {
                 symbol.to_ascii_uppercase(),
                 symbol.to_ascii_uppercase(),
             ],
+            strategy_item_active: vec![false, false, false],
+            strategy_item_created_at_ms: vec![0, 0, 0],
+            strategy_item_total_running_ms: vec![0, 0, 0],
             account_popup_open: false,
             history_popup_open: false,
             focus_popup_open: false,
@@ -165,6 +172,7 @@ impl AppState {
             strategy_editor_cooldown: 1,
             v2_grid_symbol_index: 0,
             v2_grid_strategy_index: 0,
+            v2_grid_select_on_panel: true,
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
             last_applied_fee: "---".to_string(),
@@ -843,104 +851,60 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
+    let heat_height: u16 = 2;
+    let rejection_min_height: u16 = 1;
+    let strategy_min_height: u16 = 16;
+    let asset_min_height: u16 = 3;
+    let desired_asset_height = (state.v2_state.assets.len() as u16).saturating_add(1);
+    let max_asset_height = inner
+        .height
+        .saturating_sub(strategy_min_height + heat_height + rejection_min_height);
+    let asset_height = desired_asset_height
+        .max(asset_min_height)
+        .min(max_asset_height.max(asset_min_height));
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
-            Constraint::Min(10),
-            Constraint::Length(3),
-            Constraint::Min(3),
+            Constraint::Length(asset_height),
+            Constraint::Min(strategy_min_height),
+            Constraint::Length(heat_height),
+            Constraint::Min(rejection_min_height),
         ])
         .split(inner);
 
-    let mut asset_lines = vec![Line::from(Span::styled(
-        "Asset Table",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-    ))];
-    for a in &state.v2_state.assets {
-        asset_lines.push(Line::from(format!(
-            "{}  px={} qty={:.5}  rlz={:+.4}  unrlz={:+.4}",
-            a.symbol,
-            a.last_price
-                .map(|v| format!("{:.2}", v))
-                .unwrap_or_else(|| "---".to_string()),
-            a.position_qty,
-            a.realized_pnl_usdt,
-            a.unrealized_pnl_usdt
-        )));
-    }
-    frame.render_widget(Paragraph::new(asset_lines), chunks[0]);
-
-    let selected_symbol = state
-        .symbol_items
-        .get(state.v2_grid_symbol_index)
-        .map(String::as_str)
-        .unwrap_or(state.symbol.as_str());
-    let strategy_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(2)])
-        .split(chunks[1]);
-    let header = Row::new(vec![
-        Cell::from(" "),
+    let asset_header = Row::new(vec![
         Cell::from("Symbol"),
-        Cell::from("Strategy"),
-        Cell::from("W"),
-        Cell::from("L"),
-        Cell::from("T"),
-        Cell::from("PnL"),
+        Cell::from("Qty"),
+        Cell::from("Price"),
+        Cell::from("RlzPnL"),
+        Cell::from("UnrPnL"),
     ])
     .style(Style::default().fg(Color::DarkGray));
-    let mut rows: Vec<Row> = state
-        .strategy_items
+    let mut asset_rows: Vec<Row> = state
+        .v2_state
+        .assets
         .iter()
-        .enumerate()
-        .map(|(idx, item)| {
-            let row_symbol = state
-                .strategy_item_symbols
-                .get(idx)
-                .map(String::as_str)
-                .unwrap_or(selected_symbol);
-            let stats = strategy_stats_for_item(&state.strategy_stats, item);
-            let (w, l, t, pnl) = if let Some(s) = stats {
-                (
-                    s.win_count.to_string(),
-                    s.lose_count.to_string(),
-                    s.trade_count.to_string(),
-                    format!("{:+.4}", s.realized_pnl),
-                )
-            } else {
-                ("0".to_string(), "0".to_string(), "0".to_string(), "+0.0000".to_string())
-            };
-            let marker = if idx == state.v2_grid_strategy_index {
-                "▶"
-            } else {
-                " "
-            };
-            let mut row = Row::new(vec![
-                Cell::from(marker),
-                Cell::from(row_symbol.to_string()),
-                Cell::from(item.clone()),
-                Cell::from(w),
-                Cell::from(l),
-                Cell::from(t),
-                Cell::from(pnl),
-            ]);
-            if idx == state.v2_grid_strategy_index {
-                row = row.style(
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                );
-            }
-            row
+        .map(|a| {
+            let price = a
+                .last_price
+                .map(|v| format!("{:.2}", v))
+                .unwrap_or_else(|| "---".to_string());
+            let rlz = format!("{:+.4}", a.realized_pnl_usdt);
+            let unrlz = format!("{:+.4}", a.unrealized_pnl_usdt);
+            Row::new(vec![
+                Cell::from(a.symbol.clone()),
+                Cell::from(format!("{:.5}", a.position_qty)),
+                Cell::from(price),
+                Cell::from(rlz),
+                Cell::from(unrlz),
+            ])
         })
         .collect();
-    if rows.is_empty() {
-        rows.push(
+    if asset_rows.is_empty() {
+        asset_rows.push(
             Row::new(vec![
-                Cell::from(" "),
-                Cell::from("-"),
-                Cell::from("(no strategies configured)"),
+                Cell::from("(no assets)"),
                 Cell::from("-"),
                 Cell::from("-"),
                 Cell::from("-"),
@@ -949,39 +913,307 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
             .style(Style::default().fg(Color::DarkGray)),
         );
     }
-    let table = Table::new(
-        rows,
+    let asset_table = Table::new(
+        asset_rows,
         [
-            Constraint::Length(2),
             Constraint::Length(16),
-            Constraint::Min(28),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(4),
-            Constraint::Length(11),
+            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(10),
+            Constraint::Length(10),
         ],
     )
-    .header(header)
-    .column_spacing(1);
-    frame.render_widget(table, strategy_chunks[0]);
+    .header(asset_header)
+    .column_spacing(1)
+    .block(
+        Block::default()
+            .title(format!(" Asset Table | Total {} ", state.v2_state.assets.len()))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(asset_table, chunks[0]);
+
+    let selected_symbol = state
+        .symbol_items
+        .get(state.v2_grid_symbol_index)
+        .map(String::as_str)
+        .unwrap_or(state.symbol.as_str());
+    let strategy_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(1)])
+        .split(chunks[1]);
+
+    let mut on_indices: Vec<usize> = Vec::new();
+    let mut off_indices: Vec<usize> = Vec::new();
+    for idx in 0..state.strategy_items.len() {
+        if state.strategy_item_active.get(idx).copied().unwrap_or(false) {
+            on_indices.push(idx);
+        } else {
+            off_indices.push(idx);
+        }
+    }
+    let on_weight = on_indices.len().max(1) as u32;
+    let off_weight = off_indices.len().max(1) as u32;
+    let strategy_area = strategy_chunks[1];
+    let min_panel_height: u16 = 6;
+    let total_height = strategy_area.height;
+    let (on_height, off_height) = if total_height >= min_panel_height.saturating_mul(2) {
+        let total_weight = on_weight + off_weight;
+        let mut on_h =
+            ((total_height as u32 * on_weight) / total_weight).max(min_panel_height as u32) as u16;
+        let max_on_h = total_height.saturating_sub(min_panel_height);
+        if on_h > max_on_h {
+            on_h = max_on_h;
+        }
+        let off_h = total_height.saturating_sub(on_h);
+        (on_h, off_h)
+    } else {
+        let on_h = (total_height / 2).max(1);
+        let off_h = total_height.saturating_sub(on_h).max(1);
+        (on_h, off_h)
+    };
+    let on_area = Rect {
+        x: strategy_area.x,
+        y: strategy_area.y,
+        width: strategy_area.width,
+        height: on_height,
+    };
+    let off_area = Rect {
+        x: strategy_area.x,
+        y: strategy_area.y.saturating_add(on_height),
+        width: strategy_area.width,
+        height: off_height,
+    };
+
+    let pnl_sum_for_indices = |indices: &[usize], state: &AppState| -> f64 {
+        indices
+            .iter()
+            .map(|idx| {
+                state
+                    .strategy_items
+                    .get(*idx)
+                    .and_then(|item| strategy_stats_for_item(&state.strategy_stats, item))
+                    .map(|s| s.realized_pnl)
+                    .unwrap_or(0.0)
+            })
+            .sum()
+    };
+    let on_pnl_sum = pnl_sum_for_indices(&on_indices, state);
+    let off_pnl_sum = pnl_sum_for_indices(&off_indices, state);
+    let total_pnl_sum = on_pnl_sum + off_pnl_sum;
+
+    let total_row = Row::new(vec![
+        Cell::from("ON Total"),
+        Cell::from(on_indices.len().to_string()),
+        Cell::from(format!("{:+.4}", on_pnl_sum)),
+        Cell::from("OFF Total"),
+        Cell::from(off_indices.len().to_string()),
+        Cell::from(format!("{:+.4}", off_pnl_sum)),
+        Cell::from("All Total"),
+        Cell::from(format!("{:+.4}", total_pnl_sum)),
+    ]);
+    let total_table = Table::new(
+        vec![total_row],
+        [
+            Constraint::Length(10),
+            Constraint::Length(5),
+            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(5),
+            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(12),
+        ],
+    )
+    .column_spacing(1)
+    .block(
+        Block::default()
+            .title(" Total ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(total_table, strategy_chunks[0]);
+
+    let render_strategy_window =
+        |frame: &mut Frame,
+         area: Rect,
+         title: &str,
+         indices: &[usize],
+         state: &AppState,
+         pnl_sum: f64,
+         selected_panel: bool| {
+            let inner_height = area.height.saturating_sub(2);
+            let row_capacity = inner_height.saturating_sub(1) as usize;
+            let selected_pos = indices
+                .iter()
+                .position(|idx| *idx == state.v2_grid_strategy_index);
+            let window_start = if row_capacity == 0 {
+                0
+            } else if let Some(pos) = selected_pos {
+                pos.saturating_sub(row_capacity.saturating_sub(1))
+            } else {
+                0
+            };
+            let window_end = if row_capacity == 0 {
+                0
+            } else {
+                (window_start + row_capacity).min(indices.len())
+            };
+            let visible_indices = if indices.is_empty() || row_capacity == 0 {
+                &indices[0..0]
+            } else {
+                &indices[window_start..window_end]
+            };
+            let header = Row::new(vec![
+                Cell::from(" "),
+                Cell::from("Symbol"),
+                Cell::from("Strategy"),
+                Cell::from("Run"),
+                Cell::from("W"),
+                Cell::from("L"),
+                Cell::from("T"),
+                Cell::from("PnL"),
+            ])
+            .style(Style::default().fg(Color::DarkGray));
+            let mut rows: Vec<Row> = visible_indices
+                .iter()
+                .map(|idx| {
+                    let row_symbol = state
+                        .strategy_item_symbols
+                        .get(*idx)
+                        .map(String::as_str)
+                        .unwrap_or("-");
+                    let item = state
+                        .strategy_items
+                        .get(*idx)
+                        .cloned()
+                        .unwrap_or_else(|| "-".to_string());
+                    let running = state
+                        .strategy_item_total_running_ms
+                        .get(*idx)
+                        .copied()
+                        .map(format_running_time)
+                        .unwrap_or_else(|| "-".to_string());
+                    let stats = strategy_stats_for_item(&state.strategy_stats, &item);
+                    let (w, l, t, pnl) = if let Some(s) = stats {
+                        (
+                            s.win_count.to_string(),
+                            s.lose_count.to_string(),
+                            s.trade_count.to_string(),
+                            format!("{:+.4}", s.realized_pnl),
+                        )
+                    } else {
+                        ("0".to_string(), "0".to_string(), "0".to_string(), "+0.0000".to_string())
+                    };
+                    let marker = if *idx == state.v2_grid_strategy_index {
+                        "▶"
+                    } else {
+                        " "
+                    };
+                    let mut row = Row::new(vec![
+                        Cell::from(marker),
+                        Cell::from(row_symbol.to_string()),
+                        Cell::from(item),
+                        Cell::from(running),
+                        Cell::from(w),
+                        Cell::from(l),
+                        Cell::from(t),
+                        Cell::from(pnl),
+                    ]);
+                    if *idx == state.v2_grid_strategy_index {
+                        row = row.style(
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        );
+                    }
+                    row
+                })
+                .collect();
+
+            if rows.is_empty() {
+                rows.push(
+                    Row::new(vec![
+                        Cell::from(" "),
+                        Cell::from("-"),
+                        Cell::from("(empty)"),
+                        Cell::from("-"),
+                        Cell::from("-"),
+                        Cell::from("-"),
+                        Cell::from("-"),
+                        Cell::from("-"),
+                    ])
+                    .style(Style::default().fg(Color::DarkGray)),
+                );
+            }
+
+            let table = Table::new(
+                rows,
+                [
+                    Constraint::Length(2),
+                    Constraint::Length(12),
+                    Constraint::Min(16),
+                    Constraint::Length(9),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Length(4),
+                    Constraint::Length(11),
+                ],
+            )
+            .header(header)
+            .column_spacing(1)
+            .block(
+                Block::default()
+                    .title(format!(
+                        "{} | Total {:+.4} | {}/{}",
+                        title,
+                        pnl_sum,
+                        visible_indices.len(),
+                        indices.len()
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(if selected_panel {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }),
+            );
+            frame.render_widget(table, area);
+        };
+
+    render_strategy_window(
+        frame,
+        on_area,
+        " ON Strategies ",
+        &on_indices,
+        state,
+        on_pnl_sum,
+        state.v2_grid_select_on_panel,
+    );
+    render_strategy_window(
+        frame,
+        off_area,
+        " OFF Strategies ",
+        &off_indices,
+        state,
+        off_pnl_sum,
+        !state.v2_grid_select_on_panel,
+    );
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("Symbol: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    selected_symbol,
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("  ([H/L] or [←/→])", Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::from(Span::styled(
-                "Use [N] new, [C] config, [J/K] strategy, [H/L] symbol, [Enter/F] run, [G/Esc] close.",
+        Paragraph::new(Line::from(vec![
+            Span::styled("Symbol: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                selected_symbol,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  [Tab]panel [N]new [C]cfg [O]on/off [X]del [J/K]strategy [H/L]symbol [Enter/F]run [G/Esc]close",
                 Style::default().fg(Color::DarkGray),
-            )),
-        ]),
-        strategy_chunks[1],
+            ),
+        ])),
+        strategy_chunks[2],
     );
 
     let heat = format!(
@@ -1030,6 +1262,18 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         )));
     }
     frame.render_widget(Paragraph::new(rejection_lines), chunks[3]);
+}
+
+fn format_running_time(total_running_ms: u64) -> String {
+    let total_sec = total_running_ms / 1000;
+    let days = total_sec / 86_400;
+    let hours = (total_sec % 86_400) / 3_600;
+    let minutes = (total_sec % 3_600) / 60;
+    if days > 0 {
+        format!("{}d {:02}h", days, hours)
+    } else {
+        format!("{:02}h {:02}m", hours, minutes)
+    }
 }
 
 fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {

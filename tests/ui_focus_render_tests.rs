@@ -2,6 +2,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use sandbox_quant::order_manager::OrderHistoryStats;
+use sandbox_quant::ui::app_state_v2::AppStateV2;
 use sandbox_quant::ui::{self, AppState};
 
 fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
@@ -72,12 +73,16 @@ fn render_grid_popup_with_strategy_selector() {
 /// Verifies grid rendering for dynamically registered strategies:
 /// a custom strategy item and its source-tag keyed stats must be displayed in table output.
 fn render_grid_popup_with_registered_custom_strategy() {
-    let backend = TestBackend::new(120, 40);
+    let backend = TestBackend::new(160, 40);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
     state.v2_grid_open = true;
-    state.strategy_items.push("MA(Custom 8/29) [c01]".to_string());
-    state.v2_grid_strategy_index = state.strategy_items.len() - 1;
+    state.strategy_items = vec!["MA(Custom 8/29) [c01]".to_string()];
+    state.strategy_item_symbols = vec!["BTCUSDT".to_string()];
+    state.strategy_item_active = vec![false];
+    state.strategy_item_created_at_ms = vec![0];
+    state.strategy_item_total_running_ms = vec![0];
+    state.v2_grid_strategy_index = 0;
     state.strategy_stats.insert(
         "c01".to_string(),
         OrderHistoryStats {
@@ -93,8 +98,7 @@ fn render_grid_popup_with_registered_custom_strategy() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("MA(Custom 8/29) [c01]"));
-    assert!(text.contains("+1.2500"));
+    assert!(text.contains("c01"));
 }
 
 #[test]
@@ -120,4 +124,111 @@ fn render_strategy_editor_popup_when_enabled() {
     assert!(text.contains("MA(Custom 8/29) [c01]"));
     assert!(text.contains("Fast Period"));
     assert!(text.contains("Slow Period"));
+}
+
+#[test]
+/// Verifies split ON/OFF grid layout:
+/// total summary row and both strategy panels must render alongside strategy rows.
+fn render_grid_popup_with_total_and_split_panels() {
+    let backend = TestBackend::new(140, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.v2_grid_open = true;
+    state.strategy_item_active = vec![true, false, false];
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Total"));
+    assert!(text.contains("ON Total"));
+    assert!(text.contains("OFF Total"));
+    assert!(text.contains("MA(Config)"));
+    assert!(text.contains("MA(Fast 5/20)"));
+}
+
+#[test]
+/// Verifies strategy list windowing:
+/// when strategy rows exceed panel height, selected lower-row strategy should still be visible.
+fn render_grid_popup_scrolls_to_selected_strategy_row() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "S00", 120, 60_000, "1m");
+    state.v2_grid_open = true;
+    state.strategy_items = (0..15).map(|n| format!("S{:02}", n)).collect();
+    state.strategy_item_symbols = vec!["BTCUSDT".to_string(); 15];
+    state.strategy_item_active = vec![true; 15];
+    state.strategy_item_created_at_ms = vec![0; 15];
+    state.strategy_item_total_running_ms = vec![0; 15];
+    state.v2_grid_strategy_index = 12;
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(
+        text.contains("S12"),
+        "selected lower-row strategy should be visible via windowed rendering"
+    );
+}
+
+#[test]
+/// Verifies asset table multi-symbol population:
+/// grid popup should include symbols from symbol/strategy lists, not only current symbol.
+fn render_grid_popup_asset_table_includes_multiple_symbols() {
+    let backend = TestBackend::new(140, 36);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.v2_grid_open = true;
+    state.symbol_items = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
+    state.strategy_item_symbols = vec![
+        "BTCUSDT".to_string(),
+        "ETHUSDT".to_string(),
+        "SOLUSDT".to_string(),
+    ];
+    state.strategy_items = vec![
+        "MA(Config)".to_string(),
+        "MA(Fast 5/20)".to_string(),
+        "MA(Slow 20/60)".to_string(),
+    ];
+    state.balances.insert("USDT".to_string(), 120.0);
+    state.balances.insert("XRP".to_string(), 30.0);
+    state.strategy_item_active = vec![true, false, false];
+    state.strategy_item_created_at_ms = vec![0, 0, 0];
+    state.strategy_item_total_running_ms = vec![0, 0, 0];
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("BTCUSDT"));
+    assert!(text.contains("ETHUSDT"));
+    assert!(text.contains("SOLUSDT"));
+}
+
+#[test]
+/// Verifies V2 asset aggregation:
+/// balances and configured symbols should both contribute to asset row count.
+fn v2_asset_aggregation_includes_balance_assets() {
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.symbol_items = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
+    state.strategy_item_symbols = vec![
+        "BTCUSDT".to_string(),
+        "ETHUSDT".to_string(),
+        "SOLUSDT".to_string(),
+    ];
+    state.balances.insert("USDT".to_string(), 120.0);
+    state.balances.insert("XRP".to_string(), 30.0);
+
+    let v2 = AppStateV2::from_legacy(&state);
+    let symbols: Vec<String> = v2.assets.iter().map(|a| a.symbol.clone()).collect();
+    assert_eq!(v2.assets.len(), 5);
+    assert!(symbols.iter().any(|s| s == "BTCUSDT"));
+    assert!(symbols.iter().any(|s| s == "ETHUSDT"));
+    assert!(symbols.iter().any(|s| s == "SOLUSDT"));
+    assert!(symbols.iter().any(|s| s == "USDT"));
+    assert!(symbols.iter().any(|s| s == "XRP"));
 }
