@@ -847,6 +847,9 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Enter => {
+                            let edited_profile = strategy_catalog
+                                .get(app_state.strategy_editor_index)
+                                .cloned();
                             if let Some(selected_symbol) = app_state
                                 .symbol_items
                                 .get(app_state.strategy_editor_symbol_index)
@@ -862,7 +865,7 @@ async fn main() -> Result<()> {
                                     &app_tx,
                                 );
                             }
-                            let maybe_updated = strategy_catalog.update_profile(
+                            let maybe_updated = strategy_catalog.fork_profile(
                                 app_state.strategy_editor_index,
                                 app_state.strategy_editor_fast,
                                 app_state.strategy_editor_slow,
@@ -873,7 +876,11 @@ async fn main() -> Result<()> {
                                 app_state.v2_grid_strategy_index = strategy_catalog
                                     .index_of_label(&updated.label)
                                     .unwrap_or(0);
-                                if updated.source_tag == current_strategy_profile.source_tag {
+                                if edited_profile
+                                    .as_ref()
+                                    .map(|p| p.source_tag.as_str())
+                                    == Some(current_strategy_profile.source_tag.as_str())
+                                {
                                     current_strategy_profile = updated.clone();
                                     app_state.strategy_label = updated.label.clone();
                                     app_state.v2_state.focus.strategy_id =
@@ -882,7 +889,17 @@ async fn main() -> Result<()> {
                                     app_state.slow_sma = None;
                                     let _ = strategy_profile_tx.send(updated.clone());
                                 }
-                                app_state.push_log(format!("Strategy config saved: {}", updated.label));
+                                if let Some(before) = edited_profile.as_ref() {
+                                    app_state.push_log(format!(
+                                        "Strategy forked: {} -> {}",
+                                        before.label, updated.label
+                                    ));
+                                } else {
+                                    app_state.push_log(format!(
+                                        "Strategy forked: {}",
+                                        updated.label
+                                    ));
+                                }
                                 persist_strategy_session_state(
                                     &mut app_state,
                                     &strategy_catalog,

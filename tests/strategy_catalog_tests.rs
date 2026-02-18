@@ -31,39 +31,42 @@ fn strategy_catalog_registers_custom_profile() {
 }
 
 #[test]
-/// Verifies builtin strategy config updates:
-/// editing builtins should be allowed and reflected in label/period values.
-fn strategy_catalog_updates_builtin_profile_config() {
+/// Verifies builtin strategy fork-on-edit behavior:
+/// editing builtins should append a new custom profile and keep builtin unchanged.
+fn strategy_catalog_forks_builtin_profile_config_on_edit() {
     let mut catalog = StrategyCatalog::new(7, 25, 2);
     let fast_idx = catalog
         .index_of_label("MA(Fast 5/20)")
         .expect("builtin fast should exist");
-    let updated = catalog
-        .update_profile(fast_idx, 9, 34, 3)
-        .expect("builtin fast should update");
+    let forked = catalog
+        .fork_profile(fast_idx, 9, 34, 3)
+        .expect("builtin fast should fork");
 
-    assert_eq!(updated.fast_period, 9);
-    assert_eq!(updated.slow_period, 34);
-    assert_eq!(updated.min_ticks_between_signals, 3);
-    assert_eq!(updated.label, "MA(Fast 9/34)");
+    assert_eq!(forked.fast_period, 9);
+    assert_eq!(forked.slow_period, 34);
+    assert_eq!(forked.min_ticks_between_signals, 3);
+    assert!(forked.label.starts_with("MA(Custom 9/34)"));
+    assert_eq!(forked.source_tag, "c01");
+    assert_eq!(catalog.labels()[1], "MA(Fast 5/20)");
 }
 
 #[test]
-/// Verifies custom strategy config updates:
-/// editing a registered custom strategy should update periods/cooldown and relabel it.
-fn strategy_catalog_updates_custom_profile_config() {
+/// Verifies custom strategy fork-on-edit behavior:
+/// editing a registered custom strategy should create a newer custom profile.
+fn strategy_catalog_forks_custom_profile_config_on_edit() {
     let mut catalog = StrategyCatalog::new(7, 25, 2);
     let custom = catalog.add_custom_from_index(0);
     let idx = catalog
         .index_of_label(&custom.label)
         .expect("custom strategy should exist");
-    let updated = catalog
-        .update_profile(idx, 11, 37, 5)
-        .expect("custom strategy must update");
+    let forked = catalog
+        .fork_profile(idx, 11, 37, 5)
+        .expect("custom strategy must fork");
 
-    assert_eq!(updated.fast_period, 11);
-    assert_eq!(updated.slow_period, 37);
-    assert_eq!(updated.min_ticks_between_signals, 5);
-    assert!(updated.label.contains("11/37"));
-    assert!(updated.label.contains("[c01]"));
+    assert_eq!(forked.fast_period, 11);
+    assert_eq!(forked.slow_period, 37);
+    assert_eq!(forked.min_ticks_between_signals, 5);
+    assert!(forked.label.contains("11/37"));
+    assert!(forked.label.contains("[c02]"));
+    assert!(catalog.labels().contains(&custom.label));
 }

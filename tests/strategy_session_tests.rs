@@ -23,21 +23,21 @@ fn strategy_session_round_trip_persists_catalog_and_selected_profile() {
     let custom_index = catalog
         .index_of_label(&custom.label)
         .expect("custom strategy index should exist");
-    let updated = catalog
-        .update_profile(custom_index, 8, 29, 3)
-        .expect("custom strategy should be updatable");
+    let forked = catalog
+        .fork_profile(custom_index, 8, 29, 3)
+        .expect("custom strategy should be forkable");
 
-    persist_strategy_session_to_path(&path, &catalog, &updated.source_tag)
+    persist_strategy_session_to_path(&path, &catalog, &forked.source_tag)
         .expect("session persist should succeed");
 
     let loaded = load_strategy_session_from_path(&path, 9, 21, 2)
         .expect("session load should succeed")
         .expect("persisted session should exist");
 
-    assert_eq!(loaded.selected_source_tag.as_deref(), Some("c01"));
+    assert_eq!(loaded.selected_source_tag.as_deref(), Some("c02"));
     assert!(loaded
         .catalog
-        .get_by_source_tag("c01")
+        .get_by_source_tag("c02")
         .map(|profile| profile.label.starts_with("MA(Custom 8/29)"))
         .unwrap_or(false));
 }
