@@ -687,6 +687,11 @@ async fn main() -> Result<()> {
         // Handle input (non-blocking with timeout)
         if crossterm::event::poll(Duration::from_millis(config.ui.refresh_rate_ms))? {
             if let Event::Key(key) = crossterm::event::read()? {
+                if matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
+                    tracing::info!("User quit");
+                    let _ = shutdown_tx.send(true);
+                    break;
+                }
                 if app_state.symbol_selector_open {
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('T') => {
