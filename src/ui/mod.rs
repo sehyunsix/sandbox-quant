@@ -658,20 +658,29 @@ impl AppState {
                         avg_price,
                     } => {
                         let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                        if let Some(submit_ms) =
-                            self.network_pending_submit_ms_by_intent.remove(intent_id)
+                        let source_tag = parse_source_tag_from_client_order_id(client_order_id)
+                            .map(|s| s.to_ascii_lowercase());
+                        if let Some(submit_ms) = self.network_pending_submit_ms_by_intent.remove(intent_id)
                         {
                             Self::push_latency_sample(
                                 &mut self.network_fill_latencies_ms,
                                 now_ms.saturating_sub(submit_ms),
                             );
+                        } else if let Some(signal_ms) = source_tag
+                            .as_deref()
+                            .and_then(|tag| self.strategy_last_event_by_tag.get(tag))
+                            .map(|e| e.timestamp_ms)
+                        {
+                            // Fallback for immediate-fill paths where Submitted is not emitted.
+                            Self::push_latency_sample(
+                                &mut self.network_fill_latencies_ms,
+                                now_ms.saturating_sub(signal_ms),
+                            );
                         }
                         self.network_last_fill_ms = Some(now_ms);
-                        if let Some(source_tag) =
-                            parse_source_tag_from_client_order_id(client_order_id)
-                        {
+                        if let Some(source_tag) = source_tag {
                             self.strategy_last_event_by_tag.insert(
-                                source_tag.to_ascii_lowercase(),
+                                source_tag,
                                 StrategyLastEvent {
                                     side: *side,
                                     price: Some(*avg_price),
