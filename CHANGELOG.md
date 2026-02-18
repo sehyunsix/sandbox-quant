@@ -1,3 +1,7 @@
+## v0.8.1 - 2026-02-18
+
+- docs(readme): add docs.rs link (74c3a05)
+
 ## v0.8.0 - 2026-02-18
 
 - feat(ui): improve portfolio grid paneling and asset aggregation (98a9c08)
