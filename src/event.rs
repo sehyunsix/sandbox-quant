@@ -48,6 +48,7 @@ pub enum AppEvent {
         market_data: RateBudgetSnapshot,
     },
     TickDropped,
+    LogRecord(LogRecord),
     LogMessage(String),
     Error(String),
 }
@@ -57,4 +58,50 @@ pub struct AssetPnlEntry {
     pub position_qty: f64,
     pub realized_pnl_usdt: f64,
     pub unrealized_pnl_usdt: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogDomain {
+    Ws,
+    Strategy,
+    Risk,
+    Order,
+    Portfolio,
+    Ui,
+    System,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogRecord {
+    pub ts_ms: u64,
+    pub level: LogLevel,
+    pub domain: LogDomain,
+    pub event: &'static str,
+    pub symbol: Option<String>,
+    pub strategy_tag: Option<String>,
+    pub trace_id: Option<String>,
+    pub msg: String,
+}
+
+impl LogRecord {
+    pub fn new(level: LogLevel, domain: LogDomain, event: &'static str, msg: impl Into<String>) -> Self {
+        Self {
+            ts_ms: chrono::Utc::now().timestamp_millis() as u64,
+            level,
+            domain,
+            event,
+            symbol: None,
+            strategy_tag: None,
+            trace_id: None,
+            msg: msg.into(),
+        }
+    }
 }

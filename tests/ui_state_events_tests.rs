@@ -1,4 +1,4 @@
-use sandbox_quant::event::{AppEvent, AssetPnlEntry, WsConnectionStatus};
+use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord, WsConnectionStatus};
 use sandbox_quant::model::order::OrderSide;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::order_manager::OrderHistoryStats;
@@ -196,4 +196,23 @@ fn app_state_applies_asset_pnl_update_event() {
         .get("ETHUSDT")
         .expect("ETHUSDT pnl should be present");
     assert!((eth.realized_pnl_usdt - 3.0).abs() < f64::EPSILON);
+}
+
+#[test]
+/// Verifies structured log event compatibility:
+/// LogRecord should be accepted and rendered into legacy system log lines.
+fn app_state_accepts_log_record_event() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    let mut r = LogRecord::new(
+        LogLevel::Warn,
+        LogDomain::Ws,
+        "connect.fail",
+        "attempt=3 timeout",
+    );
+    r.symbol = Some("BTCUSDT".to_string());
+    s.apply(AppEvent::LogRecord(r));
+    let last = s.log_messages.last().expect("expected formatted log message");
+    assert!(last.contains("[WARN]"));
+    assert!(last.contains("ws.connect.fail"));
+    assert!(last.contains("BTCUSDT"));
 }

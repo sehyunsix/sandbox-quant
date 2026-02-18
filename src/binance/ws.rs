@@ -7,7 +7,7 @@ use tungstenite::error::{Error as WsError, ProtocolError, UrlError};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use super::types::BinanceTradeEvent;
-use crate::event::{AppEvent, WsConnectionStatus};
+use crate::event::{AppEvent, LogDomain, LogLevel, LogRecord, WsConnectionStatus};
 use crate::model::tick::Tick;
 
 /// Exponential backoff for reconnection.
@@ -106,10 +106,14 @@ impl BinanceWsClient {
                         .await;
                     tracing::warn!(attempt, error = %e, "WS connection attempt failed");
                     let _ = status_tx
-                        .send(AppEvent::LogMessage(format!(
-                            "WS error (attempt #{}): {}",
-                            attempt, e
-                        )))
+                        .send(AppEvent::LogRecord(
+                            ws_log(
+                                LogLevel::Warn,
+                                "connect.fail",
+                                &instrument,
+                                format!("attempt={} error={}", attempt, e),
+                            ),
+                        ))
                         .await;
 
                     let delay = backoff.next_delay();
@@ -124,7 +128,12 @@ impl BinanceWsClient {
                         _ = tokio::time::sleep(delay) => continue,
                         _ = shutdown.changed() => {
                             let _ = status_tx
-                                .send(AppEvent::LogMessage("Shutdown during reconnect".to_string()))
+                                .send(AppEvent::LogRecord(ws_log(
+                                    LogLevel::Info,
+                                    "shutdown.during_reconnect",
+                                    &instrument,
+                                    "shutdown signal received during reconnect wait".to_string(),
+                                )))
                                 .await;
                             break;
                         }
@@ -146,14 +155,24 @@ impl BinanceWsClient {
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<()> {
         let _ = status_tx
-            .send(AppEvent::LogMessage(format!("Connecting to {}", ws_url)))
+            .send(AppEvent::LogRecord(ws_log(
+                LogLevel::Info,
+                "connect.start",
+                display_symbol,
+                format!("url={}", ws_url),
+            )))
             .await;
 
         let (ws_stream, resp) = tokio_tungstenite::connect_async(ws_url)
             .await
             .map_err(|e| {
                 let detail = format_ws_error(&e);
-                let _ = status_tx.try_send(AppEvent::LogMessage(detail.clone()));
+                let _ = status_tx.try_send(AppEvent::LogRecord(ws_log(
+                    LogLevel::Warn,
+                    "connect.detail",
+                    display_symbol,
+                    detail.clone(),
+                )));
                 anyhow::anyhow!("WebSocket connect failed: {}", detail)
             })?;
 
@@ -176,9 +195,11 @@ impl BinanceWsClient {
             })?;
 
         let _ = status_tx
-            .send(AppEvent::LogMessage(format!(
-                "Subscribed to: {}",
-                streams.join(", ")
+            .send(AppEvent::LogRecord(ws_log(
+                LogLevel::Info,
+                "subscribe.ok",
+                display_symbol,
+                format!("streams={}", streams.join(",")),
             )))
             .await;
 
@@ -207,7 +228,12 @@ impl BinanceWsClient {
                                 None => "Server closed: no close frame".to_string(),
                             };
                             let _ = status_tx
-                                .send(AppEvent::LogMessage(detail.clone()))
+                                .send(AppEvent::LogRecord(ws_log(
+                                    LogLevel::Warn,
+                                    "server.closed",
+                                    display_symbol,
+                                    detail.clone(),
+                                )))
                                 .await;
                             return Err(anyhow::anyhow!("{}", detail));
                         }
@@ -217,7 +243,12 @@ impl BinanceWsClient {
                         Some(Err(e)) => {
                             let detail = format_ws_error(&e);
                             let _ = status_tx
-                                .send(AppEvent::LogMessage(format!("WS read error: {}", detail)))
+                                .send(AppEvent::LogRecord(ws_log(
+                                    LogLevel::Warn,
+                                    "read.error",
+                                    display_symbol,
+                                    detail.clone(),
+                                )))
                                 .await;
                             return Err(anyhow::anyhow!("WebSocket read error: {}", detail));
                         }
@@ -244,6 +275,14 @@ impl BinanceWsClient {
                 _ = symbol_rx.changed() => {
                     let _ = write.send(tungstenite::Message::Close(None)).await;
                     // In multi-worker mode, symbol channel closure means this worker is being retired.
+                    let _ = status_tx
+                        .send(AppEvent::LogRecord(ws_log(
+                            LogLevel::Info,
+                            "worker.retired",
+                            display_symbol,
+                            "symbol channel closed".to_string(),
+                        )))
+                        .await;
                     return Ok(());
                 }
             }
@@ -283,9 +322,11 @@ impl BinanceWsClient {
             Err(e) => {
                 tracing::debug!(error = %e, raw = %text, "Failed to parse WS message");
                 let _ = status_tx
-                    .send(AppEvent::LogMessage(format!(
-                        "WS parse skip: {}",
-                        &text[..text.len().min(80)]
+                    .send(AppEvent::LogRecord(ws_log(
+                        LogLevel::Debug,
+                        "parse.skip",
+                        display_symbol,
+                        format!("payload={}", &text[..text.len().min(80)]),
                     )))
                     .await;
             }
@@ -299,6 +340,12 @@ fn parse_instrument_symbol(instrument: &str) -> (String, bool) {
         return (symbol.to_ascii_uppercase(), true);
     }
     (trimmed.to_ascii_uppercase(), false)
+}
+
+fn ws_log(level: LogLevel, event: &'static str, symbol: &str, msg: String) -> LogRecord {
+    let mut record = LogRecord::new(level, LogDomain::Ws, event, msg);
+    record.symbol = Some(symbol.to_string());
+    record
 }
 
 /// Format a tungstenite WebSocket error into a detailed, human-readable string.

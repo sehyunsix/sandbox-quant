@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, watch};
 use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
-use sandbox_quant::event::{AppEvent, AssetPnlEntry};
+use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
 use sandbox_quant::model::position::Position;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
@@ -110,6 +110,10 @@ fn build_asset_pnl_snapshot(
             )
         })
         .collect()
+}
+
+fn app_log(level: LogLevel, domain: LogDomain, event: &'static str, msg: impl Into<String>) -> AppEvent {
+    AppEvent::LogRecord(LogRecord::new(level, domain, event, msg))
 }
 
 fn enabled_instruments(
@@ -349,13 +353,23 @@ async fn main() -> Result<()> {
         Ok(()) => {
             tracing::info!("Binance demo ping OK");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage("Binance demo ping OK".to_string()))
+                .send(app_log(
+                    LogLevel::Info,
+                    LogDomain::System,
+                    "rest.ping.ok",
+                    "Binance demo ping OK",
+                ))
                 .await;
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to ping Binance demo");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage(format!("[ERR] Ping failed: {}", e)))
+                .send(app_log(
+                    LogLevel::Error,
+                    LogDomain::System,
+                    "rest.ping.fail",
+                    format!("Ping failed: {}", e),
+                ))
                 .await;
         }
     }
@@ -374,20 +388,24 @@ async fn main() -> Result<()> {
         Ok(candles) => {
             tracing::info!(count = candles.len(), "Fetched historical klines");
             let _ = app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "Loaded {} historical klines",
-                    candles.len()
-                )))
+                .send(app_log(
+                    LogLevel::Info,
+                    LogDomain::System,
+                    "kline.preload.ok",
+                    format!("Loaded {} historical klines", candles.len()),
+                ))
                 .await;
             candles
         }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to fetch klines, starting with empty chart");
             let _ = app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "[WARN] Kline fetch failed: {}",
-                    e
-                )))
+                .send(app_log(
+                    LogLevel::Warn,
+                    LogDomain::System,
+                    "kline.preload.fail",
+                    format!("Kline fetch failed: {}", e),
+                ))
                 .await;
             Vec::new()
         }
@@ -418,7 +436,12 @@ async fn main() -> Result<()> {
                         let _ = stop_tx.send(true);
                     }
                     let _ = ws_app_tx
-                        .send(AppEvent::LogMessage(format!("WS unsubscribed: {}", symbol)))
+                        .send(app_log(
+                            LogLevel::Info,
+                            LogDomain::Ws,
+                            "worker.unsubscribed",
+                            format!("WS unsubscribed: {}", symbol),
+                        ))
                         .await;
                 }
             }
@@ -446,15 +469,22 @@ async fn main() -> Result<()> {
                     {
                         tracing::warn!(symbol = %worker_symbol, error = %e, "WS worker failed");
                         let _ = worker_app_tx
-                            .send(AppEvent::LogMessage(format!(
-                                "[WARN] WS worker failed ({}): {}",
-                                worker_symbol, e
-                            )))
+                            .send(app_log(
+                                LogLevel::Warn,
+                                LogDomain::Ws,
+                                "worker.fail",
+                                format!("WS worker failed ({}): {}", worker_symbol, e),
+                            ))
                             .await;
                     }
                 });
                 let _ = ws_app_tx
-                    .send(AppEvent::LogMessage(format!("WS subscribed: {}", symbol)))
+                    .send(app_log(
+                        LogLevel::Info,
+                        LogDomain::Ws,
+                        "worker.subscribed",
+                        format!("WS subscribed: {}", symbol),
+                    ))
                     .await;
             }
 
@@ -539,10 +569,12 @@ async fn main() -> Result<()> {
                 }
                 Err(e) => {
                     let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!(
-                            "[WARN] Balance fetch failed: {}",
-                            e
-                        )))
+                        .send(app_log(
+                            LogLevel::Warn,
+                            LogDomain::Portfolio,
+                            "balance.fetch.fail",
+                            format!("Balance fetch failed: {}", e),
+                        ))
                         .await;
                 }
             }
@@ -555,10 +587,12 @@ async fn main() -> Result<()> {
                 }
                 Err(e) => {
                     let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!(
-                            "[WARN] Order history fetch failed: {}",
-                            e
-                        )))
+                        .send(app_log(
+                            LogLevel::Warn,
+                            LogDomain::Order,
+                            "history.fetch.fail",
+                            format!("Order history fetch failed: {}", e),
+                        ))
                         .await;
                 }
             }
@@ -571,11 +605,16 @@ async fn main() -> Result<()> {
             .await;
 
         let _ = strat_app_tx
-            .send(AppEvent::LogMessage(format!(
-                "Strategies loaded: {} | usdt={}",
-                profiles_by_tag.len(),
-                strat_config.strategy.order_amount_usdt,
-            )))
+            .send(app_log(
+                LogLevel::Info,
+                LogDomain::Strategy,
+                "catalog.loaded",
+                format!(
+                    "Strategies loaded: {} | usdt={}",
+                    profiles_by_tag.len(),
+                    strat_config.strategy.order_amount_usdt,
+                ),
+            ))
             .await;
 
         for price in &strat_historical_closes {
@@ -722,10 +761,12 @@ async fn main() -> Result<()> {
                                         }
                                         Err(e) => {
                                             let _ = strat_app_tx
-                                                .send(AppEvent::LogMessage(format!(
-                                                    "[WARN] Order history refresh failed: {}",
-                                                    e
-                                                )))
+                                                .send(app_log(
+                                                    LogLevel::Warn,
+                                                    LogDomain::Order,
+                                                    "history.refresh.fail",
+                                                    format!("Order history refresh failed: {}", e),
+                                                ))
                                                 .await;
                                         }
                                     }
@@ -777,10 +818,15 @@ async fn main() -> Result<()> {
                             }
                             Err(e) => {
                                 let _ = strat_app_tx
-                                    .send(AppEvent::LogMessage(format!(
-                                        "[WARN] Periodic order history sync failed ({}): {}",
-                                        instrument, e
-                                    )))
+                                    .send(app_log(
+                                        LogLevel::Warn,
+                                        LogDomain::Order,
+                                        "history.sync.fail",
+                                        format!(
+                                            "Periodic order history sync failed ({}): {}",
+                                            instrument, e
+                                        ),
+                                    ))
                                     .await;
                             }
                         }
@@ -816,7 +862,12 @@ async fn main() -> Result<()> {
                         );
                     }
                     let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!("Switched symbol to {}", selected_symbol)))
+                        .send(app_log(
+                            LogLevel::Info,
+                            LogDomain::Ui,
+                            "symbol.switch",
+                            format!("Switched symbol to {}", selected_symbol),
+                        ))
                         .await;
                     let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
@@ -846,10 +897,12 @@ async fn main() -> Result<()> {
                 _ = strategy_profile_rx.changed() => {
                     selected_profile = strategy_profile_rx.borrow().clone();
                     let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!(
-                            "Strategy switched: {}",
-                            selected_profile.label
-                        )))
+                        .send(app_log(
+                            LogLevel::Info,
+                            LogDomain::Strategy,
+                            "strategy.switch",
+                            format!("Strategy switched: {}", selected_profile.label),
+                        ))
                         .await;
                 }
                 _ = strategy_profiles_rx.changed() => {

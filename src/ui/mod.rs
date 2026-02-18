@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::event::{AppEvent, AssetPnlEntry, WsConnectionStatus};
+use crate::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
 use crate::model::order::{Fill, OrderSide};
 use crate::model::position::Position;
@@ -80,6 +80,7 @@ pub struct AppState {
     pub paused: bool,
     pub tick_count: u64,
     pub log_messages: Vec<String>,
+    pub log_records: Vec<LogRecord>,
     pub balances: HashMap<String, f64>,
     pub initial_equity_usdt: Option<f64>,
     pub current_equity_usdt: Option<f64>,
@@ -169,6 +170,7 @@ impl AppState {
             paused: false,
             tick_count: 0,
             log_messages: Vec::new(),
+            log_records: Vec::new(),
             balances: HashMap::new(),
             initial_equity_usdt: None,
             current_equity_usdt: None,
@@ -269,6 +271,14 @@ impl AppState {
         if self.log_messages.len() > MAX_LOG_MESSAGES {
             self.log_messages.remove(0);
         }
+    }
+
+    pub fn push_log_record(&mut self, record: LogRecord) {
+        self.log_records.push(record.clone());
+        if self.log_records.len() > MAX_LOG_MESSAGES {
+            self.log_records.remove(0);
+        }
+        self.push_log(format_log_record_compact(&record));
     }
 
     fn push_latency_sample(samples: &mut Vec<u64>, value: u64) {
@@ -883,6 +893,9 @@ impl AppState {
             }
             AppEvent::TickDropped => {
                 self.network_tick_drop_count = self.network_tick_drop_count.saturating_add(1);
+            }
+            AppEvent::LogRecord(record) => {
+                self.push_log_record(record);
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -2340,6 +2353,30 @@ fn parse_source_tag_from_client_order_id(client_order_id: &str) -> Option<&str> 
     } else {
         Some(source_tag)
     }
+}
+
+fn format_log_record_compact(record: &LogRecord) -> String {
+    let level = match record.level {
+        LogLevel::Debug => "DEBUG",
+        LogLevel::Info => "INFO",
+        LogLevel::Warn => "WARN",
+        LogLevel::Error => "ERR",
+    };
+    let domain = match record.domain {
+        LogDomain::Ws => "ws",
+        LogDomain::Strategy => "strategy",
+        LogDomain::Risk => "risk",
+        LogDomain::Order => "order",
+        LogDomain::Portfolio => "portfolio",
+        LogDomain::Ui => "ui",
+        LogDomain::System => "system",
+    };
+    let symbol = record.symbol.as_deref().unwrap_or("-");
+    let strategy = record.strategy_tag.as_deref().unwrap_or("-");
+    format!(
+        "[{}] {}.{} {} {} {}",
+        level, domain, record.event, symbol, strategy, record.msg
+    )
 }
 
 fn subtract_stats(total: &OrderHistoryStats, used: &OrderHistoryStats) -> OrderHistoryStats {
