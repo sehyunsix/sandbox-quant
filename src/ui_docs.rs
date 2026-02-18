@@ -255,6 +255,19 @@ pub fn seed_state() -> AppState {
     state.network_tick_latencies_ms = vec![120, 160, 170, 210, 300];
     state.network_fill_latencies_ms = vec![400, 600, 1200];
     state.network_order_sync_latencies_ms = vec![100, 130, 170];
+    state.network_tick_in_timestamps_ms = vec![
+        now_ms.saturating_sub(200),
+        now_ms.saturating_sub(450),
+        now_ms.saturating_sub(920),
+        now_ms.saturating_sub(1_800),
+        now_ms.saturating_sub(8_000),
+    ];
+    state.network_tick_drop_timestamps_ms = vec![
+        now_ms.saturating_sub(600),
+        now_ms.saturating_sub(9_500),
+    ];
+    state.network_reconnect_timestamps_ms = vec![now_ms.saturating_sub(16_000)];
+    state.network_disconnect_timestamps_ms = vec![now_ms.saturating_sub(15_500)];
     state.network_last_fill_ms = Some(now_ms.saturating_sub(4_500));
     state.fast_sma = state.candles.last().map(|c| c.close * 0.9992);
     state.slow_sma = state.candles.last().map(|c| c.close * 0.9985);

@@ -1,6 +1,7 @@
 pub mod ui_projection;
 pub mod chart;
 pub mod dashboard;
+pub mod network_metrics;
 
 use std::collections::HashMap;
 
@@ -18,6 +19,7 @@ use crate::model::signal::Signal;
 use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
 use crate::order_store;
 use crate::risk_module::RateBudgetSnapshot;
+use crate::ui::network_metrics::{classify_health, count_since, percentile, rate_per_sec, ratio_pct, NetworkHealth};
 
 use ui_projection::UiProjection;
 use ui_projection::AssetEntry;
@@ -130,6 +132,10 @@ pub struct AppState {
     pub network_tick_latencies_ms: Vec<u64>,
     pub network_fill_latencies_ms: Vec<u64>,
     pub network_order_sync_latencies_ms: Vec<u64>,
+    pub network_tick_in_timestamps_ms: Vec<u64>,
+    pub network_tick_drop_timestamps_ms: Vec<u64>,
+    pub network_reconnect_timestamps_ms: Vec<u64>,
+    pub network_disconnect_timestamps_ms: Vec<u64>,
     pub network_last_fill_ms: Option<u64>,
     pub network_pending_submit_ms_by_intent: HashMap<String, u64>,
     pub history_rows: Vec<String>,
@@ -228,6 +234,10 @@ impl AppState {
             network_tick_latencies_ms: Vec::new(),
             network_fill_latencies_ms: Vec::new(),
             network_order_sync_latencies_ms: Vec::new(),
+            network_tick_in_timestamps_ms: Vec::new(),
+            network_tick_drop_timestamps_ms: Vec::new(),
+            network_reconnect_timestamps_ms: Vec::new(),
+            network_disconnect_timestamps_ms: Vec::new(),
             network_last_fill_ms: None,
             network_pending_submit_ms_by_intent: HashMap::new(),
             history_rows: Vec::new(),
@@ -288,6 +298,20 @@ impl AppState {
             let drop_n = samples.len() - MAX_SAMPLES;
             samples.drain(..drop_n);
         }
+    }
+
+    fn push_network_event_sample(samples: &mut Vec<u64>, ts_ms: u64) {
+        samples.push(ts_ms);
+        let lower = ts_ms.saturating_sub(60_000);
+        samples.retain(|&v| v >= lower);
+    }
+
+    fn prune_network_event_windows(&mut self, now_ms: u64) {
+        let lower = now_ms.saturating_sub(60_000);
+        self.network_tick_in_timestamps_ms.retain(|&v| v >= lower);
+        self.network_tick_drop_timestamps_ms.retain(|&v| v >= lower);
+        self.network_reconnect_timestamps_ms.retain(|&v| v >= lower);
+        self.network_disconnect_timestamps_ms.retain(|&v| v >= lower);
     }
 
     /// Transitional projection for RFC-0016 Phase 2.
@@ -575,6 +599,7 @@ impl AppState {
                 self.last_price_update_ms = Some(now_ms);
                 self.last_price_event_ms = Some(tick.timestamp_ms);
                 self.last_price_latency_ms = Some(now_ms.saturating_sub(tick.timestamp_ms));
+                Self::push_network_event_sample(&mut self.network_tick_in_timestamps_ms, now_ms);
                 if let Some(lat) = self.last_price_latency_ms {
                     Self::push_latency_sample(&mut self.network_tick_latencies_ms, lat);
                 }
@@ -827,11 +852,15 @@ impl AppState {
                 }
                 WsConnectionStatus::Disconnected => {
                     self.ws_connected = false;
+                    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    Self::push_network_event_sample(&mut self.network_disconnect_timestamps_ms, now_ms);
                     self.push_log("[WARN] WebSocket Disconnected".to_string());
                 }
                 WsConnectionStatus::Reconnecting { attempt, delay_ms } => {
                     self.ws_connected = false;
                     self.network_reconnect_count += 1;
+                    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    Self::push_network_event_sample(&mut self.network_reconnect_timestamps_ms, now_ms);
                     self.push_log(format!(
                         "[WARN] Reconnecting (attempt {}, wait {}ms)",
                         attempt, delay_ms
@@ -961,6 +990,8 @@ impl AppState {
             }
             AppEvent::TickDropped => {
                 self.network_tick_drop_count = self.network_tick_drop_count.saturating_add(1);
+                let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                Self::push_network_event_sample(&mut self.network_tick_drop_timestamps_ms, now_ms);
             }
             AppEvent::LogRecord(record) => {
                 self.push_log_record(record);
@@ -972,6 +1003,7 @@ impl AppState {
                 self.push_log(format!("[ERR] {}", msg));
             }
         }
+        self.prune_network_event_windows(chrono::Utc::now().timestamp_millis() as u64);
         self.sync_projection_portfolio_summary();
         if rebuild_projection {
             self.rebuild_projection_preserve_focus(prev_focus);
@@ -1482,28 +1514,55 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
     }
 
     if view.selected_grid_tab == GridTab::Network {
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        let tick_in_1s = count_since(&state.network_tick_in_timestamps_ms, now_ms, 1_000);
+        let tick_in_10s = count_since(&state.network_tick_in_timestamps_ms, now_ms, 10_000);
+        let tick_in_60s = count_since(&state.network_tick_in_timestamps_ms, now_ms, 60_000);
+        let tick_drop_1s = count_since(&state.network_tick_drop_timestamps_ms, now_ms, 1_000);
+        let tick_drop_10s = count_since(&state.network_tick_drop_timestamps_ms, now_ms, 10_000);
+        let tick_drop_60s = count_since(&state.network_tick_drop_timestamps_ms, now_ms, 60_000);
+        let reconnect_60s = count_since(&state.network_reconnect_timestamps_ms, now_ms, 60_000);
+        let disconnect_60s = count_since(&state.network_disconnect_timestamps_ms, now_ms, 60_000);
+
+        let tick_in_rate_1s = rate_per_sec(tick_in_1s, 1.0);
+        let tick_drop_rate_1s = rate_per_sec(tick_drop_1s, 1.0);
+        let tick_drop_rate_10s = rate_per_sec(tick_drop_10s, 10.0);
+        let tick_drop_rate_60s = rate_per_sec(tick_drop_60s, 60.0);
+        let tick_drop_ratio_10s = ratio_pct(tick_drop_10s, tick_in_10s.saturating_add(tick_drop_10s));
+        let tick_drop_ratio_60s = ratio_pct(tick_drop_60s, tick_in_60s.saturating_add(tick_drop_60s));
+        let reconnect_rate_60s = reconnect_60s as f64;
+        let disconnect_rate_60s = disconnect_60s as f64;
+        let heartbeat_gap_ms = state.last_price_update_ms.map(|ts| now_ms.saturating_sub(ts));
+        let tick_p95_ms = percentile(&state.network_tick_latencies_ms, 95);
+        let health = classify_health(
+            state.ws_connected,
+            tick_drop_ratio_10s,
+            reconnect_rate_60s,
+            tick_p95_ms,
+            heartbeat_gap_ms,
+        );
+        let (health_label, health_color) = match health {
+            NetworkHealth::Ok => ("OK", Color::Green),
+            NetworkHealth::Warn => ("WARN", Color::Yellow),
+            NetworkHealth::Crit => ("CRIT", Color::Red),
+        };
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(2),
                 Constraint::Min(6),
+                Constraint::Length(6),
                 Constraint::Length(1),
             ])
             .split(body_area);
-        let network_state = if !state.ws_connected {
-            ("CRIT", Color::Red)
-        } else if state.network_tick_drop_count > 0 || state.network_reconnect_count > 0 {
-            ("WARN", Color::Yellow)
-        } else {
-            ("OK", Color::Green)
-        };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Network: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Health: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    network_state.0,
+                    health_label,
                     Style::default()
-                        .fg(network_state.1)
+                        .fg(health_color)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  WS: ", Style::default().fg(Color::DarkGray)),
@@ -1521,8 +1580,8 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 ),
                 Span::styled(
                     format!(
-                        "  reconnect={}  tick_drop={}",
-                        state.network_reconnect_count, state.network_tick_drop_count
+                        "  in1s={:.1}/s  drop10s={:.2}/s  ratio10s={:.2}%  reconn60s={:.0}/min",
+                        tick_in_rate_1s, tick_drop_rate_10s, tick_drop_ratio_10s, reconnect_rate_60s
                     ),
                     Style::default().fg(Color::DarkGray),
                 ),
@@ -1535,9 +1594,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
         let sync_stats = latency_stats(&state.network_order_sync_latencies_ms);
         let last_fill_age = state
             .network_last_fill_ms
-            .map(|ts| {
-                format_age_ms((chrono::Utc::now().timestamp_millis() as u64).saturating_sub(ts))
-            })
+            .map(|ts| format_age_ms(now_ms.saturating_sub(ts)))
             .unwrap_or_else(|| "-".to_string());
         let rows = vec![
             Row::new(vec![
@@ -1587,7 +1644,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 Cell::from("Metric"),
                 Cell::from("p50"),
                 Cell::from("p95"),
-                Cell::from("max"),
+                Cell::from("p99"),
                 Cell::from("last/age"),
             ]))
             .column_spacing(1)
@@ -1599,7 +1656,62 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[1],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[2]);
+
+        let summary_rows = vec![
+            Row::new(vec![
+                Cell::from("tick_drop_rate_1s"),
+                Cell::from(format!("{:.2}/s", tick_drop_rate_1s)),
+                Cell::from("tick_drop_rate_60s"),
+                Cell::from(format!("{:.2}/s", tick_drop_rate_60s)),
+            ]),
+            Row::new(vec![
+                Cell::from("drop_ratio_60s"),
+                Cell::from(format!("{:.2}%", tick_drop_ratio_60s)),
+                Cell::from("disconnect_rate_60s"),
+                Cell::from(format!("{:.0}/min", disconnect_rate_60s)),
+            ]),
+            Row::new(vec![
+                Cell::from("last_tick_age"),
+                Cell::from(
+                    heartbeat_gap_ms
+                        .map(format_age_ms)
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                Cell::from("last_order_update_age"),
+                Cell::from(
+                    state
+                        .last_order_history_update_ms
+                        .map(|ts| format_age_ms(now_ms.saturating_sub(ts)))
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+            ]),
+            Row::new(vec![
+                Cell::from("tick_drop_total"),
+                Cell::from(state.network_tick_drop_count.to_string()),
+                Cell::from("reconnect_total"),
+                Cell::from(state.network_reconnect_count.to_string()),
+            ]),
+        ];
+        frame.render_widget(
+            Table::new(
+                summary_rows,
+                [
+                    Constraint::Length(20),
+                    Constraint::Length(18),
+                    Constraint::Length(20),
+                    Constraint::Length(18),
+                ],
+            )
+            .column_spacing(1)
+            .block(
+                Block::default()
+                    .title(" Network Summary ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[2],
+        );
+        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[3]);
         return;
     }
 
@@ -2083,19 +2195,13 @@ fn format_age_ms(age_ms: u64) -> String {
 }
 
 fn latency_stats(samples: &[u64]) -> (String, String, String) {
-    if samples.is_empty() {
-        return ("-".to_string(), "-".to_string(), "-".to_string());
-    }
-    let mut sorted = samples.to_vec();
-    sorted.sort_unstable();
-    let len = sorted.len();
-    let p50 = sorted[(len * 50 / 100).min(len - 1)];
-    let p95 = sorted[(len * 95 / 100).min(len - 1)];
-    let max = *sorted.last().unwrap_or(&0);
+    let p50 = percentile(samples, 50);
+    let p95 = percentile(samples, 95);
+    let p99 = percentile(samples, 99);
     (
-        format!("{}ms", p50),
-        format!("{}ms", p95),
-        format!("{}ms", max),
+        p50.map(|v| format!("{}ms", v)).unwrap_or_else(|| "-".to_string()),
+        p95.map(|v| format!("{}ms", v)).unwrap_or_else(|| "-".to_string()),
+        p99.map(|v| format!("{}ms", v)).unwrap_or_else(|| "-".to_string()),
     )
 }
 
