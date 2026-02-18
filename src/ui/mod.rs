@@ -78,6 +78,7 @@ pub struct AppState {
     pub strategy_editor_fast: usize,
     pub strategy_editor_slow: usize,
     pub strategy_editor_cooldown: u64,
+    pub v2_grid_symbol_index: usize,
     pub v2_grid_strategy_index: usize,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
@@ -154,6 +155,7 @@ impl AppState {
             strategy_editor_fast: 5,
             strategy_editor_slow: 20,
             strategy_editor_cooldown: 1,
+            v2_grid_symbol_index: 0,
             v2_grid_strategy_index: 0,
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
@@ -858,15 +860,20 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         "Strategy Table",
         Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
     ))];
+    let selected_symbol = state
+        .symbol_items
+        .get(state.v2_grid_symbol_index)
+        .map(String::as_str)
+        .unwrap_or(state.symbol.as_str());
     for (idx, item) in state.strategy_items.iter().enumerate() {
         let stats = strategy_stats_for_item(&state.strategy_stats, item);
         let line = if let Some(s) = stats {
             format!(
-                "{}  W:{} L:{} T:{}  PnL:{:+.4}",
-                item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
+                "{} | {}  W:{} L:{} T:{}  PnL:{:+.4}",
+                selected_symbol, item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
             )
         } else {
-            format!("{}  W:0 L:0 T:0  PnL:{:+.4}", item, 0.0)
+            format!("{} | {}  W:0 L:0 T:0  PnL:{:+.4}", selected_symbol, item, 0.0)
         };
         let (prefix, style) = if idx == state.v2_grid_strategy_index {
             (
@@ -889,8 +896,18 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
             Style::default().fg(Color::DarkGray),
         )));
     }
+    strategy_lines.push(Line::from(vec![
+        Span::styled("Symbol: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            selected_symbol,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ([H/L] or [←/→])", Style::default().fg(Color::DarkGray)),
+    ]));
     strategy_lines.push(Line::from(Span::styled(
-        "Use [N] new, [C] config, [J/K] select, [Enter/F] focus+run, [G/Esc] close.",
+        "Use [N] new, [C] config, [J/K] strategy, [H/L] symbol, [Enter/F] run, [G/Esc] close.",
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(Paragraph::new(strategy_lines), chunks[1]);

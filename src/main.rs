@@ -105,6 +105,50 @@ fn persist_strategy_session_state(
     }
 }
 
+fn apply_symbol_selection(
+    next_symbol: &str,
+    current_symbol: &mut String,
+    app_state: &mut AppState,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+) {
+    if next_symbol == current_symbol {
+        return;
+    }
+    *current_symbol = next_symbol.to_string();
+    app_state.symbol = current_symbol.clone();
+    app_state.position = Position::new(current_symbol.clone());
+    app_state.candles.clear();
+    app_state.current_candle = None;
+    app_state.fill_markers.clear();
+    app_state.open_order_history.clear();
+    app_state.filled_order_history.clear();
+    app_state.history_trade_count = 0;
+    app_state.history_win_count = 0;
+    app_state.history_lose_count = 0;
+    app_state.history_realized_pnl = 0.0;
+    app_state.history_estimated_total_pnl_usdt = Some(0.0);
+    app_state.strategy_stats.clear();
+    app_state.history_fills.clear();
+    app_state.last_applied_fee = "---".to_string();
+    app_state.trade_stats_reset_warned = false;
+    let _ = ws_symbol_tx.send(current_symbol.clone());
+    switch_timeframe(
+        current_symbol,
+        &app_state.timeframe,
+        rest_client,
+        config,
+        app_tx,
+    );
+    app_state.push_log(format!("Symbol switched to {}", current_symbol));
+    let (_, market) = parse_instrument_label(current_symbol);
+    if market == MarketKind::Futures {
+        app_state.push_log("Futures mode enabled (orders + chart)".to_string());
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider (required by rustls 0.23+)
@@ -651,42 +695,17 @@ async fn main() -> Result<()> {
                         KeyCode::Enter => {
                             if let Some(next_symbol) =
                                 app_state.symbol_items.get(app_state.symbol_selector_index)
+                                .cloned()
                             {
-                                if next_symbol != &current_symbol {
-                                    current_symbol = next_symbol.clone();
-                                    app_state.symbol = current_symbol.clone();
-                                    app_state.position = Position::new(current_symbol.clone());
-                                    app_state.candles.clear();
-                                    app_state.current_candle = None;
-                                    app_state.fill_markers.clear();
-                                    app_state.open_order_history.clear();
-                                    app_state.filled_order_history.clear();
-                                    app_state.history_trade_count = 0;
-                                    app_state.history_win_count = 0;
-                                    app_state.history_lose_count = 0;
-                                    app_state.history_realized_pnl = 0.0;
-                                    app_state.history_estimated_total_pnl_usdt = Some(0.0);
-                                    app_state.strategy_stats.clear();
-                                    app_state.history_fills.clear();
-                                    app_state.last_applied_fee = "---".to_string();
-                                    app_state.trade_stats_reset_warned = false;
-                                    let _ = ws_symbol_tx.send(current_symbol.clone());
-                                    switch_timeframe(
-                                        &current_symbol,
-                                        &app_state.timeframe,
-                                        &rest_client,
-                                        &config,
-                                        &app_tx,
-                                    );
-                                    app_state
-                                        .push_log(format!("Symbol switched to {}", current_symbol));
-                                    let (_, market) = parse_instrument_label(&current_symbol);
-                                    if market == MarketKind::Futures {
-                                        app_state.push_log(
-                                            "Futures mode enabled (orders + chart)".to_string(),
-                                        );
-                                    }
-                                }
+                                apply_symbol_selection(
+                                    &next_symbol,
+                                    &mut current_symbol,
+                                    &mut app_state,
+                                    &ws_symbol_tx,
+                                    &rest_client,
+                                    &config,
+                                    &app_tx,
+                                );
                             }
                             app_state.symbol_selector_open = false;
                         }
@@ -862,6 +881,14 @@ async fn main() -> Result<()> {
                                 + 1)
                             .min(app_state.strategy_items.len().saturating_sub(1));
                         }
+                        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
+                            app_state.v2_grid_symbol_index =
+                                app_state.v2_grid_symbol_index.saturating_sub(1);
+                        }
+                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
+                            app_state.v2_grid_symbol_index = (app_state.v2_grid_symbol_index + 1)
+                                .min(app_state.symbol_items.len().saturating_sub(1));
+                        }
                         KeyCode::Char('n') | KeyCode::Char('N') => {
                             let base_index = app_state
                                 .v2_grid_strategy_index
@@ -912,6 +939,21 @@ async fn main() -> Result<()> {
                                 .get(app_state.v2_grid_strategy_index)
                                 .cloned()
                             {
+                                if let Some(selected_symbol) = app_state
+                                    .symbol_items
+                                    .get(app_state.v2_grid_symbol_index)
+                                    .cloned()
+                                {
+                                    apply_symbol_selection(
+                                        &selected_symbol,
+                                        &mut current_symbol,
+                                        &mut app_state,
+                                        &ws_symbol_tx,
+                                        &rest_client,
+                                        &config,
+                                        &app_tx,
+                                    );
+                                }
                                 app_state.v2_state.focus.symbol = Some(app_state.symbol.clone());
                                 app_state.v2_state.focus.strategy_id = Some(item.clone());
                                 if let Some(next_profile) = strategy_catalog
@@ -1018,6 +1060,11 @@ async fn main() -> Result<()> {
                         app_state.history_popup_open = true;
                     }
                     KeyCode::Char('g') | KeyCode::Char('G') => {
+                        app_state.v2_grid_symbol_index = app_state
+                            .symbol_items
+                            .iter()
+                            .position(|item| item == &current_symbol)
+                            .unwrap_or(0);
                         app_state.v2_grid_strategy_index = app_state
                             .strategy_items
                             .iter()
