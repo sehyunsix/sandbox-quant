@@ -1,3 +1,4 @@
+use sandbox_quant::event::AssetPnlEntry;
 use sandbox_quant::order_manager::OrderHistoryStats;
 use sandbox_quant::ui::ui_projection::UiProjection;
 use sandbox_quant::ui::AppState;
@@ -79,4 +80,31 @@ fn ui_projection_strategy_lookup_returns_indexed_map() {
 
     let fast = lookup.get("MA(Fast 5/20)").expect("missing MA(Fast 5/20)");
     assert!((fast.realized_pnl_usdt + 1.5).abs() < f64::EPSILON);
+}
+
+#[test]
+/// Verifies asset table pnl projection:
+/// per-symbol pnl snapshots should override zero defaults in asset rows.
+fn ui_projection_uses_asset_pnl_snapshot_for_asset_rows() {
+    let mut legacy = sample_app_state();
+    legacy.symbol_items = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
+    legacy.strategy_item_symbols = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
+    legacy.asset_pnl_by_symbol.insert(
+        "ETHUSDT".to_string(),
+        AssetPnlEntry {
+            position_qty: 0.5,
+            realized_pnl_usdt: 4.2,
+            unrealized_pnl_usdt: 1.1,
+        },
+    );
+
+    let projection = UiProjection::from_legacy(&legacy);
+    let eth = projection
+        .assets
+        .iter()
+        .find(|a| a.symbol == "ETHUSDT")
+        .expect("ETHUSDT asset row missing");
+    assert!((eth.position_qty - 0.5).abs() < f64::EPSILON);
+    assert!((eth.realized_pnl_usdt - 4.2).abs() < f64::EPSILON);
+    assert!((eth.unrealized_pnl_usdt - 1.1).abs() < f64::EPSILON);
 }

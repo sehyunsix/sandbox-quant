@@ -96,35 +96,48 @@ impl UiProjection {
         let assets = asset_symbols
             .into_iter()
             .map(|symbol| {
-                if symbol == state.symbol {
-                    AssetEntry {
-                        symbol,
-                        last_price: state.last_price(),
-                        position_qty: state.position.qty,
-                        realized_pnl_usdt: state.history_realized_pnl,
-                        unrealized_pnl_usdt: state.position.unrealized_pnl,
-                    }
-                } else {
-                    let inferred_qty = state
-                        .balances
-                        .get(&symbol)
-                        .copied()
-                        .or_else(|| {
-                            let (base, _) = split_symbol_assets(&symbol);
-                            if base.is_empty() {
-                                None
-                            } else {
-                                state.balances.get(&base).copied()
-                            }
-                        })
-                        .unwrap_or(0.0);
-                    AssetEntry {
-                        symbol,
-                        last_price: None,
-                        position_qty: inferred_qty,
-                        realized_pnl_usdt: 0.0,
-                        unrealized_pnl_usdt: 0.0,
-                    }
+                let pnl = state.asset_pnl_by_symbol.get(&symbol);
+                let inferred_qty = state
+                    .balances
+                    .get(&symbol)
+                    .copied()
+                    .or_else(|| {
+                        let (base, _) = split_symbol_assets(&symbol);
+                        if base.is_empty() {
+                            None
+                        } else {
+                            state.balances.get(&base).copied()
+                        }
+                    })
+                    .unwrap_or(0.0);
+                AssetEntry {
+                    symbol: symbol.clone(),
+                    last_price: if symbol == state.symbol {
+                        state.last_price()
+                    } else {
+                        None
+                    },
+                    position_qty: pnl.map(|p| p.position_qty).unwrap_or_else(|| {
+                        if symbol == state.symbol {
+                            state.position.qty
+                        } else {
+                            inferred_qty
+                        }
+                    }),
+                    realized_pnl_usdt: pnl.map(|p| p.realized_pnl_usdt).unwrap_or_else(|| {
+                        if symbol == state.symbol {
+                            state.history_realized_pnl
+                        } else {
+                            0.0
+                        }
+                    }),
+                    unrealized_pnl_usdt: pnl.map(|p| p.unrealized_pnl_usdt).unwrap_or_else(|| {
+                        if symbol == state.symbol {
+                            state.position.unrealized_pnl
+                        } else {
+                            0.0
+                        }
+                    }),
                 }
             })
             .collect();

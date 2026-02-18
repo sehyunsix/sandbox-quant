@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::event::{AppEvent, WsConnectionStatus};
+use crate::event::{AppEvent, AssetPnlEntry, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
 use crate::model::order::{Fill, OrderSide};
 use crate::model::position::Position;
@@ -89,6 +89,7 @@ pub struct AppState {
     pub history_win_count: u32,
     pub history_lose_count: u32,
     pub history_realized_pnl: f64,
+    pub asset_pnl_by_symbol: HashMap<String, AssetPnlEntry>,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub history_fills: Vec<OrderHistoryFill>,
     pub last_price_update_ms: Option<u64>,
@@ -177,6 +178,7 @@ impl AppState {
             history_win_count: 0,
             history_lose_count: 0,
             history_realized_pnl: 0.0,
+            asset_pnl_by_symbol: HashMap::new(),
             strategy_stats: HashMap::new(),
             history_fills: Vec::new(),
             last_price_update_ms: None,
@@ -863,6 +865,10 @@ impl AppState {
             AppEvent::StrategyStatsUpdate { strategy_stats } => {
                 rebuild_projection = true;
                 self.strategy_stats = strategy_stats;
+            }
+            AppEvent::AssetPnlUpdate { by_symbol } => {
+                rebuild_projection = true;
+                self.asset_pnl_by_symbol = by_symbol;
             }
             AppEvent::RiskRateSnapshot {
                 global,

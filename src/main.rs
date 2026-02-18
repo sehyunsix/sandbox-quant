@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, watch};
 use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
-use sandbox_quant::event::AppEvent;
+use sandbox_quant::event::{AppEvent, AssetPnlEntry};
 use sandbox_quant::model::position::Position;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
@@ -91,6 +91,25 @@ fn normalize_instrument_label(label: &str) -> String {
     } else {
         symbol
     }
+}
+
+fn build_asset_pnl_snapshot(
+    order_managers: &HashMap<String, OrderManager>,
+    realized_pnl_by_symbol: &HashMap<String, f64>,
+) -> HashMap<String, AssetPnlEntry> {
+    order_managers
+        .iter()
+        .map(|(symbol, mgr)| {
+            (
+                symbol.clone(),
+                AssetPnlEntry {
+                    position_qty: mgr.position().qty,
+                    realized_pnl_usdt: realized_pnl_by_symbol.get(symbol).copied().unwrap_or(0.0),
+                    unrealized_pnl_usdt: mgr.position().unrealized_pnl,
+                },
+            )
+        })
+        .collect()
 }
 
 fn enabled_instruments(
@@ -476,9 +495,11 @@ async fn main() -> Result<()> {
             })
             .collect();
         let mut order_managers: HashMap<String, OrderManager> = HashMap::new();
+        let mut realized_pnl_by_symbol: HashMap<String, f64> = HashMap::new();
         let (risk_eval_tx, mut risk_eval_rx) = mpsc::channel::<(Signal, String, String)>(64);
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
+        let mut last_asset_pnl_emit_ms: u64 = 0;
 
         let emit_rate_snapshot = |tx: &mpsc::Sender<AppEvent>, mgr: &OrderManager| {
             let tx = tx.clone();
@@ -527,6 +548,7 @@ async fn main() -> Result<()> {
             }
             match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
                 Ok(history) => {
+                    realized_pnl_by_symbol.insert(selected_symbol.clone(), history.stats.realized_pnl);
                     let _ = strat_app_tx
                         .send(AppEvent::OrderHistoryUpdate(history))
                         .await;
@@ -542,6 +564,11 @@ async fn main() -> Result<()> {
             }
             emit_rate_snapshot(&strat_app_tx, mgr);
         }
+        let _ = strat_app_tx
+            .send(AppEvent::AssetPnlUpdate {
+                by_symbol: build_asset_pnl_snapshot(&order_managers, &realized_pnl_by_symbol),
+            })
+            .await;
 
         let _ = strat_app_tx
             .send(AppEvent::LogMessage(format!(
@@ -590,6 +617,18 @@ async fn main() -> Result<()> {
                         if tick_symbol == selected_symbol {
                             emit_rate_snapshot(&strat_app_tx, mgr);
                         }
+                    }
+                    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    if now_ms.saturating_sub(last_asset_pnl_emit_ms) >= 300 {
+                        last_asset_pnl_emit_ms = now_ms;
+                        let _ = strat_app_tx
+                            .send(AppEvent::AssetPnlUpdate {
+                                by_symbol: build_asset_pnl_snapshot(
+                                    &order_managers,
+                                    &realized_pnl_by_symbol,
+                                ),
+                            })
+                            .await;
                     }
 
                     for (source_tag, profile) in &profiles_by_tag {
@@ -663,6 +702,7 @@ async fn main() -> Result<()> {
                             ),
                         );
                     }
+                    let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&instrument) {
                         match mgr.submit_order(signal, &source_tag).await {
                             Ok(Some(ref update)) => {
@@ -672,6 +712,10 @@ async fn main() -> Result<()> {
                                         .await;
                                     match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
                                         Ok(history) => {
+                                            realized_pnl_by_symbol.insert(
+                                                instrument.clone(),
+                                                history.stats.realized_pnl,
+                                            );
                                             let _ = strat_app_tx
                                                 .send(AppEvent::OrderHistoryUpdate(history))
                                                 .await;
@@ -690,6 +734,7 @@ async fn main() -> Result<()> {
                                             .send(AppEvent::BalanceUpdate(mgr.balances().clone()))
                                             .await;
                                     }
+                                    emit_asset_snapshot = true;
                                     emit_rate_snapshot(&strat_app_tx, mgr);
                                 }
                             }
@@ -698,6 +743,16 @@ async fn main() -> Result<()> {
                                 let _ = strat_app_tx.send(AppEvent::Error(e.to_string())).await;
                             }
                         }
+                    }
+                    if emit_asset_snapshot {
+                        let _ = strat_app_tx
+                            .send(AppEvent::AssetPnlUpdate {
+                                by_symbol: build_asset_pnl_snapshot(
+                                    &order_managers,
+                                    &realized_pnl_by_symbol,
+                                ),
+                            })
+                            .await;
                     }
                 }
                 _ = order_history_sync.tick() => {
@@ -710,6 +765,8 @@ async fn main() -> Result<()> {
                                         .send(AppEvent::OrderHistoryUpdate(history.clone()))
                                         .await;
                                 }
+                                realized_pnl_by_symbol
+                                    .insert(instrument.clone(), history.stats.realized_pnl);
                                 for (tag, s) in history.strategy_stats {
                                     let slot = aggregated_stats.entry(tag).or_default();
                                     slot.trade_count = slot.trade_count.saturating_add(s.trade_count);
@@ -734,6 +791,14 @@ async fn main() -> Result<()> {
                             strategy_stats: aggregated_stats,
                         })
                         .await;
+                    let _ = strat_app_tx
+                        .send(AppEvent::AssetPnlUpdate {
+                            by_symbol: build_asset_pnl_snapshot(
+                                &order_managers,
+                                &realized_pnl_by_symbol,
+                            ),
+                        })
+                        .await;
                 }
                 _ = strat_symbol_rx.changed() => {
                     selected_symbol = normalize_instrument_label(strat_symbol_rx.borrow().as_str());
@@ -753,14 +818,29 @@ async fn main() -> Result<()> {
                     let _ = strat_app_tx
                         .send(AppEvent::LogMessage(format!("Switched symbol to {}", selected_symbol)))
                         .await;
+                    let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
                         if let Ok(history) = mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                            realized_pnl_by_symbol
+                                .insert(selected_symbol.clone(), history.stats.realized_pnl);
                             let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                            emit_asset_snapshot = true;
                         }
                         if let Ok(balances) = mgr.refresh_balances().await {
                             let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                            emit_asset_snapshot = true;
                         }
                         emit_rate_snapshot(&strat_app_tx, mgr);
+                    }
+                    if emit_asset_snapshot {
+                        let _ = strat_app_tx
+                            .send(AppEvent::AssetPnlUpdate {
+                                by_symbol: build_asset_pnl_snapshot(
+                                    &order_managers,
+                                    &realized_pnl_by_symbol,
+                                ),
+                            })
+                            .await;
                     }
                 }
                 _ = strategy_profile_rx.changed() => {

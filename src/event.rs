@@ -38,6 +38,9 @@ pub enum AppEvent {
     StrategyStatsUpdate {
         strategy_stats: HashMap<String, OrderHistoryStats>,
     },
+    AssetPnlUpdate {
+        by_symbol: HashMap<String, AssetPnlEntry>,
+    },
     RiskRateSnapshot {
         global: RateBudgetSnapshot,
         orders: RateBudgetSnapshot,
@@ -47,4 +50,11 @@ pub enum AppEvent {
     TickDropped,
     LogMessage(String),
     Error(String),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AssetPnlEntry {
+    pub position_qty: f64,
+    pub realized_pnl_usdt: f64,
+    pub unrealized_pnl_usdt: f64,
 }

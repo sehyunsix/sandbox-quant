@@ -1,4 +1,4 @@
-use sandbox_quant::event::{AppEvent, WsConnectionStatus};
+use sandbox_quant::event::{AppEvent, AssetPnlEntry, WsConnectionStatus};
 use sandbox_quant::model::order::OrderSide;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::order_manager::OrderHistoryStats;
@@ -174,4 +174,26 @@ fn app_state_applies_strategy_stats_update_event() {
     let cfg = s.strategy_stats.get("cfg").expect("cfg stats should be present");
     assert_eq!(cfg.trade_count, 4);
     assert!((cfg.realized_pnl - 12.5).abs() < f64::EPSILON);
+}
+
+#[test]
+/// Verifies asset pnl event propagation:
+/// asset table backing map should update on AssetPnlUpdate events.
+fn app_state_applies_asset_pnl_update_event() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    let mut by_symbol = std::collections::HashMap::new();
+    by_symbol.insert(
+        "ETHUSDT".to_string(),
+        AssetPnlEntry {
+            position_qty: 0.4,
+            realized_pnl_usdt: 3.0,
+            unrealized_pnl_usdt: 0.9,
+        },
+    );
+    s.apply(AppEvent::AssetPnlUpdate { by_symbol });
+    let eth = s
+        .asset_pnl_by_symbol
+        .get("ETHUSDT")
+        .expect("ETHUSDT pnl should be present");
+    assert!((eth.realized_pnl_usdt - 3.0).abs() < f64::EPSILON);
 }
