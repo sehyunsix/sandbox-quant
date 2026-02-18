@@ -3,7 +3,7 @@ use ratatui::Terminal;
 
 use sandbox_quant::order_manager::OrderHistoryStats;
 use sandbox_quant::ui::ui_projection::UiProjection;
-use sandbox_quant::ui::{self, AppState};
+use sandbox_quant::ui::{self, AppState, GridTab};
 
 fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
     let buf = terminal.backend().buffer();
@@ -234,6 +234,27 @@ fn render_grid_popup_asset_table_includes_multiple_symbols() {
     assert!(text.contains("BTCUSDT"));
     assert!(text.contains("ETHUSDT"));
     assert!(text.contains("SOLUSDT"));
+}
+
+#[test]
+/// Verifies system-log grid tab rendering:
+/// selecting tab 5 should show system log rows inside the grid popup.
+fn render_grid_popup_system_log_tab() {
+    let backend = TestBackend::new(140, 36);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.grid_open = true;
+    state.grid_tab = GridTab::SystemLog;
+    state.log_messages.push("system: warmup complete".to_string());
+    state.log_messages.push("system: ws connected".to_string());
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("System Log"));
+    assert!(text.contains("system: ws connected"));
 }
 
 #[test]

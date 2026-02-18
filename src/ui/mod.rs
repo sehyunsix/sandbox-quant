@@ -33,6 +33,7 @@ pub enum GridTab {
     Strategies,
     Risk,
     Network,
+    SystemLog,
 }
 
 #[derive(Debug, Clone)]
@@ -1146,6 +1147,8 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             tab_span(GridTab::Risk, "3", "Risk"),
             Span::raw(" "),
             tab_span(GridTab::Network, "4", "Network"),
+            Span::raw(" "),
+            tab_span(GridTab::SystemLog, "5", "SystemLog"),
         ])),
         tab_area,
     );
@@ -1351,7 +1354,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4] tab  [G/Esc] close"), chunks[3]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[3]);
         return;
     }
 
@@ -1473,7 +1476,43 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[1],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4] tab  [G/Esc] close"), chunks[2]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[2]);
+        return;
+    }
+
+    if view.selected_grid_tab == GridTab::SystemLog {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6), Constraint::Length(1)])
+            .split(body_area);
+        let max_rows = chunks[0].height.saturating_sub(2) as usize;
+        let mut log_rows: Vec<Row> = state
+            .log_messages
+            .iter()
+            .rev()
+            .take(max_rows.max(1))
+            .rev()
+            .map(|line| Row::new(vec![Cell::from(line.clone())]))
+            .collect();
+        if log_rows.is_empty() {
+            log_rows.push(
+                Row::new(vec![Cell::from("(no system logs yet)")])
+                    .style(Style::default().fg(Color::DarkGray)),
+            );
+        }
+        frame.render_widget(
+            Table::new(log_rows, [Constraint::Min(1)])
+                .header(Row::new(vec![Cell::from("Message")]).style(Style::default().fg(Color::DarkGray)))
+                .column_spacing(1)
+                .block(
+                    Block::default()
+                        .title(" System Log ")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray)),
+                ),
+            chunks[0],
+        );
+        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[1]);
         return;
     }
 

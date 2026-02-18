@@ -1164,6 +1164,9 @@ async fn main() -> Result<()> {
                         KeyCode::Char('4') => {
                             app_state.set_grid_tab(GridTab::Network);
                         }
+                        KeyCode::Char('5') => {
+                            app_state.set_grid_tab(GridTab::SystemLog);
+                        }
                         KeyCode::Tab => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
