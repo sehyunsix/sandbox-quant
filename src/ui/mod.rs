@@ -690,6 +690,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             state.symbol_selector_index,
             None,
             None,
+            None,
         );
     } else if state.strategy_selector_open {
         render_selector_popup(
@@ -704,6 +705,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 lose_count: state.history_lose_count,
                 realized_pnl: state.history_realized_pnl,
             }),
+            Some(state.symbol.as_str()),
         );
     } else if state.account_popup_open {
         render_account_popup(frame, &state.balances);
@@ -868,18 +870,24 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         .map(String::as_str)
         .unwrap_or(state.symbol.as_str());
     strategy_lines.push(Line::from(Span::styled(
-        format!("{:<24} {:>3} {:>3} {:>4} {:>11}", "Strategy", "W", "L", "T", "PnL"),
+        format!(
+            "{:<12} {:<22} {:>3} {:>3} {:>4} {:>11}",
+            "Symbol", "Strategy", "W", "L", "T", "PnL"
+        ),
         Style::default().fg(Color::DarkGray),
     )));
     for (idx, item) in state.strategy_items.iter().enumerate() {
         let stats = strategy_stats_for_item(&state.strategy_stats, item);
         let line = if let Some(s) = stats {
             format!(
-                "{:<24} {:>3} {:>3} {:>4} {:+11.4}",
-                item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
+                "{:<12} {:<22} {:>3} {:>3} {:>4} {:+11.4}",
+                selected_symbol, item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
             )
         } else {
-            format!("{:<24} {:>3} {:>3} {:>4} {:+11.4}", item, 0, 0, 0, 0.0)
+            format!(
+                "{:<12} {:<22} {:>3} {:>3} {:>4} {:+11.4}",
+                selected_symbol, item, 0, 0, 0, 0.0
+            )
         };
         let (prefix, style) = if idx == state.v2_grid_strategy_index {
             (
@@ -1137,6 +1145,7 @@ fn render_selector_popup(
     selected: usize,
     stats: Option<&HashMap<String, OrderHistoryStats>>,
     total_stats: Option<OrderHistoryStats>,
+    selected_symbol: Option<&str>,
 ) {
     let area = frame.area();
     let available_width = area.width.saturating_sub(2).max(1);
@@ -1179,6 +1188,17 @@ fn render_selector_popup(
 
     let mut lines: Vec<Line> = Vec::new();
     if stats.is_some() {
+        if let Some(symbol) = selected_symbol {
+            lines.push(Line::from(vec![
+                Span::styled("  Symbol: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    symbol,
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
         lines.push(Line::from(vec![Span::styled(
             "  Strategy           W    L    T    PnL",
             Style::default()

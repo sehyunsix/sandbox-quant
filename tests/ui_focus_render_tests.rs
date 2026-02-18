@@ -61,6 +61,7 @@ fn render_grid_popup_with_strategy_selector() {
         text.contains("MA(Fast 5/20)"),
         "strategy table should include selectable configured strategies"
     );
+    assert!(text.contains("BTCUSDT"), "strategy table should show selected symbol");
     assert!(
         text.contains("Strategy"),
         "grid strategy navigation hint should be visible"

@@ -1,4 +1,4 @@
-usㅂe sandbox_quant::model::tick::Tick;
+usqe sandbox_quant::model::tick::Tick;
 use sandbox_quant::runtime::strategy_registry::StrategyWorkerRegistry;
 use tokio::sync::mpsc;
 
