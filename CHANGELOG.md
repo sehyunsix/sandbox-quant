@@ -1,3 +1,9 @@
+## v0.8.0 - 2026-02-18
+
+- feat(ui): improve portfolio grid paneling and asset aggregation (98a9c08)
+- feat(runtime): enable concurrent multi-symbol strategy execution (379b8b7)
+- docs(rfc): define concurrent multi-strategy enable plan (ce6e621)
+
 ## v0.7.0 - 2026-02-18
 
 - docs(rfc): propose strategy lifecycle metrics display (983562b)
