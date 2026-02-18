@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
 use crate::event::{AppEvent, WsConnectionStatus};
@@ -836,7 +836,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(5),
-            Constraint::Length(6),
+            Constraint::Length(7),
             Constraint::Length(5),
             Constraint::Min(4),
         ])
@@ -860,71 +860,113 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     }
     frame.render_widget(Paragraph::new(asset_lines), chunks[0]);
 
-    let mut strategy_lines = vec![Line::from(Span::styled(
-        "Strategy Table",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-    ))];
     let selected_symbol = state
         .symbol_items
         .get(state.v2_grid_symbol_index)
         .map(String::as_str)
         .unwrap_or(state.symbol.as_str());
-    strategy_lines.push(Line::from(Span::styled(
-        format!(
-            "{:<12} {:<22} {:>3} {:>3} {:>4} {:>11}",
-            "Symbol", "Strategy", "W", "L", "T", "PnL"
-        ),
-        Style::default().fg(Color::DarkGray),
-    )));
-    for (idx, item) in state.strategy_items.iter().enumerate() {
-        let stats = strategy_stats_for_item(&state.strategy_stats, item);
-        let line = if let Some(s) = stats {
-            format!(
-                "{:<12} {:<22} {:>3} {:>3} {:>4} {:+11.4}",
-                selected_symbol, item, s.win_count, s.lose_count, s.trade_count, s.realized_pnl
-            )
-        } else {
-            format!(
-                "{:<12} {:<22} {:>3} {:>3} {:>4} {:+11.4}",
-                selected_symbol, item, 0, 0, 0, 0.0
-            )
-        };
-        let (prefix, style) = if idx == state.v2_grid_strategy_index {
-            (
-                "▶ ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            ("  ", Style::default().fg(Color::White))
-        };
-        strategy_lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(Color::Yellow)),
-            Span::styled(line, style),
-        ]));
+    let strategy_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(2)])
+        .split(chunks[1]);
+    let header = Row::new(vec![
+        Cell::from(" "),
+        Cell::from("Symbol"),
+        Cell::from("Strategy"),
+        Cell::from("W"),
+        Cell::from("L"),
+        Cell::from("T"),
+        Cell::from("PnL"),
+    ])
+    .style(Style::default().fg(Color::DarkGray));
+    let mut rows: Vec<Row> = state
+        .strategy_items
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let stats = strategy_stats_for_item(&state.strategy_stats, item);
+            let (w, l, t, pnl) = if let Some(s) = stats {
+                (
+                    s.win_count.to_string(),
+                    s.lose_count.to_string(),
+                    s.trade_count.to_string(),
+                    format!("{:+.4}", s.realized_pnl),
+                )
+            } else {
+                ("0".to_string(), "0".to_string(), "0".to_string(), "+0.0000".to_string())
+            };
+            let marker = if idx == state.v2_grid_strategy_index {
+                "▶"
+            } else {
+                " "
+            };
+            let mut row = Row::new(vec![
+                Cell::from(marker),
+                Cell::from(selected_symbol.to_string()),
+                Cell::from(item.clone()),
+                Cell::from(w),
+                Cell::from(l),
+                Cell::from(t),
+                Cell::from(pnl),
+            ]);
+            if idx == state.v2_grid_strategy_index {
+                row = row.style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            row
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(
+            Row::new(vec![
+                Cell::from(" "),
+                Cell::from("-"),
+                Cell::from("(no strategies configured)"),
+                Cell::from("-"),
+                Cell::from("-"),
+                Cell::from("-"),
+                Cell::from("-"),
+            ])
+            .style(Style::default().fg(Color::DarkGray)),
+        );
     }
-    if state.strategy_items.is_empty() {
-        strategy_lines.push(Line::from(Span::styled(
-            "(no strategies configured)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    strategy_lines.push(Line::from(vec![
-        Span::styled("Symbol: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            selected_symbol,
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  ([H/L] or [←/→])", Style::default().fg(Color::DarkGray)),
-    ]));
-    strategy_lines.push(Line::from(Span::styled(
-        "Use [N] new, [C] config, [J/K] strategy, [H/L] symbol, [Enter/F] run, [G/Esc] close.",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(Paragraph::new(strategy_lines), chunks[1]);
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(2),
+            Constraint::Length(14),
+            Constraint::Length(30),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(4),
+            Constraint::Length(11),
+        ],
+    )
+    .header(header)
+    .column_spacing(1);
+    frame.render_widget(table, strategy_chunks[0]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("Symbol: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    selected_symbol,
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  ([H/L] or [←/→])", Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(Span::styled(
+                "Use [N] new, [C] config, [J/K] strategy, [H/L] symbol, [Enter/F] run, [G/Esc] close.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]),
+        strategy_chunks[1],
+    );
 
     let heat = format!(
         "Risk/Rate Heatmap  global {}/{} | orders {}/{} | account {}/{} | mkt {}/{}",
