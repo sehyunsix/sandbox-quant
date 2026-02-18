@@ -389,7 +389,8 @@ async fn main() -> Result<()> {
     let ws_app_tx = app_tx.clone();
     let mut ws_shutdown = shutdown_rx.clone();
     tokio::spawn(async move {
-        let mut workers: HashMap<String, watch::Sender<bool>> = HashMap::new();
+        let mut workers: HashMap<String, (watch::Sender<bool>, watch::Sender<String>)> =
+            HashMap::new();
         loop {
             let target_instruments: HashSet<String> = ws_instruments_rx
                 .borrow()
@@ -400,7 +401,7 @@ async fn main() -> Result<()> {
             let existing: Vec<String> = workers.keys().cloned().collect();
             for symbol in existing {
                 if !target_instruments.contains(&symbol) {
-                    if let Some(stop_tx) = workers.remove(&symbol) {
+                    if let Some((stop_tx, _symbol_tx)) = workers.remove(&symbol) {
                         let _ = stop_tx.send(true);
                     }
                     let _ = ws_app_tx
@@ -415,9 +416,8 @@ async fn main() -> Result<()> {
                 }
                 let worker_symbol = symbol.clone();
                 let (symbol_tx, symbol_rx) = watch::channel(symbol.clone());
-                let _ = symbol_tx;
                 let (worker_stop_tx, worker_stop_rx) = watch::channel(false);
-                workers.insert(symbol.clone(), worker_stop_tx);
+                workers.insert(symbol.clone(), (worker_stop_tx, symbol_tx));
                 let worker_client = ws_client.clone();
                 let worker_tick_tx = ws_tick_tx.clone();
                 let worker_app_tx = ws_app_tx.clone();
@@ -448,7 +448,7 @@ async fn main() -> Result<()> {
             tokio::select! {
                 _ = ws_instruments_rx.changed() => {}
                 _ = ws_shutdown.changed() => {
-                    for (_, stop_tx) in workers {
+                    for (_, (stop_tx, _symbol_tx)) in workers {
                         let _ = stop_tx.send(true);
                     }
                     break;
