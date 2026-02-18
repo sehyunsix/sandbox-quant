@@ -19,7 +19,7 @@ use sandbox_quant::strategy::ma_crossover::MaCrossover;
 use sandbox_quant::strategy_catalog::{StrategyCatalog, StrategyProfile};
 use sandbox_quant::strategy_session;
 use sandbox_quant::ui;
-use sandbox_quant::ui::AppState;
+use sandbox_quant::ui::{AppState, GridTab};
 
 const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
@@ -1125,7 +1125,19 @@ async fn main() -> Result<()> {
                 }
                 if app_state.v2_grid_open {
                     match key.code {
+                        KeyCode::Char('1') => {
+                            app_state.v2_grid_tab = GridTab::Assets;
+                        }
+                        KeyCode::Char('2') => {
+                            app_state.v2_grid_tab = GridTab::Strategies;
+                        }
+                        KeyCode::Char('3') => {
+                            app_state.v2_grid_tab = GridTab::Risk;
+                        }
                         KeyCode::Tab => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             app_state.v2_grid_select_on_panel = !app_state.v2_grid_select_on_panel;
                             let panel_indices: Vec<usize> = app_state
                                 .strategy_item_active
@@ -1146,6 +1158,9 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             let panel_indices: Vec<usize> = app_state
                                 .strategy_item_active
                                 .iter()
@@ -1169,6 +1184,9 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             let panel_indices: Vec<usize> = app_state
                                 .strategy_item_active
                                 .iter()
@@ -1192,14 +1210,23 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             app_state.v2_grid_symbol_index =
                                 app_state.v2_grid_symbol_index.saturating_sub(1);
                         }
                         KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             app_state.v2_grid_symbol_index = (app_state.v2_grid_symbol_index + 1)
                                 .min(app_state.symbol_items.len().saturating_sub(1));
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             let base_index = app_state
                                 .v2_grid_strategy_index
                                 .min(strategy_catalog.len().saturating_sub(1));
@@ -1238,6 +1265,9 @@ async fn main() -> Result<()> {
                             );
                         }
                         KeyCode::Char('c') | KeyCode::Char('C') => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             if let Some(selected_label) = app_state
                                 .strategy_items
                                 .get(app_state.v2_grid_strategy_index)
@@ -1263,6 +1293,9 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             let selected_idx = app_state
                                 .v2_grid_strategy_index
                                 .min(strategy_catalog.len().saturating_sub(1));
@@ -1343,6 +1376,9 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Char('o') | KeyCode::Char('O') => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             if let Some(item) = app_state
                                 .strategy_items
                                 .get(app_state.v2_grid_strategy_index)
@@ -1399,6 +1435,9 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Enter | KeyCode::Char('f') | KeyCode::Char('F') => {
+                            if app_state.v2_grid_tab != GridTab::Strategies {
+                                continue;
+                            }
                             if let Some(item) = app_state
                                 .strategy_items
                                 .get(app_state.v2_grid_strategy_index)

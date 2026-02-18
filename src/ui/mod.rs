@@ -21,10 +21,19 @@ use crate::risk_module::RateBudgetSnapshot;
 
 use app_state_v2::AppStateV2;
 use chart::{FillMarker, PriceChart};
-use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
+use dashboard::{
+    KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar,
+};
 
 const MAX_LOG_MESSAGES: usize = 200;
 const MAX_FILL_MARKERS: usize = 200;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridTab {
+    Assets,
+    Strategies,
+    Risk,
+}
 
 pub struct AppState {
     pub symbol: String,
@@ -86,6 +95,7 @@ pub struct AppState {
     pub v2_grid_symbol_index: usize,
     pub v2_grid_strategy_index: usize,
     pub v2_grid_select_on_panel: bool,
+    pub v2_grid_tab: GridTab,
     pub history_rows: Vec<String>,
     pub history_bucket: order_store::HistoryBucket,
     pub last_applied_fee: String,
@@ -173,6 +183,7 @@ impl AppState {
             v2_grid_symbol_index: 0,
             v2_grid_strategy_index: 0,
             v2_grid_select_on_panel: true,
+            v2_grid_tab: GridTab::Strategies,
             history_rows: Vec::new(),
             history_bucket: order_store::HistoryBucket::Day,
             last_applied_fee: "---".to_string(),
@@ -609,6 +620,11 @@ impl AppState {
 }
 
 pub fn render(frame: &mut Frame, state: &AppState) {
+    if state.v2_grid_open {
+        render_v2_grid_popup(frame, state);
+        return;
+    }
+
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -734,8 +750,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         render_focus_popup(frame, state);
     } else if state.strategy_editor_open {
         render_strategy_editor_popup(frame, state);
-    } else if state.v2_grid_open {
-        render_v2_grid_popup(frame, state);
     }
 }
 
@@ -837,12 +851,7 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
 
 fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let popup = Rect {
-        x: area.x + 1,
-        y: area.y + 1,
-        width: area.width.saturating_sub(2).max(60),
-        height: area.height.saturating_sub(2).max(20),
-    };
+    let popup = area;
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .title(" Portfolio Grid (V2) ")
@@ -851,87 +860,243 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let heat_height: u16 = 2;
-    let rejection_min_height: u16 = 1;
-    let strategy_min_height: u16 = 16;
-    let asset_min_height: u16 = 3;
-    let desired_asset_height = (state.v2_state.assets.len() as u16).saturating_add(1);
-    let max_asset_height = inner
-        .height
-        .saturating_sub(strategy_min_height + heat_height + rejection_min_height);
-    let asset_height = desired_asset_height
-        .max(asset_min_height)
-        .min(max_asset_height.max(asset_min_height));
-
-    let chunks = Layout::default()
+    let root = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(asset_height),
-            Constraint::Min(strategy_min_height),
-            Constraint::Length(heat_height),
-            Constraint::Min(rejection_min_height),
-        ])
+        .constraints([Constraint::Length(2), Constraint::Min(1)])
         .split(inner);
+    let tab_area = root[0];
+    let body_area = root[1];
 
-    let asset_header = Row::new(vec![
-        Cell::from("Symbol"),
-        Cell::from("Qty"),
-        Cell::from("Price"),
-        Cell::from("RlzPnL"),
-        Cell::from("UnrPnL"),
-    ])
-    .style(Style::default().fg(Color::DarkGray));
-    let mut asset_rows: Vec<Row> = state
-        .v2_state
-        .assets
-        .iter()
-        .map(|a| {
-            let price = a
-                .last_price
-                .map(|v| format!("{:.2}", v))
-                .unwrap_or_else(|| "---".to_string());
-            let rlz = format!("{:+.4}", a.realized_pnl_usdt);
-            let unrlz = format!("{:+.4}", a.unrealized_pnl_usdt);
-            Row::new(vec![
-                Cell::from(a.symbol.clone()),
-                Cell::from(format!("{:.5}", a.position_qty)),
-                Cell::from(price),
-                Cell::from(rlz),
-                Cell::from(unrlz),
-            ])
-        })
-        .collect();
-    if asset_rows.is_empty() {
-        asset_rows.push(
-            Row::new(vec![
-                Cell::from("(no assets)"),
-                Cell::from("-"),
-                Cell::from("-"),
-                Cell::from("-"),
-                Cell::from("-"),
-            ])
-            .style(Style::default().fg(Color::DarkGray)),
-        );
-    }
-    let asset_table = Table::new(
-        asset_rows,
-        [
-            Constraint::Length(16),
-            Constraint::Length(12),
-            Constraint::Length(10),
-            Constraint::Length(10),
-            Constraint::Length(10),
-        ],
-    )
-    .header(asset_header)
-    .column_spacing(1)
-    .block(
-        Block::default()
-            .title(format!(" Asset Table | Total {} ", state.v2_state.assets.len()))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
+    let tab_span = |tab: GridTab, key: &str, label: &str| -> Span<'_> {
+        let selected = state.v2_grid_tab == tab;
+        Span::styled(
+            format!("[{} {}]", key, label),
+            if selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            tab_span(GridTab::Assets, "1", "Assets"),
+            Span::raw(" "),
+            tab_span(GridTab::Strategies, "2", "Strategies"),
+            Span::raw(" "),
+            tab_span(GridTab::Risk, "3", "Risk"),
+        ])),
+        tab_area,
     );
-    frame.render_widget(asset_table, chunks[0]);
+
+    let global_pressure =
+        state.rate_budget_global.used as f64 / (state.rate_budget_global.limit.max(1) as f64);
+    let orders_pressure =
+        state.rate_budget_orders.used as f64 / (state.rate_budget_orders.limit.max(1) as f64);
+    let account_pressure =
+        state.rate_budget_account.used as f64 / (state.rate_budget_account.limit.max(1) as f64);
+    let market_pressure = state.rate_budget_market_data.used as f64
+        / (state.rate_budget_market_data.limit.max(1) as f64);
+    let max_pressure = global_pressure
+        .max(orders_pressure)
+        .max(account_pressure)
+        .max(market_pressure);
+    let (risk_label, risk_color) = if max_pressure >= 0.90 {
+        ("CRIT", Color::Red)
+    } else if max_pressure >= 0.70 {
+        ("WARN", Color::Yellow)
+    } else {
+        ("OK", Color::Green)
+    };
+
+    if state.v2_grid_tab == GridTab::Assets {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(1)])
+            .split(body_area);
+        let asset_header = Row::new(vec![
+            Cell::from("Symbol"),
+            Cell::from("Qty"),
+            Cell::from("Price"),
+            Cell::from("RlzPnL"),
+            Cell::from("UnrPnL"),
+        ])
+        .style(Style::default().fg(Color::DarkGray));
+        let mut asset_rows: Vec<Row> = state
+            .v2_state
+            .assets
+            .iter()
+            .map(|a| {
+                let price = a
+                    .last_price
+                    .map(|v| format!("{:.2}", v))
+                    .unwrap_or_else(|| "---".to_string());
+                Row::new(vec![
+                    Cell::from(a.symbol.clone()),
+                    Cell::from(format!("{:.5}", a.position_qty)),
+                    Cell::from(price),
+                    Cell::from(format!("{:+.4}", a.realized_pnl_usdt)),
+                    Cell::from(format!("{:+.4}", a.unrealized_pnl_usdt)),
+                ])
+            })
+            .collect();
+        if asset_rows.is_empty() {
+            asset_rows.push(
+                Row::new(vec![
+                    Cell::from("(no assets)"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                ])
+                .style(Style::default().fg(Color::DarkGray)),
+            );
+        }
+        frame.render_widget(
+            Table::new(
+                asset_rows,
+                [
+                    Constraint::Length(16),
+                    Constraint::Length(12),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                ],
+            )
+            .header(asset_header)
+            .column_spacing(1)
+            .block(
+                Block::default()
+                    .title(format!(" Assets | Total {} ", state.v2_state.assets.len()))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[0],
+        );
+        frame.render_widget(
+            Paragraph::new("[1/2/3] tab  [G/Esc] close"),
+            chunks[1],
+        );
+        return;
+    }
+
+    if state.v2_grid_tab == GridTab::Risk {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Length(4),
+                Constraint::Min(3),
+                Constraint::Length(1),
+            ])
+            .split(body_area);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Risk: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    risk_label,
+                    Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  (70%=WARN, 90%=CRIT)", Style::default().fg(Color::DarkGray)),
+            ])),
+            chunks[0],
+        );
+        let risk_rows = vec![
+            Row::new(vec![
+                Cell::from("GLOBAL"),
+                Cell::from(format!(
+                    "{}/{}",
+                    state.rate_budget_global.used, state.rate_budget_global.limit
+                )),
+                Cell::from(format!("{}ms", state.rate_budget_global.reset_in_ms)),
+            ]),
+            Row::new(vec![
+                Cell::from("ORDERS"),
+                Cell::from(format!(
+                    "{}/{}",
+                    state.rate_budget_orders.used, state.rate_budget_orders.limit
+                )),
+                Cell::from(format!("{}ms", state.rate_budget_orders.reset_in_ms)),
+            ]),
+            Row::new(vec![
+                Cell::from("ACCOUNT"),
+                Cell::from(format!(
+                    "{}/{}",
+                    state.rate_budget_account.used, state.rate_budget_account.limit
+                )),
+                Cell::from(format!("{}ms", state.rate_budget_account.reset_in_ms)),
+            ]),
+            Row::new(vec![
+                Cell::from("MARKET"),
+                Cell::from(format!(
+                    "{}/{}",
+                    state.rate_budget_market_data.used, state.rate_budget_market_data.limit
+                )),
+                Cell::from(format!("{}ms", state.rate_budget_market_data.reset_in_ms)),
+            ]),
+        ];
+        frame.render_widget(
+            Table::new(
+                risk_rows,
+                [
+                    Constraint::Length(10),
+                    Constraint::Length(16),
+                    Constraint::Length(12),
+                ],
+            )
+            .header(Row::new(vec![
+                Cell::from("Group"),
+                Cell::from("Used/Limit"),
+                Cell::from("Reset In"),
+            ]))
+            .column_spacing(1)
+            .block(
+                Block::default()
+                    .title(" Risk Budgets ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[1],
+        );
+        let recent_rejections: Vec<&String> = state
+            .log_messages
+            .iter()
+            .filter(|m| m.contains("[ERR] Rejected"))
+            .rev()
+            .take(20)
+            .collect();
+        let mut lines = vec![Line::from(Span::styled(
+            "Recent Rejections",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ))];
+        for msg in recent_rejections.into_iter().rev() {
+            lines.push(Line::from(Span::styled(
+                msg.as_str(),
+                Style::default().fg(Color::Red),
+            )));
+        }
+        if lines.len() == 1 {
+            lines.push(Line::from(Span::styled(
+                "(no rejections yet)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[2],
+        );
+        frame.render_widget(
+            Paragraph::new("[1/2/3] tab  [G/Esc] close"),
+            chunks[3],
+        );
+        return;
+    }
 
     let selected_symbol = state
         .symbol_items
@@ -940,8 +1105,13 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         .unwrap_or(state.symbol.as_str());
     let strategy_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(1)])
-        .split(chunks[1]);
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Min(12),
+            Constraint::Length(1),
+        ])
+        .split(body_area);
 
     let mut on_indices: Vec<usize> = Vec::new();
     let mut off_indices: Vec<usize> = Vec::new();
@@ -954,7 +1124,75 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
     }
     let on_weight = on_indices.len().max(1) as u32;
     let off_weight = off_indices.len().max(1) as u32;
-    let strategy_area = strategy_chunks[1];
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Risk: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                risk_label,
+                Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  GLOBAL ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(
+                    "{}/{}",
+                    state.rate_budget_global.used, state.rate_budget_global.limit
+                ),
+                Style::default().fg(if global_pressure >= 0.9 {
+                    Color::Red
+                } else if global_pressure >= 0.7 {
+                    Color::Yellow
+                } else {
+                    Color::Cyan
+                }),
+            ),
+            Span::styled("  ORD ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(
+                    "{}/{}",
+                    state.rate_budget_orders.used, state.rate_budget_orders.limit
+                ),
+                Style::default().fg(if orders_pressure >= 0.9 {
+                    Color::Red
+                } else if orders_pressure >= 0.7 {
+                    Color::Yellow
+                } else {
+                    Color::Cyan
+                }),
+            ),
+            Span::styled("  ACC ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(
+                    "{}/{}",
+                    state.rate_budget_account.used, state.rate_budget_account.limit
+                ),
+                Style::default().fg(if account_pressure >= 0.9 {
+                    Color::Red
+                } else if account_pressure >= 0.7 {
+                    Color::Yellow
+                } else {
+                    Color::Cyan
+                }),
+            ),
+            Span::styled("  MKT ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(
+                    "{}/{}",
+                    state.rate_budget_market_data.used, state.rate_budget_market_data.limit
+                ),
+                Style::default().fg(if market_pressure >= 0.9 {
+                    Color::Red
+                } else if market_pressure >= 0.7 {
+                    Color::Yellow
+                } else {
+                    Color::Cyan
+                }),
+            ),
+        ])),
+        strategy_chunks[0],
+    );
+
+    let strategy_area = strategy_chunks[2];
     let min_panel_height: u16 = 6;
     let total_height = strategy_area.height;
     let (on_height, off_height) = if total_height >= min_panel_height.saturating_mul(2) {
@@ -1032,7 +1270,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)),
     );
-    frame.render_widget(total_table, strategy_chunks[0]);
+    frame.render_widget(total_table, strategy_chunks[1]);
 
     let render_strategy_window =
         |frame: &mut Frame,
@@ -1174,6 +1412,10 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
                     .borders(Borders::ALL)
                     .border_style(if selected_panel {
                         Style::default().fg(Color::Yellow)
+                    } else if risk_label == "CRIT" {
+                        Style::default().fg(Color::Red)
+                    } else if risk_label == "WARN" {
+                        Style::default().fg(Color::Yellow)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     }),
@@ -1209,59 +1451,12 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "  [Tab]panel [N]new [C]cfg [O]on/off [X]del [J/K]strategy [H/L]symbol [Enter/F]run [G/Esc]close",
+                "  [1/2/3]tab [Tab]panel [N]new [C]cfg [O]on/off [X]del [J/K]strategy [H/L]symbol [Enter/F]run [G/Esc]close",
                 Style::default().fg(Color::DarkGray),
             ),
         ])),
-        strategy_chunks[2],
+        strategy_chunks[3],
     );
-
-    let heat = format!(
-        "Risk/Rate Heatmap  global {}/{} | orders {}/{} | account {}/{} | mkt {}/{}",
-        state.rate_budget_global.used,
-        state.rate_budget_global.limit,
-        state.rate_budget_orders.used,
-        state.rate_budget_orders.limit,
-        state.rate_budget_account.used,
-        state.rate_budget_account.limit,
-        state.rate_budget_market_data.used,
-        state.rate_budget_market_data.limit
-    );
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Risk/Rate Heatmap",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            )),
-            Line::from(heat),
-        ]),
-        chunks[2],
-    );
-
-    let mut rejection_lines = vec![Line::from(Span::styled(
-        "Rejection Stream",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-    ))];
-    let recent_rejections: Vec<&String> = state
-        .log_messages
-        .iter()
-        .filter(|m| m.contains("[ERR] Rejected"))
-        .rev()
-        .take(20)
-        .collect();
-    for msg in recent_rejections.into_iter().rev() {
-        rejection_lines.push(Line::from(Span::styled(
-            msg.as_str(),
-            Style::default().fg(Color::Red),
-        )));
-    }
-    if rejection_lines.len() == 1 {
-        rejection_lines.push(Line::from(Span::styled(
-            "(no rejections yet)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    frame.render_widget(Paragraph::new(rejection_lines), chunks[3]);
 }
 
 fn format_running_time(total_running_ms: u64) -> String {
