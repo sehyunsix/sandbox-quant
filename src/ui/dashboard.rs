@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use chrono::TimeZone;
 use ratatui::{
     buffer::Buffer,
@@ -17,11 +15,6 @@ use crate::order_manager::OrderUpdate;
 pub struct PositionPanel<'a> {
     position: &'a Position,
     current_price: Option<f64>,
-    balances: &'a HashMap<String, f64>,
-    initial_equity_usdt: Option<f64>,
-    current_equity_usdt: Option<f64>,
-    history_trade_count: u32,
-    history_realized_pnl: f64,
     last_applied_fee: &'a str,
 }
 
@@ -29,21 +22,11 @@ impl<'a> PositionPanel<'a> {
     pub fn new(
         position: &'a Position,
         current_price: Option<f64>,
-        balances: &'a HashMap<String, f64>,
-        initial_equity_usdt: Option<f64>,
-        current_equity_usdt: Option<f64>,
-        history_trade_count: u32,
-        history_realized_pnl: f64,
         last_applied_fee: &'a str,
     ) -> Self {
         Self {
             position,
             current_price,
-            balances,
-            initial_equity_usdt,
-            current_equity_usdt,
-            history_trade_count,
-            history_realized_pnl,
             last_applied_fee,
         }
     }
@@ -77,89 +60,7 @@ impl Widget for PositionPanel<'_> {
             .map(|p| format!("{:.2}", p))
             .unwrap_or_else(|| "---".to_string());
 
-        let usdt_bal = self.balances.get("USDT").copied().unwrap_or(0.0);
-        let btc_bal = self.balances.get("BTC").copied().unwrap_or(0.0);
-        let equity_text = self
-            .current_equity_usdt
-            .map(|v| format!("{:.2}", v))
-            .unwrap_or_else(|| "---".to_string());
-        let equity_delta = match (self.current_equity_usdt, self.initial_equity_usdt) {
-            (Some(cur), Some(init)) => Some(cur - init),
-            _ => None,
-        };
-        let equity_delta_text = equity_delta
-            .map(|v| format!("{:+.2}", v))
-            .unwrap_or_else(|| "---".to_string());
-        let equity_roi_pct = match (self.current_equity_usdt, self.initial_equity_usdt) {
-            (Some(cur), Some(init)) if init.abs() > f64::EPSILON => {
-                Some((cur - init) / init * 100.0)
-            }
-            _ => None,
-        };
-        let equity_roi_text = equity_roi_pct
-            .map(|v| format!("{:+.2}%", v))
-            .unwrap_or_else(|| "---".to_string());
-        // Always prefer persisted history stats so a fresh fill does not make
-        // the panel appear "reset" to session-local counters.
-        let display_realized_pnl = if self.history_trade_count > 0 {
-            self.history_realized_pnl
-        } else {
-            self.position.realized_pnl
-        };
-        let display_trade_count = if self.history_trade_count > 0 {
-            self.history_trade_count
-        } else {
-            self.position.trade_count
-        };
-        let total_pnl = display_realized_pnl + self.position.unrealized_pnl;
-        let total_pnl_text = format!("{:+.4}", total_pnl);
-
         let lines = vec![
-            Line::from(vec![
-                Span::styled("USDT: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:.2}", usdt_bal),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("BTC:  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:.5}", btc_bal),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Eq$:  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(equity_text, Style::default().fg(Color::Cyan)),
-            ]),
-            Line::from(vec![
-                Span::styled("EqΔ:  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    equity_delta_text,
-                    Style::default().fg(equity_delta.map(pnl_color).unwrap_or(Color::White)),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("TotalPnL:", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!(" {}", total_pnl_text),
-                    Style::default().fg(pnl_color(total_pnl)),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("EqROI:", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!(" {}", equity_roi_text),
-                    Style::default().fg(equity_roi_pct.map(pnl_color).unwrap_or(Color::White)),
-                ),
-            ]),
-            Line::from(Span::styled(
-                "──────────────────────",
-                Style::default().fg(Color::DarkGray),
-            )),
             Line::from(vec![
                 Span::styled("Price:", Style::default().fg(Color::DarkGray)),
                 Span::styled(
@@ -198,20 +99,6 @@ impl Widget for PositionPanel<'_> {
                 ),
             ]),
             Line::from(vec![
-                Span::styled("RlzPL:", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!(" {:.4}", display_realized_pnl),
-                    Style::default().fg(pnl_color(display_realized_pnl)),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Trades:", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!(" {}", display_trade_count),
-                    Style::default().fg(Color::White),
-                ),
-            ]),
-            Line::from(vec![
                 Span::styled("Fee:  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(self.last_applied_fee, Style::default().fg(Color::LightBlue)),
             ]),
@@ -222,6 +109,89 @@ impl Widget for PositionPanel<'_> {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
+        Paragraph::new(lines).block(block).render(area, buf);
+    }
+}
+
+pub struct StrategyMetricsPanel<'a> {
+    strategy_label: &'a str,
+    trade_count: u32,
+    win_count: u32,
+    lose_count: u32,
+    realized_pnl: f64,
+}
+
+impl<'a> StrategyMetricsPanel<'a> {
+    pub fn new(
+        strategy_label: &'a str,
+        trade_count: u32,
+        win_count: u32,
+        lose_count: u32,
+        realized_pnl: f64,
+    ) -> Self {
+        Self {
+            strategy_label,
+            trade_count,
+            win_count,
+            lose_count,
+            realized_pnl,
+        }
+    }
+}
+
+impl Widget for StrategyMetricsPanel<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let pnl_color = if self.realized_pnl > 0.0 {
+            Color::Green
+        } else if self.realized_pnl < 0.0 {
+            Color::Red
+        } else {
+            Color::White
+        };
+        let win_rate = if self.trade_count == 0 {
+            0.0
+        } else {
+            (self.win_count as f64 / self.trade_count as f64) * 100.0
+        };
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("Strategy: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    self.strategy_label,
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Trades: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(self.trade_count.to_string(), Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Win: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(self.win_count.to_string(), Style::default().fg(Color::Green)),
+            ]),
+            Line::from(vec![
+                Span::styled("Lose: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(self.lose_count.to_string(), Style::default().fg(Color::Red)),
+            ]),
+            Line::from(vec![
+                Span::styled("WinRate: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:.1}%", win_rate), Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::styled("RlzPL: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:+.4}", self.realized_pnl),
+                    Style::default().fg(pnl_color),
+                ),
+            ]),
+        ];
+
+        let block = Block::default()
+            .title(" Strategy Metrics ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
         Paragraph::new(lines).block(block).render(area, buf);
     }
 }

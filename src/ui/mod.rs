@@ -22,7 +22,7 @@ use crate::risk_module::RateBudgetSnapshot;
 use ui_projection::UiProjection;
 use ui_projection::AssetEntry;
 use chart::{FillMarker, PriceChart};
-use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
+use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar, StrategyMetricsPanel};
 
 const MAX_LOG_MESSAGES: usize = 200;
 const MAX_FILL_MARKERS: usize = 200;
@@ -1024,6 +1024,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(40), Constraint::Length(24)])
         .split(outer[1]);
+    let selected_strategy_stats = strategy_stats_for_item(&state.strategy_stats, &state.strategy_label)
+        .cloned()
+        .unwrap_or_default();
 
     // Price chart (candles + in-progress candle)
     let current_price = state.last_price();
@@ -1036,19 +1039,28 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         main_area[0],
     );
 
-    // Position panel (with current price and balances)
+    // Right panels: Position (symbol scope) + Strategy metrics (strategy scope).
+    let right_panels = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(9), Constraint::Length(8)])
+        .split(main_area[1]);
     frame.render_widget(
         PositionPanel::new(
             &state.position,
             current_price,
-            &state.balances,
-            state.initial_equity_usdt,
-            state.current_equity_usdt,
-            state.history_trade_count,
-            state.history_realized_pnl,
             &state.last_applied_fee,
         ),
-        main_area[1],
+        right_panels[0],
+    );
+    frame.render_widget(
+        StrategyMetricsPanel::new(
+            &state.strategy_label,
+            selected_strategy_stats.trade_count,
+            selected_strategy_stats.win_count,
+            selected_strategy_stats.lose_count,
+            selected_strategy_stats.realized_pnl,
+        ),
+        right_panels[1],
     );
 
     // Order log
@@ -1058,10 +1070,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.last_order,
             state.fast_sma,
             state.slow_sma,
-            state.history_trade_count,
-            state.history_win_count,
-            state.history_lose_count,
-            state.history_realized_pnl,
+            selected_strategy_stats.trade_count,
+            selected_strategy_stats.win_count,
+            selected_strategy_stats.lose_count,
+            selected_strategy_stats.realized_pnl,
         ),
         outer[2],
     );
@@ -1146,6 +1158,9 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
 
     let focus_symbol = state.focus_symbol().unwrap_or(&state.symbol);
     let focus_strategy = state.focus_strategy_id().unwrap_or(&state.strategy_label);
+    let focus_strategy_stats = strategy_stats_for_item(&state.strategy_stats, focus_strategy)
+        .cloned()
+        .unwrap_or_default();
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -1185,18 +1200,27 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
             .slow_sma(state.slow_sma),
         main_cols[0],
     );
+    let focus_right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(8)])
+        .split(main_cols[1]);
     frame.render_widget(
         PositionPanel::new(
             &state.position,
             state.last_price(),
-            &state.balances,
-            state.initial_equity_usdt,
-            state.current_equity_usdt,
-            state.history_trade_count,
-            state.history_realized_pnl,
             &state.last_applied_fee,
         ),
-        main_cols[1],
+        focus_right[0],
+    );
+    frame.render_widget(
+        StrategyMetricsPanel::new(
+            focus_strategy,
+            focus_strategy_stats.trade_count,
+            focus_strategy_stats.win_count,
+            focus_strategy_stats.lose_count,
+            focus_strategy_stats.realized_pnl,
+        ),
+        focus_right[1],
     );
 
     frame.render_widget(
