@@ -1,3 +1,10 @@
+## v0.10.0 - 2026-02-18
+
+- fix(pnl): aggregate strategy stats across symbols for grid totals (088cf42)
+- fix(network): record fill latency when filled arrives without submitted (3e453c0)
+- fix(ws): stop false symbol-change reconnect loop and dedupe connected logs (3da83d9)
+- feat(grid): add System Log tab on key 5 (d1cd2e3)
+
 ## v0.9.1 - 2026-02-18
 
 - fix(ui): remove remaining v2 grid field references in main loop (8255a90)
