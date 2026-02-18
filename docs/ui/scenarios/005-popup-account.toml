@@ -1,0 +1,17 @@
+id = "popup-account"
+title = "Account Popup"
+width = 180
+height = 48
+profiles = ["full"]
+
+[[step]]
+type = "key"
+value = "a"
+
+[[step]]
+type = "assert_text"
+value = "Account Assets"
+
+[[step]]
+type = "snapshot"
+path = "docs/ui/screenshots/popup-account.txt"

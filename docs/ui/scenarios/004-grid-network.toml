@@ -1,0 +1,21 @@
+id = "grid-network"
+title = "Portfolio Grid - Network Tab"
+width = 220
+height = 56
+profiles = ["smoke", "full"]
+
+[[step]]
+type = "key"
+value = "g"
+
+[[step]]
+type = "key"
+value = "4"
+
+[[step]]
+type = "assert_text"
+value = "Network Metrics"
+
+[[step]]
+type = "snapshot"
+path = "docs/ui/screenshots/grid-network.txt"
