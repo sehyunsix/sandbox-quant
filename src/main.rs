@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, watch};
 use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
-use sandbox_quant::event::AppEvent;
+use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
 use sandbox_quant::model::position::Position;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
@@ -91,6 +91,29 @@ fn normalize_instrument_label(label: &str) -> String {
     } else {
         symbol
     }
+}
+
+fn build_asset_pnl_snapshot(
+    order_managers: &HashMap<String, OrderManager>,
+    realized_pnl_by_symbol: &HashMap<String, f64>,
+) -> HashMap<String, AssetPnlEntry> {
+    order_managers
+        .iter()
+        .map(|(symbol, mgr)| {
+            (
+                symbol.clone(),
+                AssetPnlEntry {
+                    position_qty: mgr.position().qty,
+                    realized_pnl_usdt: realized_pnl_by_symbol.get(symbol).copied().unwrap_or(0.0),
+                    unrealized_pnl_usdt: mgr.position().unrealized_pnl,
+                },
+            )
+        })
+        .collect()
+}
+
+fn app_log(level: LogLevel, domain: LogDomain, event: &'static str, msg: impl Into<String>) -> AppEvent {
+    AppEvent::LogRecord(LogRecord::new(level, domain, event, msg))
 }
 
 fn enabled_instruments(
@@ -330,13 +353,23 @@ async fn main() -> Result<()> {
         Ok(()) => {
             tracing::info!("Binance demo ping OK");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage("Binance demo ping OK".to_string()))
+                .send(app_log(
+                    LogLevel::Info,
+                    LogDomain::System,
+                    "rest.ping.ok",
+                    "Binance demo ping OK",
+                ))
                 .await;
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to ping Binance demo");
             let _ = ping_app_tx
-                .send(AppEvent::LogMessage(format!("[ERR] Ping failed: {}", e)))
+                .send(app_log(
+                    LogLevel::Error,
+                    LogDomain::System,
+                    "rest.ping.fail",
+                    format!("Ping failed: {}", e),
+                ))
                 .await;
         }
     }
@@ -355,20 +388,24 @@ async fn main() -> Result<()> {
         Ok(candles) => {
             tracing::info!(count = candles.len(), "Fetched historical klines");
             let _ = app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "Loaded {} historical klines",
-                    candles.len()
-                )))
+                .send(app_log(
+                    LogLevel::Info,
+                    LogDomain::System,
+                    "kline.preload.ok",
+                    format!("Loaded {} historical klines", candles.len()),
+                ))
                 .await;
             candles
         }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to fetch klines, starting with empty chart");
             let _ = app_tx
-                .send(AppEvent::LogMessage(format!(
-                    "[WARN] Kline fetch failed: {}",
-                    e
-                )))
+                .send(app_log(
+                    LogLevel::Warn,
+                    LogDomain::System,
+                    "kline.preload.fail",
+                    format!("Kline fetch failed: {}", e),
+                ))
                 .await;
             Vec::new()
         }
@@ -399,7 +436,12 @@ async fn main() -> Result<()> {
                         let _ = stop_tx.send(true);
                     }
                     let _ = ws_app_tx
-                        .send(AppEvent::LogMessage(format!("WS unsubscribed: {}", symbol)))
+                        .send(app_log(
+                            LogLevel::Info,
+                            LogDomain::Ws,
+                            "worker.unsubscribed",
+                            format!("WS unsubscribed: {}", symbol),
+                        ))
                         .await;
                 }
             }
@@ -427,15 +469,22 @@ async fn main() -> Result<()> {
                     {
                         tracing::warn!(symbol = %worker_symbol, error = %e, "WS worker failed");
                         let _ = worker_app_tx
-                            .send(AppEvent::LogMessage(format!(
-                                "[WARN] WS worker failed ({}): {}",
-                                worker_symbol, e
-                            )))
+                            .send(app_log(
+                                LogLevel::Warn,
+                                LogDomain::Ws,
+                                "worker.fail",
+                                format!("WS worker failed ({}): {}", worker_symbol, e),
+                            ))
                             .await;
                     }
                 });
                 let _ = ws_app_tx
-                    .send(AppEvent::LogMessage(format!("WS subscribed: {}", symbol)))
+                    .send(app_log(
+                        LogLevel::Info,
+                        LogDomain::Ws,
+                        "worker.subscribed",
+                        format!("WS subscribed: {}", symbol),
+                    ))
                     .await;
             }
 
@@ -476,9 +525,11 @@ async fn main() -> Result<()> {
             })
             .collect();
         let mut order_managers: HashMap<String, OrderManager> = HashMap::new();
+        let mut realized_pnl_by_symbol: HashMap<String, f64> = HashMap::new();
         let (risk_eval_tx, mut risk_eval_rx) = mpsc::channel::<(Signal, String, String)>(64);
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
+        let mut last_asset_pnl_emit_ms: u64 = 0;
 
         let emit_rate_snapshot = |tx: &mpsc::Sender<AppEvent>, mgr: &OrderManager| {
             let tx = tx.clone();
@@ -518,37 +569,52 @@ async fn main() -> Result<()> {
                 }
                 Err(e) => {
                     let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!(
-                            "[WARN] Balance fetch failed: {}",
-                            e
-                        )))
+                        .send(app_log(
+                            LogLevel::Warn,
+                            LogDomain::Portfolio,
+                            "balance.fetch.fail",
+                            format!("Balance fetch failed: {}", e),
+                        ))
                         .await;
                 }
             }
             match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
                 Ok(history) => {
+                    realized_pnl_by_symbol.insert(selected_symbol.clone(), history.stats.realized_pnl);
                     let _ = strat_app_tx
                         .send(AppEvent::OrderHistoryUpdate(history))
                         .await;
                 }
                 Err(e) => {
                     let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!(
-                            "[WARN] Order history fetch failed: {}",
-                            e
-                        )))
+                        .send(app_log(
+                            LogLevel::Warn,
+                            LogDomain::Order,
+                            "history.fetch.fail",
+                            format!("Order history fetch failed: {}", e),
+                        ))
                         .await;
                 }
             }
             emit_rate_snapshot(&strat_app_tx, mgr);
         }
+        let _ = strat_app_tx
+            .send(AppEvent::AssetPnlUpdate {
+                by_symbol: build_asset_pnl_snapshot(&order_managers, &realized_pnl_by_symbol),
+            })
+            .await;
 
         let _ = strat_app_tx
-            .send(AppEvent::LogMessage(format!(
-                "Strategies loaded: {} | usdt={}",
-                profiles_by_tag.len(),
-                strat_config.strategy.order_amount_usdt,
-            )))
+            .send(app_log(
+                LogLevel::Info,
+                LogDomain::Strategy,
+                "catalog.loaded",
+                format!(
+                    "Strategies loaded: {} | usdt={}",
+                    profiles_by_tag.len(),
+                    strat_config.strategy.order_amount_usdt,
+                ),
+            ))
             .await;
 
         for price in &strat_historical_closes {
@@ -591,6 +657,18 @@ async fn main() -> Result<()> {
                             emit_rate_snapshot(&strat_app_tx, mgr);
                         }
                     }
+                    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    if now_ms.saturating_sub(last_asset_pnl_emit_ms) >= 300 {
+                        last_asset_pnl_emit_ms = now_ms;
+                        let _ = strat_app_tx
+                            .send(AppEvent::AssetPnlUpdate {
+                                by_symbol: build_asset_pnl_snapshot(
+                                    &order_managers,
+                                    &realized_pnl_by_symbol,
+                                ),
+                            })
+                            .await;
+                    }
 
                     for (source_tag, profile) in &profiles_by_tag {
                         if !enabled_strategy_tags.contains(source_tag) {
@@ -619,6 +697,7 @@ async fn main() -> Result<()> {
                             let _ = strat_app_tx
                                 .send(AppEvent::StrategySignal {
                                     signal: signal.clone(),
+                                    symbol: tick_symbol.clone(),
                                     source_tag: source_tag.clone(),
                                     price: Some(tick.price),
                                     timestamp_ms: tick.timestamp_ms,
@@ -637,6 +716,7 @@ async fn main() -> Result<()> {
                     let _ = strat_app_tx
                         .send(AppEvent::StrategySignal {
                             signal: signal.clone(),
+                            symbol: selected_symbol.clone(),
                             source_tag: "mnl".to_string(),
                             price: None,
                             timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
@@ -663,6 +743,7 @@ async fn main() -> Result<()> {
                             ),
                         );
                     }
+                    let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&instrument) {
                         match mgr.submit_order(signal, &source_tag).await {
                             Ok(Some(ref update)) => {
@@ -672,16 +753,22 @@ async fn main() -> Result<()> {
                                         .await;
                                     match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
                                         Ok(history) => {
+                                            realized_pnl_by_symbol.insert(
+                                                instrument.clone(),
+                                                history.stats.realized_pnl,
+                                            );
                                             let _ = strat_app_tx
                                                 .send(AppEvent::OrderHistoryUpdate(history))
                                                 .await;
                                         }
                                         Err(e) => {
                                             let _ = strat_app_tx
-                                                .send(AppEvent::LogMessage(format!(
-                                                    "[WARN] Order history refresh failed: {}",
-                                                    e
-                                                )))
+                                                .send(app_log(
+                                                    LogLevel::Warn,
+                                                    LogDomain::Order,
+                                                    "history.refresh.fail",
+                                                    format!("Order history refresh failed: {}", e),
+                                                ))
                                                 .await;
                                         }
                                     }
@@ -690,6 +777,7 @@ async fn main() -> Result<()> {
                                             .send(AppEvent::BalanceUpdate(mgr.balances().clone()))
                                             .await;
                                     }
+                                    emit_asset_snapshot = true;
                                     emit_rate_snapshot(&strat_app_tx, mgr);
                                 }
                             }
@@ -698,6 +786,16 @@ async fn main() -> Result<()> {
                                 let _ = strat_app_tx.send(AppEvent::Error(e.to_string())).await;
                             }
                         }
+                    }
+                    if emit_asset_snapshot {
+                        let _ = strat_app_tx
+                            .send(AppEvent::AssetPnlUpdate {
+                                by_symbol: build_asset_pnl_snapshot(
+                                    &order_managers,
+                                    &realized_pnl_by_symbol,
+                                ),
+                            })
+                            .await;
                     }
                 }
                 _ = order_history_sync.tick() => {
@@ -710,6 +808,8 @@ async fn main() -> Result<()> {
                                         .send(AppEvent::OrderHistoryUpdate(history.clone()))
                                         .await;
                                 }
+                                realized_pnl_by_symbol
+                                    .insert(instrument.clone(), history.stats.realized_pnl);
                                 for (tag, s) in history.strategy_stats {
                                     let slot = aggregated_stats.entry(tag).or_default();
                                     slot.trade_count = slot.trade_count.saturating_add(s.trade_count);
@@ -720,10 +820,15 @@ async fn main() -> Result<()> {
                             }
                             Err(e) => {
                                 let _ = strat_app_tx
-                                    .send(AppEvent::LogMessage(format!(
-                                        "[WARN] Periodic order history sync failed ({}): {}",
-                                        instrument, e
-                                    )))
+                                    .send(app_log(
+                                        LogLevel::Warn,
+                                        LogDomain::Order,
+                                        "history.sync.fail",
+                                        format!(
+                                            "Periodic order history sync failed ({}): {}",
+                                            instrument, e
+                                        ),
+                                    ))
                                     .await;
                             }
                         }
@@ -732,6 +837,14 @@ async fn main() -> Result<()> {
                     let _ = strat_app_tx
                         .send(AppEvent::StrategyStatsUpdate {
                             strategy_stats: aggregated_stats,
+                        })
+                        .await;
+                    let _ = strat_app_tx
+                        .send(AppEvent::AssetPnlUpdate {
+                            by_symbol: build_asset_pnl_snapshot(
+                                &order_managers,
+                                &realized_pnl_by_symbol,
+                            ),
                         })
                         .await;
                 }
@@ -751,25 +864,47 @@ async fn main() -> Result<()> {
                         );
                     }
                     let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!("Switched symbol to {}", selected_symbol)))
+                        .send(app_log(
+                            LogLevel::Info,
+                            LogDomain::Ui,
+                            "symbol.switch",
+                            format!("Switched symbol to {}", selected_symbol),
+                        ))
                         .await;
+                    let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
                         if let Ok(history) = mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                            realized_pnl_by_symbol
+                                .insert(selected_symbol.clone(), history.stats.realized_pnl);
                             let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                            emit_asset_snapshot = true;
                         }
                         if let Ok(balances) = mgr.refresh_balances().await {
                             let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                            emit_asset_snapshot = true;
                         }
                         emit_rate_snapshot(&strat_app_tx, mgr);
+                    }
+                    if emit_asset_snapshot {
+                        let _ = strat_app_tx
+                            .send(AppEvent::AssetPnlUpdate {
+                                by_symbol: build_asset_pnl_snapshot(
+                                    &order_managers,
+                                    &realized_pnl_by_symbol,
+                                ),
+                            })
+                            .await;
                     }
                 }
                 _ = strategy_profile_rx.changed() => {
                     selected_profile = strategy_profile_rx.borrow().clone();
                     let _ = strat_app_tx
-                        .send(AppEvent::LogMessage(format!(
-                            "Strategy switched: {}",
-                            selected_profile.label
-                        )))
+                        .send(app_log(
+                            LogLevel::Info,
+                            LogDomain::Strategy,
+                            "strategy.switch",
+                            format!("Strategy switched: {}", selected_profile.label),
+                        ))
                         .await;
                 }
                 _ = strategy_profiles_rx.changed() => {

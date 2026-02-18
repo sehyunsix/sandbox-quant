@@ -1,4 +1,4 @@
-use sandbox_quant::event::{AppEvent, WsConnectionStatus};
+use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord, WsConnectionStatus};
 use sandbox_quant::model::order::OrderSide;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::order_manager::OrderHistoryStats;
@@ -14,6 +14,7 @@ fn app_state_rebuilds_projection_after_events() {
     s.current_equity_usdt = Some(1000.0);
     s.apply(AppEvent::StrategySignal {
         signal: Signal::Buy,
+        symbol: "BTCUSDT".to_string(),
         source_tag: "cfg".to_string(),
         price: Some(100.0),
         timestamp_ms: 1,
@@ -97,6 +98,7 @@ fn app_state_tracks_last_strategy_signal_by_source_tag() {
     let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
     s.apply(AppEvent::StrategySignal {
         signal: Signal::Sell,
+        symbol: "BTCUSDT".to_string(),
         source_tag: "cfg".to_string(),
         price: Some(43210.5),
         timestamp_ms: 777,
@@ -135,6 +137,7 @@ fn app_state_tracks_fill_latency_without_submitted_event() {
     let signal_ts = (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(150);
     s.apply(AppEvent::StrategySignal {
         signal: Signal::Buy,
+        symbol: "BTCUSDT".to_string(),
         source_tag: "cfg".to_string(),
         price: Some(43000.0),
         timestamp_ms: signal_ts,
@@ -174,4 +177,45 @@ fn app_state_applies_strategy_stats_update_event() {
     let cfg = s.strategy_stats.get("cfg").expect("cfg stats should be present");
     assert_eq!(cfg.trade_count, 4);
     assert!((cfg.realized_pnl - 12.5).abs() < f64::EPSILON);
+}
+
+#[test]
+/// Verifies asset pnl event propagation:
+/// asset table backing map should update on AssetPnlUpdate events.
+fn app_state_applies_asset_pnl_update_event() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    let mut by_symbol = std::collections::HashMap::new();
+    by_symbol.insert(
+        "ETHUSDT".to_string(),
+        AssetPnlEntry {
+            position_qty: 0.4,
+            realized_pnl_usdt: 3.0,
+            unrealized_pnl_usdt: 0.9,
+        },
+    );
+    s.apply(AppEvent::AssetPnlUpdate { by_symbol });
+    let eth = s
+        .asset_pnl_by_symbol
+        .get("ETHUSDT")
+        .expect("ETHUSDT pnl should be present");
+    assert!((eth.realized_pnl_usdt - 3.0).abs() < f64::EPSILON);
+}
+
+#[test]
+/// Verifies structured log event compatibility:
+/// LogRecord should be accepted and rendered into legacy system log lines.
+fn app_state_accepts_log_record_event() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    let mut r = LogRecord::new(
+        LogLevel::Warn,
+        LogDomain::Ws,
+        "connect.fail",
+        "attempt=3 timeout",
+    );
+    r.symbol = Some("BTCUSDT".to_string());
+    s.apply(AppEvent::LogRecord(r));
+    let last = s.log_messages.last().expect("expected formatted log message");
+    assert!(last.contains("[WARN]"));
+    assert!(last.contains("ws.connect.fail"));
+    assert!(last.contains("BTCUSDT"));
 }

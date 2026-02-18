@@ -37,6 +37,10 @@ fn render_focus_popup_when_enabled() {
         text.contains("Focus View (Drill-down)"),
         "focus popup title should be present in frame buffer"
     );
+    assert!(
+        text.contains("Strategy Metrics"),
+        "focus popup should show strategy metrics panel"
+    );
 }
 
 #[test]

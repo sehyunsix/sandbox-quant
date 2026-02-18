@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::event::{AppEvent, WsConnectionStatus};
+use crate::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord, WsConnectionStatus};
 use crate::model::candle::{Candle, CandleBuilder};
 use crate::model::order::{Fill, OrderSide};
 use crate::model::position::Position;
@@ -22,7 +22,7 @@ use crate::risk_module::RateBudgetSnapshot;
 use ui_projection::UiProjection;
 use ui_projection::AssetEntry;
 use chart::{FillMarker, PriceChart};
-use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar};
+use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar, StrategyMetricsPanel};
 
 const MAX_LOG_MESSAGES: usize = 200;
 const MAX_FILL_MARKERS: usize = 200;
@@ -80,6 +80,7 @@ pub struct AppState {
     pub paused: bool,
     pub tick_count: u64,
     pub log_messages: Vec<String>,
+    pub log_records: Vec<LogRecord>,
     pub balances: HashMap<String, f64>,
     pub initial_equity_usdt: Option<f64>,
     pub current_equity_usdt: Option<f64>,
@@ -89,6 +90,7 @@ pub struct AppState {
     pub history_win_count: u32,
     pub history_lose_count: u32,
     pub history_realized_pnl: f64,
+    pub asset_pnl_by_symbol: HashMap<String, AssetPnlEntry>,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub history_fills: Vec<OrderHistoryFill>,
     pub last_price_update_ms: Option<u64>,
@@ -168,6 +170,7 @@ impl AppState {
             paused: false,
             tick_count: 0,
             log_messages: Vec::new(),
+            log_records: Vec::new(),
             balances: HashMap::new(),
             initial_equity_usdt: None,
             current_equity_usdt: None,
@@ -177,6 +180,7 @@ impl AppState {
             history_win_count: 0,
             history_lose_count: 0,
             history_realized_pnl: 0.0,
+            asset_pnl_by_symbol: HashMap::new(),
             strategy_stats: HashMap::new(),
             history_fills: Vec::new(),
             last_price_update_ms: None,
@@ -267,6 +271,14 @@ impl AppState {
         if self.log_messages.len() > MAX_LOG_MESSAGES {
             self.log_messages.remove(0);
         }
+    }
+
+    pub fn push_log_record(&mut self, record: LogRecord) {
+        self.log_records.push(record.clone());
+        if self.log_records.len() > MAX_LOG_MESSAGES {
+            self.log_records.remove(0);
+        }
+        self.push_log(format_log_record_compact(&record));
     }
 
     fn push_latency_sample(samples: &mut Vec<u64>, value: u64) {
@@ -610,16 +622,38 @@ impl AppState {
             }
             AppEvent::StrategySignal {
                 ref signal,
+                symbol,
                 source_tag,
                 price,
                 timestamp_ms,
             } => {
                 self.last_signal = Some(signal.clone());
+                let source_tag = source_tag.to_ascii_lowercase();
                 match signal {
                     Signal::Buy { .. } => {
-                        self.push_log("Signal: BUY".to_string());
+                        let should_emit = self
+                            .strategy_last_event_by_tag
+                            .get(&source_tag)
+                            .map(|e| e.side != OrderSide::Buy || timestamp_ms.saturating_sub(e.timestamp_ms) >= 1000)
+                            .unwrap_or(true);
+                        if should_emit {
+                            let mut record = LogRecord::new(
+                                LogLevel::Info,
+                                LogDomain::Strategy,
+                                "signal.emit",
+                                format!(
+                                    "side=BUY price={}",
+                                    price
+                                        .map(|v| format!("{:.4}", v))
+                                        .unwrap_or_else(|| "-".to_string())
+                                ),
+                            );
+                            record.symbol = Some(symbol.clone());
+                            record.strategy_tag = Some(source_tag.clone());
+                            self.push_log_record(record);
+                        }
                         self.strategy_last_event_by_tag.insert(
-                            source_tag.to_ascii_lowercase(),
+                            source_tag.clone(),
                             StrategyLastEvent {
                                 side: OrderSide::Buy,
                                 price,
@@ -629,9 +663,29 @@ impl AppState {
                         );
                     }
                     Signal::Sell { .. } => {
-                        self.push_log("Signal: SELL".to_string());
+                        let should_emit = self
+                            .strategy_last_event_by_tag
+                            .get(&source_tag)
+                            .map(|e| e.side != OrderSide::Sell || timestamp_ms.saturating_sub(e.timestamp_ms) >= 1000)
+                            .unwrap_or(true);
+                        if should_emit {
+                            let mut record = LogRecord::new(
+                                LogLevel::Info,
+                                LogDomain::Strategy,
+                                "signal.emit",
+                                format!(
+                                    "side=SELL price={}",
+                                    price
+                                        .map(|v| format!("{:.4}", v))
+                                        .unwrap_or_else(|| "-".to_string())
+                                ),
+                            );
+                            record.symbol = Some(symbol.clone());
+                            record.strategy_tag = Some(source_tag.clone());
+                            self.push_log_record(record);
+                        }
                         self.strategy_last_event_by_tag.insert(
-                            source_tag.to_ascii_lowercase(),
+                            source_tag.clone(),
                             StrategyLastEvent {
                                 side: OrderSide::Sell,
                                 price,
@@ -707,10 +761,19 @@ impl AppState {
                         if self.fill_markers.len() > MAX_FILL_MARKERS {
                             self.fill_markers.remove(0);
                         }
-                        self.push_log(format!(
-                            "FILLED {} {} ({}) @ {:.2}",
-                            side, client_order_id, intent_id, avg_price
-                        ));
+                        let mut record = LogRecord::new(
+                            LogLevel::Info,
+                            LogDomain::Order,
+                            "fill.received",
+                            format!(
+                                "side={} client_order_id={} intent_id={} avg_price={:.2}",
+                                side, client_order_id, intent_id, avg_price
+                            ),
+                        );
+                        record.symbol = Some(self.symbol.clone());
+                        record.strategy_tag =
+                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                        self.push_log_record(record);
                     }
                     OrderUpdate::Submitted {
                         intent_id,
@@ -721,10 +784,19 @@ impl AppState {
                         self.network_pending_submit_ms_by_intent
                             .insert(intent_id.clone(), now_ms);
                         self.refresh_equity_usdt();
-                        self.push_log(format!(
-                            "Submitted {} (id: {}, {})",
-                            client_order_id, server_order_id, intent_id
-                        ));
+                        let mut record = LogRecord::new(
+                            LogLevel::Info,
+                            LogDomain::Order,
+                            "submit.accepted",
+                            format!(
+                                "client_order_id={} server_order_id={} intent_id={}",
+                                client_order_id, server_order_id, intent_id
+                            ),
+                        );
+                        record.symbol = Some(self.symbol.clone());
+                        record.strategy_tag =
+                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                        self.push_log_record(record);
                     }
                     OrderUpdate::Rejected {
                         intent_id,
@@ -732,10 +804,19 @@ impl AppState {
                         reason_code,
                         reason,
                     } => {
-                        self.push_log(format!(
-                            "[ERR] Rejected {} ({}) [{}]: {}",
-                            client_order_id, intent_id, reason_code, reason
-                        ));
+                        let mut record = LogRecord::new(
+                            LogLevel::Error,
+                            LogDomain::Order,
+                            "reject.received",
+                            format!(
+                                "client_order_id={} intent_id={} reason_code={} reason={}",
+                                client_order_id, intent_id, reason_code, reason
+                            ),
+                        );
+                        record.symbol = Some(self.symbol.clone());
+                        record.strategy_tag =
+                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                        self.push_log_record(record);
                     }
                 }
                 self.last_order = Some(update.clone());
@@ -743,7 +824,6 @@ impl AppState {
             AppEvent::WsStatus(ref status) => match status {
                 WsConnectionStatus::Connected => {
                     self.ws_connected = true;
-                    self.push_log("WebSocket Connected".to_string());
                 }
                 WsConnectionStatus::Disconnected => {
                     self.ws_connected = false;
@@ -864,6 +944,10 @@ impl AppState {
                 rebuild_projection = true;
                 self.strategy_stats = strategy_stats;
             }
+            AppEvent::AssetPnlUpdate { by_symbol } => {
+                rebuild_projection = true;
+                self.asset_pnl_by_symbol = by_symbol;
+            }
             AppEvent::RiskRateSnapshot {
                 global,
                 orders,
@@ -877,6 +961,9 @@ impl AppState {
             }
             AppEvent::TickDropped => {
                 self.network_tick_drop_count = self.network_tick_drop_count.saturating_add(1);
+            }
+            AppEvent::LogRecord(record) => {
+                self.push_log_record(record);
             }
             AppEvent::LogMessage(msg) => {
                 self.push_log(msg);
@@ -937,6 +1024,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(40), Constraint::Length(24)])
         .split(outer[1]);
+    let selected_strategy_stats = strategy_stats_for_item(&state.strategy_stats, &state.strategy_label)
+        .cloned()
+        .unwrap_or_default();
 
     // Price chart (candles + in-progress candle)
     let current_price = state.last_price();
@@ -949,19 +1039,28 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         main_area[0],
     );
 
-    // Position panel (with current price and balances)
+    // Right panels: Position (symbol scope) + Strategy metrics (strategy scope).
+    let right_panels = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(9), Constraint::Length(8)])
+        .split(main_area[1]);
     frame.render_widget(
         PositionPanel::new(
             &state.position,
             current_price,
-            &state.balances,
-            state.initial_equity_usdt,
-            state.current_equity_usdt,
-            state.history_trade_count,
-            state.history_realized_pnl,
             &state.last_applied_fee,
         ),
-        main_area[1],
+        right_panels[0],
+    );
+    frame.render_widget(
+        StrategyMetricsPanel::new(
+            &state.strategy_label,
+            selected_strategy_stats.trade_count,
+            selected_strategy_stats.win_count,
+            selected_strategy_stats.lose_count,
+            selected_strategy_stats.realized_pnl,
+        ),
+        right_panels[1],
     );
 
     // Order log
@@ -971,10 +1070,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.last_order,
             state.fast_sma,
             state.slow_sma,
-            state.history_trade_count,
-            state.history_win_count,
-            state.history_lose_count,
-            state.history_realized_pnl,
+            selected_strategy_stats.trade_count,
+            selected_strategy_stats.win_count,
+            selected_strategy_stats.lose_count,
+            selected_strategy_stats.realized_pnl,
         ),
         outer[2],
     );
@@ -1059,6 +1158,9 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
 
     let focus_symbol = state.focus_symbol().unwrap_or(&state.symbol);
     let focus_strategy = state.focus_strategy_id().unwrap_or(&state.strategy_label);
+    let focus_strategy_stats = strategy_stats_for_item(&state.strategy_stats, focus_strategy)
+        .cloned()
+        .unwrap_or_default();
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -1098,18 +1200,27 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
             .slow_sma(state.slow_sma),
         main_cols[0],
     );
+    let focus_right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(8)])
+        .split(main_cols[1]);
     frame.render_widget(
         PositionPanel::new(
             &state.position,
             state.last_price(),
-            &state.balances,
-            state.initial_equity_usdt,
-            state.current_equity_usdt,
-            state.history_trade_count,
-            state.history_realized_pnl,
             &state.last_applied_fee,
         ),
-        main_cols[1],
+        focus_right[0],
+    );
+    frame.render_widget(
+        StrategyMetricsPanel::new(
+            focus_strategy,
+            focus_strategy_stats.trade_count,
+            focus_strategy_stats.win_count,
+            focus_strategy_stats.lose_count,
+            focus_strategy_stats.realized_pnl,
+        ),
+        focus_right[1],
     );
 
     frame.render_widget(
@@ -1336,7 +1447,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
         let recent_rejections: Vec<&String> = state
             .log_messages
             .iter()
-            .filter(|m| m.contains("[ERR] Rejected"))
+            .filter(|m| m.contains("order.reject.received"))
             .rev()
             .take(20)
             .collect();
@@ -2334,6 +2445,30 @@ fn parse_source_tag_from_client_order_id(client_order_id: &str) -> Option<&str> 
     } else {
         Some(source_tag)
     }
+}
+
+fn format_log_record_compact(record: &LogRecord) -> String {
+    let level = match record.level {
+        LogLevel::Debug => "DEBUG",
+        LogLevel::Info => "INFO",
+        LogLevel::Warn => "WARN",
+        LogLevel::Error => "ERR",
+    };
+    let domain = match record.domain {
+        LogDomain::Ws => "ws",
+        LogDomain::Strategy => "strategy",
+        LogDomain::Risk => "risk",
+        LogDomain::Order => "order",
+        LogDomain::Portfolio => "portfolio",
+        LogDomain::Ui => "ui",
+        LogDomain::System => "system",
+    };
+    let symbol = record.symbol.as_deref().unwrap_or("-");
+    let strategy = record.strategy_tag.as_deref().unwrap_or("-");
+    format!(
+        "[{}] {}.{} {} {} {}",
+        level, domain, record.event, symbol, strategy, record.msg
+    )
 }
 
 fn subtract_stats(total: &OrderHistoryStats, used: &OrderHistoryStats) -> OrderHistoryStats {
