@@ -60,6 +60,10 @@ Edit `config/default.toml` as needed.
 
 Project docs can be viewed in a browser in two ways.
 
+0. Published API docs (`docs.rs`)
+
+- https://docs.rs/sandbox-quant
+
 1. Markdown docs portal (`mdBook`)
 
 ```bash
