@@ -1,3 +1,15 @@
+## v0.6.0 - 2026-02-18
+
+- docs(rfc): require fork-on-edit for strategy config changes (643b7a0)
+- fix(ui): enlarge strategy table area and columns (90f5b3c)
+- refactor(ui): render strategy table with ratatui Table (667fb21)
+- fix(ui): show symbol in strategy views (ad9fa18)
+- chore(ui): improve strategy table readability (1db7600)
+- fix(ui): allow symbol selection in strategy config editor (f82b260)
+- feat(ui): show symbol in strategy grid table (48cf506)
+- fix: persist strategy session across restarts (83f2587)
+- feat(ui): support strategy create and config edit from grid (5870d26)
+
 ## v0.5.0 - 2026-02-17
 
 - feat(ui): select strategy from grid and jump to focus (a259e47)
