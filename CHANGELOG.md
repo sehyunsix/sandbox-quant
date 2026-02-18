@@ -1,3 +1,7 @@
+## v0.9.1 - 2026-02-18
+
+- fix(ui): remove remaining v2 grid field references in main loop (8255a90)
+
 ## v0.9.0 - 2026-02-18
 
 - feat(ui): add portfolio grid 3-tab layout and risk-focused views (c0c8894)
