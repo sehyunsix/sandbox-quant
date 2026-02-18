@@ -2,7 +2,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1644" height="888" viewBox="0 0 1644 888">
 <rect x="0" y="0" width="1644" height="888" fill="#0f111a"/>
 <g font-family="Menlo, Monaco, 'Courier New', monospace" font-size="14" fill="#d8dee9">
-<text x="12" y="18" xml:space="preserve"> sandbox-quant | BTCUSDT | MA(Config) | 1M | CONNECTED |  STRAT ON  | updated:22:35:12 lat:180ms | order-updated:22:35:11 lat:850ms                                                 </text>
+<text x="12" y="18" xml:space="preserve"> sandbox-quant | BTCUSDT | MA(Config) | 1M | CONNECTED |  STRAT ON  | updated:22:39:53 lat:180ms | order-updated:22:39:52 lat:850ms                                                 </text>
 <text x="12" y="36" xml:space="preserve">┌ BTCUSDT | 67191.95 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐┌ Position ────────────┐</text>
 <text x="12" y="54" xml:space="preserve">│  67312.1                                                                                                                                                 ││USDT: 0.00            │</text>
 <text x="12" y="72" xml:space="preserve">│                                                                                                                                                          ││BTC:  0.00000         │</text>

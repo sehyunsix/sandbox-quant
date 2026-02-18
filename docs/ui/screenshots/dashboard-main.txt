@@ -1,4 +1,4 @@
- sandbox-quant | BTCUSDT | MA(Config) | 1M | CONNECTED |  STRAT ON  | updated:22:35:12 lat:180ms | order-updated:22:35:11 lat:850ms                                                 
+ sandbox-quant | BTCUSDT | MA(Config) | 1M | CONNECTED |  STRAT ON  | updated:22:39:53 lat:180ms | order-updated:22:39:52 lat:850ms                                                 
 ┌ BTCUSDT | 67191.95 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐┌ Position ────────────┐
 │  67312.1                                                                                                                                                 ││USDT: 0.00            │
 │                                                                                                                                                          ││BTC:  0.00000         │

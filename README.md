@@ -1,34 +1,53 @@
 # sandbox-quant
 
-Rust-native Binance Spot Testnet trading prototype.
+Terminal-based Rust trading sandbox for Binance Spot Testnet.
 
-It provides real-time market streaming, strategy-driven order execution, cumulative trade history, and a terminal dashboard for monitoring positions and performance.
+It provides real-time market streaming, strategy-driven order execution, cumulative trade history, and a `ratatui` dashboard for monitoring positions and performance.
 
-## Main Features
+## What Is sandbox-quant?
 
 ![cargo run multi terminal snapshot](docs/assets/cargo-run-multi-terminal-snapshot.png)
 
-- Real-time market + strategy loop
-  - Streams Binance Spot Testnet trades through WebSocket.
-  - Runs MA crossover logic and executes orders via REST.
-- Terminal trading dashboard (ratatui)
-  - Live chart, position panel, order/signal panel, order history, and system log.
-  - Fast keyboard control for trading and navigation.
-- Historical trade persistence and recovery
-  - Persists orders/trades to SQLite.
-  - Automatically backfills missing history and continues with incremental sync.
-- Stable cumulative performance stats
-  - Keeps cumulative `Trades/W/L/PnL` from resetting on transient API issues.
-  - Uses history-first stats for consistent dashboard values.
-- Strategy and manual-performance breakdown
-  - Strategy selector shows per-strategy `W/L/T/PnL`.
-  - Includes `MANUAL(rest)` and `TOTAL` rows for attribution.
-- Chart fill markers
-  - Shows historical `B/S` markers mapped by symbol/timeframe.
-  - Keeps marker display simple (`B/S` only).
-- Operational robustness
-  - Handles Binance time drift errors (`-1021`) with time sync + retry.
-  - Reduces high request-weight behavior to avoid rate-limit pressure.
+- Real-time market + strategy loop (WebSocket + REST)
+- Multi-view terminal dashboard (chart, positions, orders, history, logs)
+- Persistent history with SQLite and incremental recovery
+- Per-strategy and manual-performance attribution (`W/L/T/PnL`)
+- Fill markers and strategy-aware UI telemetry
+- Operational safeguards for time sync and rate-limit pressure
+
+## Quick Start
+
+1. Create `.env`:
+
+```bash
+cp .env.example .env
+```
+
+2. Set Binance Spot Testnet credentials:
+
+```bash
+BINANCE_API_KEY=your_testnet_api_key_here
+BINANCE_API_SECRET=your_testnet_api_secret_here
+```
+
+3. Run app:
+
+```bash
+cargo run --bin sandbox-quant
+```
+
+## Key Controls
+
+| Area | Keys | Description |
+|---|---|---|
+| App | `Q` | Quit |
+| Strategy Runtime | `P` / `R` | Pause / Resume |
+| Manual Orders | `B` / `S` | Manual Buy / Sell |
+| Selector | `T` / `Y` | Open Symbol / Strategy Selector |
+| Timeframe | `0/1/H/D/W/M` | `1s/1m/1h/1d/1w/1M` |
+| Grid | `G` | Open/Close Portfolio Grid |
+
+## UI Overview
 
 <!-- UI_DOCS:START -->
 ### UI Docs (Auto)
@@ -51,105 +70,54 @@ It provides real-time market streaming, strategy-driven order execution, cumulat
 
 <!-- UI_DOCS:END -->
 
-## Quick Start
+## Configuration
 
-1. Create environment file:
+Edit `config/default.toml` for runtime behavior.
 
-```bash
-cp .env.example .env
-```
+Common knobs:
+- Strategy parameters (`fast/slow/cooldown`)
+- Order sizing and risk limits
+- Default symbols and market behavior
 
-2. Set your Binance Spot Testnet credentials in `.env`:
+## Documentation Links
 
-```bash
-BINANCE_API_KEY=your_testnet_api_key_here
-BINANCE_API_SECRET=your_testnet_api_secret_here
-```
-
-3. Run:
-
-```bash
-cargo run --bin sandbox-quant
-```
-
-## Runtime Configuration
-
-Edit `config/default.toml` as needed.
-
-## Docs In Browser
-
-Project docs can be viewed in a browser in two ways.
-
-0. Published API docs (`docs.rs`)
-
-- https://docs.rs/sandbox-quant
-
-1. Markdown docs portal (`mdBook`)
+- API Docs (`docs.rs`): https://docs.rs/sandbox-quant
+- Markdown Book (`docs-site`):
 
 ```bash
 cargo install mdbook
 mdbook serve docs-site --open
 ```
 
-2. Rust API docs (`rustdoc`)
+- Rustdoc local:
 
 ```bash
 cargo doc --no-deps --open
 ```
 
-## Usage
+## Development Workflow
 
-Main keys:
+Useful commands:
 
-- `Q`: quit
-- `P`: pause strategy
-- `R`: resume strategy
-- `B`: manual buy
-- `S`: manual sell
-- `T`: open symbol selector
-- `Y`: open strategy selector
-- `0/1/H/D/W/M`: switch timeframe (`1s/1m/1h/1d/1w/1M`)
+```bash
+cargo test -q
+cargo run --bin ui-docs
+cargo run --bin ui_docs -- scenario grid-network
+```
 
-Example flow:
+Testing references:
+- `TESTING.md`
+- `tests/`
 
-1. Start with `cargo run --bin sandbox-quant`
-2. Press `Y`, choose a strategy with arrows, then Enter
-3. Press `B` for a manual buy
-4. Verify `B/S` markers on chart
-5. Open `Y` again to review strategy stats and `MANUAL(rest)`
+## Appendix: Run Capture
 
-## Run Capture
-
-### Terminal Screenshot
-
-The image below summarizes a real `cargo run --bin sandbox-quant` session:
+Terminal screenshot from a real run:
 
 ![cargo run terminal snapshot](docs/assets/cargo-run-terminal-snapshot.png)
 
-### Raw Output
-
-Captured run output:
-
+Captured raw output:
 - `docs/assets/cargo-run-output.txt`
 
 Note:
 - This is a TUI app. Running in non-interactive output redirection contexts can fail terminal initialization.
 - For normal usage, run directly in an interactive terminal.
-
-## Project Layout
-
-```text
-sandbox-quant/
-├── Cargo.toml
-├── config/default.toml
-├── docs/assets/
-│   ├── cargo-run-terminal-snapshot.svg
-│   └── cargo-run-output.txt
-├── src/
-│   ├── main.rs
-│   ├── order_manager.rs
-│   ├── order_store.rs
-│   ├── ui/
-│   └── ...
-└── TESTING.md
-```
