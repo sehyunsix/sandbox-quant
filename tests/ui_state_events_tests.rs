@@ -14,6 +14,7 @@ fn app_state_rebuilds_projection_after_events() {
     s.current_equity_usdt = Some(1000.0);
     s.apply(AppEvent::StrategySignal {
         signal: Signal::Buy,
+        symbol: "BTCUSDT".to_string(),
         source_tag: "cfg".to_string(),
         price: Some(100.0),
         timestamp_ms: 1,
@@ -97,6 +98,7 @@ fn app_state_tracks_last_strategy_signal_by_source_tag() {
     let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
     s.apply(AppEvent::StrategySignal {
         signal: Signal::Sell,
+        symbol: "BTCUSDT".to_string(),
         source_tag: "cfg".to_string(),
         price: Some(43210.5),
         timestamp_ms: 777,
@@ -135,6 +137,7 @@ fn app_state_tracks_fill_latency_without_submitted_event() {
     let signal_ts = (chrono::Utc::now().timestamp_millis() as u64).saturating_sub(150);
     s.apply(AppEvent::StrategySignal {
         signal: Signal::Buy,
+        symbol: "BTCUSDT".to_string(),
         source_tag: "cfg".to_string(),
         price: Some(43000.0),
         timestamp_ms: signal_ts,

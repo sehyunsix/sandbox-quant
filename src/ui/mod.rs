@@ -622,16 +622,38 @@ impl AppState {
             }
             AppEvent::StrategySignal {
                 ref signal,
+                symbol,
                 source_tag,
                 price,
                 timestamp_ms,
             } => {
                 self.last_signal = Some(signal.clone());
+                let source_tag = source_tag.to_ascii_lowercase();
                 match signal {
                     Signal::Buy { .. } => {
-                        self.push_log("Signal: BUY".to_string());
+                        let should_emit = self
+                            .strategy_last_event_by_tag
+                            .get(&source_tag)
+                            .map(|e| e.side != OrderSide::Buy || timestamp_ms.saturating_sub(e.timestamp_ms) >= 1000)
+                            .unwrap_or(true);
+                        if should_emit {
+                            let mut record = LogRecord::new(
+                                LogLevel::Info,
+                                LogDomain::Strategy,
+                                "signal.emit",
+                                format!(
+                                    "side=BUY price={}",
+                                    price
+                                        .map(|v| format!("{:.4}", v))
+                                        .unwrap_or_else(|| "-".to_string())
+                                ),
+                            );
+                            record.symbol = Some(symbol.clone());
+                            record.strategy_tag = Some(source_tag.clone());
+                            self.push_log_record(record);
+                        }
                         self.strategy_last_event_by_tag.insert(
-                            source_tag.to_ascii_lowercase(),
+                            source_tag.clone(),
                             StrategyLastEvent {
                                 side: OrderSide::Buy,
                                 price,
@@ -641,9 +663,29 @@ impl AppState {
                         );
                     }
                     Signal::Sell { .. } => {
-                        self.push_log("Signal: SELL".to_string());
+                        let should_emit = self
+                            .strategy_last_event_by_tag
+                            .get(&source_tag)
+                            .map(|e| e.side != OrderSide::Sell || timestamp_ms.saturating_sub(e.timestamp_ms) >= 1000)
+                            .unwrap_or(true);
+                        if should_emit {
+                            let mut record = LogRecord::new(
+                                LogLevel::Info,
+                                LogDomain::Strategy,
+                                "signal.emit",
+                                format!(
+                                    "side=SELL price={}",
+                                    price
+                                        .map(|v| format!("{:.4}", v))
+                                        .unwrap_or_else(|| "-".to_string())
+                                ),
+                            );
+                            record.symbol = Some(symbol.clone());
+                            record.strategy_tag = Some(source_tag.clone());
+                            self.push_log_record(record);
+                        }
                         self.strategy_last_event_by_tag.insert(
-                            source_tag.to_ascii_lowercase(),
+                            source_tag.clone(),
                             StrategyLastEvent {
                                 side: OrderSide::Sell,
                                 price,
@@ -719,10 +761,19 @@ impl AppState {
                         if self.fill_markers.len() > MAX_FILL_MARKERS {
                             self.fill_markers.remove(0);
                         }
-                        self.push_log(format!(
-                            "FILLED {} {} ({}) @ {:.2}",
-                            side, client_order_id, intent_id, avg_price
-                        ));
+                        let mut record = LogRecord::new(
+                            LogLevel::Info,
+                            LogDomain::Order,
+                            "fill.received",
+                            format!(
+                                "side={} client_order_id={} intent_id={} avg_price={:.2}",
+                                side, client_order_id, intent_id, avg_price
+                            ),
+                        );
+                        record.symbol = Some(self.symbol.clone());
+                        record.strategy_tag =
+                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                        self.push_log_record(record);
                     }
                     OrderUpdate::Submitted {
                         intent_id,
@@ -733,10 +784,19 @@ impl AppState {
                         self.network_pending_submit_ms_by_intent
                             .insert(intent_id.clone(), now_ms);
                         self.refresh_equity_usdt();
-                        self.push_log(format!(
-                            "Submitted {} (id: {}, {})",
-                            client_order_id, server_order_id, intent_id
-                        ));
+                        let mut record = LogRecord::new(
+                            LogLevel::Info,
+                            LogDomain::Order,
+                            "submit.accepted",
+                            format!(
+                                "client_order_id={} server_order_id={} intent_id={}",
+                                client_order_id, server_order_id, intent_id
+                            ),
+                        );
+                        record.symbol = Some(self.symbol.clone());
+                        record.strategy_tag =
+                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                        self.push_log_record(record);
                     }
                     OrderUpdate::Rejected {
                         intent_id,
@@ -744,10 +804,19 @@ impl AppState {
                         reason_code,
                         reason,
                     } => {
-                        self.push_log(format!(
-                            "[ERR] Rejected {} ({}) [{}]: {}",
-                            client_order_id, intent_id, reason_code, reason
-                        ));
+                        let mut record = LogRecord::new(
+                            LogLevel::Error,
+                            LogDomain::Order,
+                            "reject.received",
+                            format!(
+                                "client_order_id={} intent_id={} reason_code={} reason={}",
+                                client_order_id, intent_id, reason_code, reason
+                            ),
+                        );
+                        record.symbol = Some(self.symbol.clone());
+                        record.strategy_tag =
+                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                        self.push_log_record(record);
                     }
                 }
                 self.last_order = Some(update.clone());
@@ -755,7 +824,6 @@ impl AppState {
             AppEvent::WsStatus(ref status) => match status {
                 WsConnectionStatus::Connected => {
                     self.ws_connected = true;
-                    self.push_log("WebSocket Connected".to_string());
                 }
                 WsConnectionStatus::Disconnected => {
                     self.ws_connected = false;
@@ -1355,7 +1423,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
         let recent_rejections: Vec<&String> = state
             .log_messages
             .iter()
-            .filter(|m| m.contains("[ERR] Rejected"))
+            .filter(|m| m.contains("order.reject.received"))
             .rev()
             .take(20)
             .collect();

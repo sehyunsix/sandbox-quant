@@ -18,6 +18,7 @@ pub enum AppEvent {
     MarketTick(Tick),
     StrategySignal {
         signal: Signal,
+        symbol: String,
         source_tag: String,
         price: Option<f64>,
         timestamp_ms: u64,

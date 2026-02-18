@@ -697,6 +697,7 @@ async fn main() -> Result<()> {
                             let _ = strat_app_tx
                                 .send(AppEvent::StrategySignal {
                                     signal: signal.clone(),
+                                    symbol: tick_symbol.clone(),
                                     source_tag: source_tag.clone(),
                                     price: Some(tick.price),
                                     timestamp_ms: tick.timestamp_ms,
@@ -715,6 +716,7 @@ async fn main() -> Result<()> {
                     let _ = strat_app_tx
                         .send(AppEvent::StrategySignal {
                             signal: signal.clone(),
+                            symbol: selected_symbol.clone(),
                             source_tag: "mnl".to_string(),
                             price: None,
                             timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
