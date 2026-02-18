@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct StrategyProfile {
     pub label: String,
     pub source_tag: String,
+    #[serde(default)]
+    pub symbol: String,
     pub fast_period: usize,
     pub slow_period: usize,
     pub min_ticks_between_signals: u64,
@@ -26,12 +28,19 @@ pub struct StrategyCatalog {
 }
 
 impl StrategyCatalog {
-    pub fn new(config_fast: usize, config_slow: usize, min_ticks_between_signals: u64) -> Self {
+    pub fn new(
+        default_symbol: &str,
+        config_fast: usize,
+        config_slow: usize,
+        min_ticks_between_signals: u64,
+    ) -> Self {
+        let symbol = default_symbol.trim().to_ascii_uppercase();
         Self {
             profiles: vec![
                 StrategyProfile {
                     label: "MA(Config)".to_string(),
                     source_tag: "cfg".to_string(),
+                    symbol: symbol.clone(),
                     fast_period: config_fast,
                     slow_period: config_slow,
                     min_ticks_between_signals,
@@ -39,6 +48,7 @@ impl StrategyCatalog {
                 StrategyProfile {
                     label: "MA(Fast 5/20)".to_string(),
                     source_tag: "fst".to_string(),
+                    symbol: symbol.clone(),
                     fast_period: 5,
                     slow_period: 20,
                     min_ticks_between_signals,
@@ -46,6 +56,7 @@ impl StrategyCatalog {
                 StrategyProfile {
                     label: "MA(Slow 20/60)".to_string(),
                     source_tag: "slw".to_string(),
+                    symbol,
                     fast_period: 20,
                     slow_period: 60,
                     min_ticks_between_signals,
@@ -57,6 +68,10 @@ impl StrategyCatalog {
 
     pub fn labels(&self) -> Vec<String> {
         self.profiles.iter().map(|p| p.label.clone()).collect()
+    }
+
+    pub fn symbols(&self) -> Vec<String> {
+        self.profiles.iter().map(|p| p.symbol.clone()).collect()
     }
 
     pub fn len(&self) -> usize {
@@ -80,13 +95,24 @@ impl StrategyCatalog {
     }
 
     pub fn from_profiles(
-        profiles: Vec<StrategyProfile>,
+        mut profiles: Vec<StrategyProfile>,
+        default_symbol: &str,
         config_fast: usize,
         config_slow: usize,
         min_ticks_between_signals: u64,
     ) -> Self {
         if profiles.is_empty() {
-            return Self::new(config_fast, config_slow, min_ticks_between_signals);
+            return Self::new(
+                default_symbol,
+                config_fast,
+                config_slow,
+                min_ticks_between_signals,
+            );
+        }
+        for profile in &mut profiles {
+            if profile.symbol.trim().is_empty() {
+                profile.symbol = default_symbol.trim().to_ascii_uppercase();
+            }
         }
         let next_custom_id = profiles
             .iter()
@@ -110,6 +136,7 @@ impl StrategyCatalog {
             .cloned()
             .unwrap_or_else(|| self.profiles[0].clone());
         self.new_custom_profile(
+            &base.symbol,
             base.fast_period,
             base.slow_period,
             base.min_ticks_between_signals,
@@ -119,12 +146,14 @@ impl StrategyCatalog {
     pub fn fork_profile(
         &mut self,
         index: usize,
+        symbol: &str,
         fast_period: usize,
         slow_period: usize,
         min_ticks_between_signals: u64,
     ) -> Option<StrategyProfile> {
         self.profiles.get(index)?;
         Some(self.new_custom_profile(
+            symbol,
             fast_period,
             slow_period,
             min_ticks_between_signals,
@@ -133,6 +162,7 @@ impl StrategyCatalog {
 
     fn new_custom_profile(
         &mut self,
+        symbol: &str,
         fast_period: usize,
         slow_period: usize,
         min_ticks_between_signals: u64,
@@ -144,6 +174,7 @@ impl StrategyCatalog {
         let profile = StrategyProfile {
             label: format!("MA(Custom {}/{}) [{}]", fast, slow, tag),
             source_tag: tag,
+            symbol: symbol.trim().to_ascii_uppercase(),
             fast_period: fast,
             slow_period: slow,
             min_ticks_between_signals: min_ticks_between_signals.max(1),

@@ -105,6 +105,11 @@ fn persist_strategy_session_state(
     }
 }
 
+fn refresh_strategy_lists(app_state: &mut AppState, strategy_catalog: &StrategyCatalog) {
+    app_state.strategy_items = strategy_catalog.labels();
+    app_state.strategy_item_symbols = strategy_catalog.symbols();
+}
+
 fn apply_symbol_selection(
     next_symbol: &str,
     current_symbol: &mut String,
@@ -197,18 +202,19 @@ async fn main() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (strategy_enabled_tx, strategy_enabled_rx) = watch::channel(true);
     let tradable_symbols = config.binance.tradable_instruments();
-    let initial_symbol = tradable_symbols
+    let default_symbol = tradable_symbols
         .first()
         .cloned()
         .unwrap_or_else(|| config.binance.symbol.clone());
-    let (ws_symbol_tx, ws_symbol_rx) = watch::channel(initial_symbol.clone());
     let mut strategy_catalog = StrategyCatalog::new(
+        &default_symbol,
         config.strategy.fast_period,
         config.strategy.slow_period,
         config.strategy.min_ticks_between_signals,
     );
     let mut restored_selected_source_tag: Option<String> = None;
     match strategy_session::load_strategy_session(
+        &default_symbol,
         config.strategy.fast_period,
         config.strategy.slow_period,
         config.strategy.min_ticks_between_signals,
@@ -227,6 +233,8 @@ async fn main() -> Result<()> {
         .and_then(|source_tag| strategy_catalog.get_by_source_tag(source_tag).cloned())
         .or_else(|| strategy_catalog.get(0).cloned())
         .expect("strategy catalog must include default profile");
+    let initial_symbol = initial_strategy_profile.symbol.clone();
+    let (ws_symbol_tx, ws_symbol_rx) = watch::channel(initial_symbol.clone());
     let (strategy_profile_tx, mut strategy_profile_rx) =
         watch::channel(initial_strategy_profile.clone());
 
@@ -657,7 +665,7 @@ async fn main() -> Result<()> {
     );
     app_state.refresh_history_rows();
     app_state.symbol_items = tradable_symbols.clone();
-    app_state.strategy_items = strategy_catalog.labels();
+    refresh_strategy_lists(&mut app_state, &strategy_catalog);
 
     // Pre-fill chart with historical candles
     if !historical_candles.is_empty() {
@@ -732,12 +740,21 @@ async fn main() -> Result<()> {
                                 .get(app_state.strategy_selector_index)
                                 .cloned()
                             {
+                                apply_symbol_selection(
+                                    &next_profile.symbol,
+                                    &mut current_symbol,
+                                    &mut app_state,
+                                    &ws_symbol_tx,
+                                    &rest_client,
+                                    &config,
+                                    &app_tx,
+                                );
                                 if next_profile != current_strategy_profile {
                                     current_strategy_profile = next_profile.clone();
                                     app_state.strategy_label = next_profile.label.clone();
                                     app_state.v2_state.focus.strategy_id =
                                         Some(next_profile.label.clone());
-                                    app_state.strategy_items = strategy_catalog.labels();
+                                    refresh_strategy_lists(&mut app_state, &strategy_catalog);
                                     app_state.v2_grid_strategy_index = strategy_catalog
                                         .index_of_label(&next_profile.label)
                                         .unwrap_or(0);
@@ -850,29 +867,20 @@ async fn main() -> Result<()> {
                             let edited_profile = strategy_catalog
                                 .get(app_state.strategy_editor_index)
                                 .cloned();
-                            if let Some(selected_symbol) = app_state
+                            let selected_symbol = app_state
                                 .symbol_items
                                 .get(app_state.strategy_editor_symbol_index)
                                 .cloned()
-                            {
-                                apply_symbol_selection(
-                                    &selected_symbol,
-                                    &mut current_symbol,
-                                    &mut app_state,
-                                    &ws_symbol_tx,
-                                    &rest_client,
-                                    &config,
-                                    &app_tx,
-                                );
-                            }
+                                .unwrap_or_else(|| app_state.symbol.clone());
                             let maybe_updated = strategy_catalog.fork_profile(
                                 app_state.strategy_editor_index,
+                                &selected_symbol,
                                 app_state.strategy_editor_fast,
                                 app_state.strategy_editor_slow,
                                 app_state.strategy_editor_cooldown,
                             );
                             if let Some(updated) = maybe_updated {
-                                app_state.strategy_items = strategy_catalog.labels();
+                                refresh_strategy_lists(&mut app_state, &strategy_catalog);
                                 app_state.v2_grid_strategy_index = strategy_catalog
                                     .index_of_label(&updated.label)
                                     .unwrap_or(0);
@@ -885,6 +893,15 @@ async fn main() -> Result<()> {
                                     app_state.strategy_label = updated.label.clone();
                                     app_state.v2_state.focus.strategy_id =
                                         Some(updated.label.clone());
+                                    apply_symbol_selection(
+                                        &updated.symbol,
+                                        &mut current_symbol,
+                                        &mut app_state,
+                                        &ws_symbol_tx,
+                                        &rest_client,
+                                        &config,
+                                        &app_tx,
+                                    );
                                     app_state.fast_sma = None;
                                     app_state.slow_sma = None;
                                     let _ = strategy_profile_tx.send(updated.clone());
@@ -936,14 +953,18 @@ async fn main() -> Result<()> {
                                 .v2_grid_strategy_index
                                 .min(strategy_catalog.len().saturating_sub(1));
                             let created = strategy_catalog.add_custom_from_index(base_index);
-                            app_state.strategy_items = strategy_catalog.labels();
+                            refresh_strategy_lists(&mut app_state, &strategy_catalog);
                             app_state.v2_grid_strategy_index = strategy_catalog
                                 .index_of_label(&created.label)
                                 .unwrap_or(0);
                             app_state.strategy_editor_open = true;
                             app_state.strategy_editor_index = app_state.v2_grid_strategy_index;
                             app_state.strategy_editor_field = 0;
-                            app_state.strategy_editor_symbol_index = app_state.v2_grid_symbol_index;
+                            app_state.strategy_editor_symbol_index = app_state
+                                .symbol_items
+                                .iter()
+                                .position(|item| item == &created.symbol)
+                                .unwrap_or(0);
                             app_state.strategy_editor_fast = created.fast_period;
                             app_state.strategy_editor_slow = created.slow_period;
                             app_state.strategy_editor_cooldown = created.min_ticks_between_signals;
@@ -969,7 +990,11 @@ async fn main() -> Result<()> {
                                         app_state.strategy_editor_index = idx;
                                         app_state.strategy_editor_field = 0;
                                         app_state.strategy_editor_symbol_index =
-                                            app_state.v2_grid_symbol_index;
+                                            app_state
+                                                .symbol_items
+                                                .iter()
+                                                .position(|item| item == &profile.symbol)
+                                                .unwrap_or(0);
                                         app_state.strategy_editor_fast = profile.fast_period;
                                         app_state.strategy_editor_slow = profile.slow_period;
                                         app_state.strategy_editor_cooldown =
@@ -984,13 +1009,14 @@ async fn main() -> Result<()> {
                                 .get(app_state.v2_grid_strategy_index)
                                 .cloned()
                             {
-                                if let Some(selected_symbol) = app_state
-                                    .symbol_items
-                                    .get(app_state.v2_grid_symbol_index)
-                                    .cloned()
+                                app_state.v2_state.focus.symbol = Some(app_state.symbol.clone());
+                                app_state.v2_state.focus.strategy_id = Some(item.clone());
+                                if let Some(next_profile) = strategy_catalog
+                                    .index_of_label(&item)
+                                    .and_then(|idx| strategy_catalog.get(idx).cloned())
                                 {
                                     apply_symbol_selection(
-                                        &selected_symbol,
+                                        &next_profile.symbol,
                                         &mut current_symbol,
                                         &mut app_state,
                                         &ws_symbol_tx,
@@ -998,13 +1024,6 @@ async fn main() -> Result<()> {
                                         &config,
                                         &app_tx,
                                     );
-                                }
-                                app_state.v2_state.focus.symbol = Some(app_state.symbol.clone());
-                                app_state.v2_state.focus.strategy_id = Some(item.clone());
-                                if let Some(next_profile) = strategy_catalog
-                                    .index_of_label(&item)
-                                    .and_then(|idx| strategy_catalog.get(idx).cloned())
-                                {
                                     if next_profile != current_strategy_profile {
                                         current_strategy_profile = next_profile.clone();
                                         app_state.strategy_label = next_profile.label.clone();

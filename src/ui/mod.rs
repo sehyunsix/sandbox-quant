@@ -69,6 +69,7 @@ pub struct AppState {
     pub strategy_selector_open: bool,
     pub strategy_selector_index: usize,
     pub strategy_items: Vec<String>,
+    pub strategy_item_symbols: Vec<String>,
     pub account_popup_open: bool,
     pub history_popup_open: bool,
     pub focus_popup_open: bool,
@@ -146,6 +147,11 @@ impl AppState {
                 "MA(Config)".to_string(),
                 "MA(Fast 5/20)".to_string(),
                 "MA(Slow 20/60)".to_string(),
+            ],
+            strategy_item_symbols: vec![
+                symbol.to_ascii_uppercase(),
+                symbol.to_ascii_uppercase(),
+                symbol.to_ascii_uppercase(),
             ],
             account_popup_open: false,
             history_popup_open: false,
@@ -693,6 +699,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             None,
         );
     } else if state.strategy_selector_open {
+        let selected_strategy_symbol = state
+            .strategy_item_symbols
+            .get(state.strategy_selector_index)
+            .map(String::as_str)
+            .unwrap_or(state.symbol.as_str());
         render_selector_popup(
             frame,
             " Select Strategy ",
@@ -705,7 +716,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 lose_count: state.history_lose_count,
                 realized_pnl: state.history_realized_pnl,
             }),
-            Some(state.symbol.as_str()),
+            Some(selected_strategy_symbol),
         );
     } else if state.account_popup_open {
         render_account_popup(frame, &state.balances);
@@ -884,6 +895,11 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
         .iter()
         .enumerate()
         .map(|(idx, item)| {
+            let row_symbol = state
+                .strategy_item_symbols
+                .get(idx)
+                .map(String::as_str)
+                .unwrap_or(selected_symbol);
             let stats = strategy_stats_for_item(&state.strategy_stats, item);
             let (w, l, t, pnl) = if let Some(s) = stats {
                 (
@@ -902,7 +918,7 @@ fn render_v2_grid_popup(frame: &mut Frame, state: &AppState) {
             };
             let mut row = Row::new(vec![
                 Cell::from(marker),
-                Cell::from(selected_symbol.to_string()),
+                Cell::from(row_symbol.to_string()),
                 Cell::from(item.clone()),
                 Cell::from(w),
                 Cell::from(l),
