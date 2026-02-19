@@ -232,6 +232,48 @@ fn open_grid_from_current_selection(app_state: &mut AppState, current_symbol: &s
     app_state.set_grid_open(true);
 }
 
+fn grid_panel_indices(app_state: &AppState) -> Vec<usize> {
+    app_state
+        .strategy_item_active
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, active)| {
+            if *active == app_state.is_on_panel_selected() {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn toggle_grid_panel_selection(app_state: &mut AppState) {
+    app_state.set_on_panel_selected(!app_state.is_on_panel_selected());
+    let panel_indices = grid_panel_indices(app_state);
+    if !panel_indices.contains(&app_state.selected_grid_strategy_index()) {
+        if let Some(first) = panel_indices.first().copied() {
+            app_state.set_selected_grid_strategy_index(first);
+        }
+    }
+}
+
+fn move_grid_strategy_selection(app_state: &mut AppState, up: bool) {
+    let panel_indices = grid_panel_indices(app_state);
+    if let Some(pos) = panel_indices
+        .iter()
+        .position(|idx| *idx == app_state.selected_grid_strategy_index())
+    {
+        let next_pos = if up {
+            pos.saturating_sub(1)
+        } else {
+            (pos + 1).min(panel_indices.len().saturating_sub(1))
+        };
+        app_state.set_selected_grid_strategy_index(panel_indices[next_pos]);
+    } else if let Some(first) = panel_indices.first().copied() {
+        app_state.set_selected_grid_strategy_index(first);
+    }
+}
+
 fn refresh_and_sync_strategy_panel(
     app_state: &mut AppState,
     strategy_catalog: &StrategyCatalog,
@@ -1502,76 +1544,19 @@ async fn main() -> Result<()> {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
-                            app_state.set_on_panel_selected(!app_state.is_on_panel_selected());
-                            let panel_indices: Vec<usize> = app_state
-                                .strategy_item_active
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(idx, active)| {
-                                    if *active == app_state.is_on_panel_selected() {
-                                        Some(idx)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if !panel_indices.contains(&app_state.selected_grid_strategy_index()) {
-                                if let Some(first) = panel_indices.first().copied() {
-                                    app_state.set_selected_grid_strategy_index(first);
-                                }
-                            }
+                            toggle_grid_panel_selection(&mut app_state);
                         }
                         GridCommand::StrategyUp => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
-                            let panel_indices: Vec<usize> = app_state
-                                .strategy_item_active
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(idx, active)| {
-                                    if *active == app_state.is_on_panel_selected() {
-                                        Some(idx)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if let Some(pos) = panel_indices
-                                .iter()
-                                .position(|idx| *idx == app_state.selected_grid_strategy_index())
-                            {
-                                let next_pos = pos.saturating_sub(1);
-                                app_state.set_selected_grid_strategy_index(panel_indices[next_pos]);
-                            } else if let Some(first) = panel_indices.first().copied() {
-                                app_state.set_selected_grid_strategy_index(first);
-                            }
+                            move_grid_strategy_selection(&mut app_state, true);
                         }
                         GridCommand::StrategyDown => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
-                            let panel_indices: Vec<usize> = app_state
-                                .strategy_item_active
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(idx, active)| {
-                                    if *active == app_state.is_on_panel_selected() {
-                                        Some(idx)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if let Some(pos) = panel_indices
-                                .iter()
-                                .position(|idx| *idx == app_state.selected_grid_strategy_index())
-                            {
-                                let next_pos = (pos + 1).min(panel_indices.len().saturating_sub(1));
-                                app_state.set_selected_grid_strategy_index(panel_indices[next_pos]);
-                            } else if let Some(first) = panel_indices.first().copied() {
-                                app_state.set_selected_grid_strategy_index(first);
-                            }
+                            move_grid_strategy_selection(&mut app_state, false);
                         }
                         GridCommand::SymbolLeft => {
                             if app_state.grid_tab() != GridTab::Strategies {
