@@ -228,6 +228,63 @@ fn open_grid_from_current_selection(app_state: &mut AppState, current_symbol: &s
     app_state.set_grid_open(true);
 }
 
+fn refresh_and_sync_strategy_panel(
+    app_state: &mut AppState,
+    strategy_catalog: &StrategyCatalog,
+    enabled_strategy_tags: &HashSet<String>,
+) {
+    refresh_strategy_lists(app_state, strategy_catalog, enabled_strategy_tags);
+    sync_on_panel_selection(app_state);
+}
+
+fn persist_and_publish_strategy_state(
+    app_state: &mut AppState,
+    strategy_catalog: &StrategyCatalog,
+    current_strategy_profile: &StrategyProfile,
+    enabled_strategy_tags: &HashSet<String>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) {
+    persist_strategy_session_state(
+        app_state,
+        strategy_catalog,
+        current_strategy_profile,
+        enabled_strategy_tags,
+    );
+    publish_strategy_runtime_updates(
+        strategy_catalog,
+        enabled_strategy_tags,
+        strategy_profiles_tx,
+        enabled_strategy_tags_tx,
+        ws_instruments_tx,
+    );
+}
+
+fn publish_and_persist_strategy_state(
+    app_state: &mut AppState,
+    strategy_catalog: &StrategyCatalog,
+    current_strategy_profile: &StrategyProfile,
+    enabled_strategy_tags: &HashSet<String>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) {
+    publish_strategy_runtime_updates(
+        strategy_catalog,
+        enabled_strategy_tags,
+        strategy_profiles_tx,
+        enabled_strategy_tags_tx,
+        ws_instruments_tx,
+    );
+    persist_strategy_session_state(
+        app_state,
+        strategy_catalog,
+        current_strategy_profile,
+        enabled_strategy_tags,
+    );
+}
+
 fn mark_strategy_running(strategy_catalog: &mut StrategyCatalog, source_tag: &str) {
     let _ = strategy_catalog.mark_running(source_tag, chrono::Utc::now().timestamp_millis());
 }
@@ -1151,8 +1208,10 @@ async fn main() -> Result<()> {
                                 app_state.fast_sma = None;
                                 app_state.slow_sma = None;
                                 let _ = strategy_profile_tx.send(next_profile.clone());
-                                publish_strategy_runtime_updates(
+                                publish_and_persist_strategy_state(
+                                    &mut app_state,
                                     &strategy_catalog,
+                                    &current_strategy_profile,
                                     &enabled_strategy_tags,
                                     &strategy_profiles_tx,
                                     &enabled_strategy_tags_tx,
@@ -1162,12 +1221,6 @@ async fn main() -> Result<()> {
                                     "Strategy selected: {} (ON)",
                                     next_profile.label
                                 ));
-                                persist_strategy_session_state(
-                                    &mut app_state,
-                                    &strategy_catalog,
-                                    &current_strategy_profile,
-                                    &enabled_strategy_tags,
-                                );
                             }
                             app_state.set_strategy_selector_open(false);
                         }
@@ -1326,14 +1379,10 @@ async fn main() -> Result<()> {
                                     app_state
                                         .push_log(format!("Strategy forked: {}", updated.label));
                                 }
-                                persist_strategy_session_state(
+                                persist_and_publish_strategy_state(
                                     &mut app_state,
                                     &strategy_catalog,
                                     &current_strategy_profile,
-                                    &enabled_strategy_tags,
-                                );
-                                publish_strategy_runtime_updates(
-                                    &strategy_catalog,
                                     &enabled_strategy_tags,
                                     &strategy_profiles_tx,
                                     &enabled_strategy_tags_tx,
@@ -1484,18 +1533,14 @@ async fn main() -> Result<()> {
                             app_state.strategy_editor_cooldown = created.min_ticks_between_signals;
                             app_state
                                 .push_log(format!("Grid strategy registered: {}", created.label));
-                            publish_strategy_runtime_updates(
-                                &strategy_catalog,
-                                &enabled_strategy_tags,
-                                &strategy_profiles_tx,
-                                &enabled_strategy_tags_tx,
-                                &ws_instruments_tx,
-                            );
-                            persist_strategy_session_state(
+                            publish_and_persist_strategy_state(
                                 &mut app_state,
                                 &strategy_catalog,
                                 &current_strategy_profile,
                                 &enabled_strategy_tags,
+                                &strategy_profiles_tx,
+                                &enabled_strategy_tags_tx,
+                                &ws_instruments_tx,
                             );
                         }
                         KeyCode::Char('c') | KeyCode::Char('C') => {
@@ -1594,7 +1639,7 @@ async fn main() -> Result<()> {
                                         &enabled_strategy_tags_tx,
                                         &ws_instruments_tx,
                                     );
-                                    refresh_strategy_lists(
+                                    refresh_and_sync_strategy_panel(
                                         &mut app_state,
                                         &strategy_catalog,
                                         &enabled_strategy_tags,
@@ -1602,7 +1647,6 @@ async fn main() -> Result<()> {
                                     app_state.set_selected_grid_strategy_index(
                                         fallback_idx.min(strategy_catalog.len().saturating_sub(1)),
                                     );
-                                    sync_on_panel_selection(&mut app_state);
                                     app_state
                                         .push_log(format!("Strategy deleted: {}", profile.label));
                                     persist_strategy_session_state(
@@ -1654,23 +1698,18 @@ async fn main() -> Result<()> {
                                             next_profile.label
                                         ));
                                     }
-                                    publish_strategy_runtime_updates(
+                                    publish_and_persist_strategy_state(
+                                        &mut app_state,
                                         &strategy_catalog,
+                                        &current_strategy_profile,
                                         &enabled_strategy_tags,
                                         &strategy_profiles_tx,
                                         &enabled_strategy_tags_tx,
                                         &ws_instruments_tx,
                                     );
-                                    refresh_strategy_lists(
+                                    refresh_and_sync_strategy_panel(
                                         &mut app_state,
                                         &strategy_catalog,
-                                        &enabled_strategy_tags,
-                                    );
-                                    sync_on_panel_selection(&mut app_state);
-                                    persist_strategy_session_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
                                         &enabled_strategy_tags,
                                     );
                                 }
@@ -1712,8 +1751,10 @@ async fn main() -> Result<()> {
                                     app_state.fast_sma = None;
                                     app_state.slow_sma = None;
                                     let _ = strategy_profile_tx.send(next_profile.clone());
-                                    publish_strategy_runtime_updates(
+                                    publish_and_persist_strategy_state(
+                                        &mut app_state,
                                         &strategy_catalog,
+                                        &current_strategy_profile,
                                         &enabled_strategy_tags,
                                         &strategy_profiles_tx,
                                         &enabled_strategy_tags_tx,
@@ -1723,12 +1764,6 @@ async fn main() -> Result<()> {
                                         "Strategy selected from grid: {} (ON)",
                                         next_profile.label
                                     ));
-                                    persist_strategy_session_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
-                                        &enabled_strategy_tags,
-                                    );
                                 }
                                 app_state.set_grid_open(false);
                                 app_state.set_focus_popup_open(false);
