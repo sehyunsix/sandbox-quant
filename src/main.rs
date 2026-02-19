@@ -10,7 +10,7 @@ use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
 use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
-use sandbox_quant::input::{parse_main_command, UiCommand};
+use sandbox_quant::input::{parse_grid_command, parse_main_command, GridCommand, UiCommand};
 use sandbox_quant::model::position::Position;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
@@ -1397,23 +1397,24 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 if app_state.is_grid_open() {
-                    match key.code {
-                        KeyCode::Char('1') => {
+                    if let Some(cmd) = parse_grid_command(&key.code) {
+                        match cmd {
+                        GridCommand::TabAssets => {
                             app_state.set_grid_tab(GridTab::Assets);
                         }
-                        KeyCode::Char('2') => {
+                        GridCommand::TabStrategies => {
                             app_state.set_grid_tab(GridTab::Strategies);
                         }
-                        KeyCode::Char('3') => {
+                        GridCommand::TabRisk => {
                             app_state.set_grid_tab(GridTab::Risk);
                         }
-                        KeyCode::Char('4') => {
+                        GridCommand::TabNetwork => {
                             app_state.set_grid_tab(GridTab::Network);
                         }
-                        KeyCode::Char('5') => {
+                        GridCommand::TabSystemLog => {
                             app_state.set_grid_tab(GridTab::SystemLog);
                         }
-                        KeyCode::Tab => {
+                        GridCommand::ToggleOnOffPanel => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1436,7 +1437,7 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                        GridCommand::StrategyUp => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1462,7 +1463,7 @@ async fn main() -> Result<()> {
                                 app_state.set_selected_grid_strategy_index(first);
                             }
                         }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                        GridCommand::StrategyDown => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1488,7 +1489,7 @@ async fn main() -> Result<()> {
                                 app_state.set_selected_grid_strategy_index(first);
                             }
                         }
-                        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
+                        GridCommand::SymbolLeft => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1496,7 +1497,7 @@ async fn main() -> Result<()> {
                                 app_state.selected_grid_symbol_index().saturating_sub(1),
                             );
                         }
-                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
+                        GridCommand::SymbolRight => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1505,7 +1506,7 @@ async fn main() -> Result<()> {
                                     .min(app_state.symbol_items.len().saturating_sub(1)),
                             );
                         }
-                        KeyCode::Char('n') | KeyCode::Char('N') => {
+                        GridCommand::NewStrategy => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1544,7 +1545,7 @@ async fn main() -> Result<()> {
                                 &ws_instruments_tx,
                             );
                         }
-                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                        GridCommand::EditStrategyConfig => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1572,7 +1573,7 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
-                        KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+                        GridCommand::DeleteStrategy => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1659,7 +1660,7 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
-                        KeyCode::Char('o') | KeyCode::Char('O') => {
+                        GridCommand::ToggleStrategyOnOff => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1716,7 +1717,7 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
-                        KeyCode::Enter | KeyCode::Char('f') | KeyCode::Char('F') => {
+                        GridCommand::ActivateStrategy => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
@@ -1770,10 +1771,10 @@ async fn main() -> Result<()> {
                                 app_state.set_focus_popup_open(false);
                             }
                         }
-                        KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('G') => {
+                        GridCommand::CloseGrid => {
                             app_state.set_grid_open(false);
                         }
-                        _ => {}
+                        }
                     }
                     continue;
                 }
