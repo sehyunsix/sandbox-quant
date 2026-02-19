@@ -679,6 +679,247 @@ fn handle_strategy_editor_key(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_grid_strategy_action(
+    cmd: GridCommand,
+    app_state: &mut AppState,
+    strategy_catalog: &mut StrategyCatalog,
+    enabled_strategy_tags: &mut HashSet<String>,
+    current_symbol: &mut String,
+    current_strategy_profile: &mut StrategyProfile,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+    strategy_profile_tx: &watch::Sender<StrategyProfile>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    strategy_enabled_tx: &watch::Sender<bool>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) -> bool {
+    match cmd {
+        GridCommand::NewStrategy => {
+            let base_index = app_state
+                .selected_grid_strategy_index()
+                .min(strategy_catalog.len().saturating_sub(1));
+            let created = strategy_catalog.add_custom_from_index(base_index);
+            refresh_strategy_lists(app_state, strategy_catalog, enabled_strategy_tags);
+            app_state
+                .set_selected_grid_strategy_index(strategy_catalog.index_of_label(&created.label).unwrap_or(0));
+            app_state.set_strategy_editor_open(true);
+            app_state.strategy_editor_index = app_state.selected_grid_strategy_index();
+            app_state.strategy_editor_field = 0;
+            app_state.strategy_editor_symbol_index = app_state
+                .symbol_items
+                .iter()
+                .position(|item| item == &created.symbol)
+                .unwrap_or(0);
+            app_state.strategy_editor_fast = created.fast_period;
+            app_state.strategy_editor_slow = created.slow_period;
+            app_state.strategy_editor_cooldown = created.min_ticks_between_signals;
+            app_state.push_log(format!("Grid strategy registered: {}", created.label));
+            publish_and_persist_strategy_state(
+                app_state,
+                strategy_catalog,
+                current_strategy_profile,
+                enabled_strategy_tags,
+                strategy_profiles_tx,
+                enabled_strategy_tags_tx,
+                ws_instruments_tx,
+            );
+            true
+        }
+        GridCommand::EditStrategyConfig => {
+            if let Some(selected_label) = app_state
+                .strategy_items
+                .get(app_state.selected_grid_strategy_index())
+                .cloned()
+            {
+                if let Some(idx) = strategy_catalog.index_of_label(&selected_label) {
+                    if let Some(profile) = strategy_catalog.get(idx).cloned() {
+                        app_state.set_strategy_editor_open(true);
+                        app_state.strategy_editor_index = idx;
+                        app_state.strategy_editor_field = 0;
+                        app_state.strategy_editor_symbol_index = app_state
+                            .symbol_items
+                            .iter()
+                            .position(|item| item == &profile.symbol)
+                            .unwrap_or(0);
+                        app_state.strategy_editor_fast = profile.fast_period;
+                        app_state.strategy_editor_slow = profile.slow_period;
+                        app_state.strategy_editor_cooldown = profile.min_ticks_between_signals;
+                    }
+                }
+            }
+            true
+        }
+        GridCommand::DeleteStrategy => {
+            let selected_idx = app_state
+                .selected_grid_strategy_index()
+                .min(strategy_catalog.len().saturating_sub(1));
+            let selected_profile = strategy_catalog.get(selected_idx).cloned();
+            if let Some(profile) = selected_profile {
+                if !StrategyCatalog::is_custom_source_tag(&profile.source_tag) {
+                    app_state.push_log(format!("Strategy delete blocked (builtin): {}", profile.label));
+                } else if strategy_catalog.remove_custom_profile(selected_idx).is_some() {
+                    enabled_strategy_tags.remove(&profile.source_tag);
+                    let mut fallback_idx = selected_idx.saturating_sub(1);
+                    if strategy_catalog.len() > 0 {
+                        fallback_idx = fallback_idx.min(strategy_catalog.len().saturating_sub(1));
+                    }
+                    if profile.source_tag == current_strategy_profile.source_tag {
+                        set_strategy_enabled(
+                            strategy_catalog,
+                            enabled_strategy_tags,
+                            &current_strategy_profile.source_tag,
+                            false,
+                            app_state.paused,
+                        );
+                        if let Some(next_profile) = strategy_catalog.get(fallback_idx).cloned() {
+                            set_strategy_enabled(
+                                strategy_catalog,
+                                enabled_strategy_tags,
+                                &next_profile.source_tag,
+                                true,
+                                app_state.paused,
+                            );
+                            *current_strategy_profile = next_profile.clone();
+                            app_state.strategy_label = next_profile.label.clone();
+                            app_state.set_focus_strategy_id(Some(next_profile.label.clone()));
+                            apply_symbol_selection(
+                                &next_profile.symbol,
+                                current_symbol,
+                                app_state,
+                                ws_symbol_tx,
+                                rest_client,
+                                config,
+                                app_tx,
+                            );
+                            app_state.fast_sma = None;
+                            app_state.slow_sma = None;
+                            let _ = strategy_profile_tx.send(next_profile);
+                        }
+                    }
+                    publish_strategy_runtime_updates(
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        strategy_profiles_tx,
+                        enabled_strategy_tags_tx,
+                        ws_instruments_tx,
+                    );
+                    refresh_and_sync_strategy_panel(app_state, strategy_catalog, enabled_strategy_tags);
+                    app_state.set_selected_grid_strategy_index(
+                        fallback_idx.min(strategy_catalog.len().saturating_sub(1)),
+                    );
+                    app_state.push_log(format!("Strategy deleted: {}", profile.label));
+                    persist_strategy_session_state(
+                        app_state,
+                        strategy_catalog,
+                        current_strategy_profile,
+                        enabled_strategy_tags,
+                    );
+                }
+            }
+            true
+        }
+        GridCommand::ToggleStrategyOnOff => {
+            if let Some(item) = app_state
+                .strategy_items
+                .get(app_state.selected_grid_strategy_index())
+                .cloned()
+            {
+                if let Some(next_profile) = strategy_catalog
+                    .index_of_label(&item)
+                    .and_then(|idx| strategy_catalog.get(idx).cloned())
+                {
+                    if enabled_strategy_tags.contains(&next_profile.source_tag) {
+                        set_strategy_enabled(
+                            strategy_catalog,
+                            enabled_strategy_tags,
+                            &next_profile.source_tag,
+                            false,
+                            app_state.paused,
+                        );
+                        app_state.push_log(format!("Strategy OFF: {}", next_profile.label));
+                    } else {
+                        set_strategy_enabled(
+                            strategy_catalog,
+                            enabled_strategy_tags,
+                            &next_profile.source_tag,
+                            true,
+                            app_state.paused,
+                        );
+                        app_state.paused = false;
+                        let _ = strategy_enabled_tx.send(true);
+                        app_state.push_log(format!("Strategy ON from grid: {}", next_profile.label));
+                    }
+                    publish_and_persist_strategy_state(
+                        app_state,
+                        strategy_catalog,
+                        current_strategy_profile,
+                        enabled_strategy_tags,
+                        strategy_profiles_tx,
+                        enabled_strategy_tags_tx,
+                        ws_instruments_tx,
+                    );
+                    refresh_and_sync_strategy_panel(app_state, strategy_catalog, enabled_strategy_tags);
+                }
+            }
+            true
+        }
+        GridCommand::ActivateStrategy => {
+            if let Some(item) = app_state
+                .strategy_items
+                .get(app_state.selected_grid_strategy_index())
+                .cloned()
+            {
+                app_state.set_focus_symbol(Some(app_state.symbol.clone()));
+                app_state.set_focus_strategy_id(Some(item.clone()));
+                if let Some(next_profile) = strategy_catalog
+                    .index_of_label(&item)
+                    .and_then(|idx| strategy_catalog.get(idx).cloned())
+                {
+                    set_strategy_enabled(
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        &next_profile.source_tag,
+                        true,
+                        app_state.paused,
+                    );
+                    apply_symbol_selection(
+                        &next_profile.symbol,
+                        current_symbol,
+                        app_state,
+                        ws_symbol_tx,
+                        rest_client,
+                        config,
+                        app_tx,
+                    );
+                    *current_strategy_profile = next_profile.clone();
+                    app_state.strategy_label = next_profile.label.clone();
+                    app_state.fast_sma = None;
+                    app_state.slow_sma = None;
+                    let _ = strategy_profile_tx.send(next_profile.clone());
+                    publish_and_persist_strategy_state(
+                        app_state,
+                        strategy_catalog,
+                        current_strategy_profile,
+                        enabled_strategy_tags,
+                        strategy_profiles_tx,
+                        enabled_strategy_tags_tx,
+                        ws_instruments_tx,
+                    );
+                    app_state.push_log(format!("Strategy selected from grid: {} (ON)", next_profile.label));
+                }
+                app_state.set_grid_open(false);
+                app_state.set_focus_popup_open(false);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider (required by rustls 0.23+)
@@ -1579,38 +1820,21 @@ async fn main() -> Result<()> {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
-                            let base_index = app_state
-                                .selected_grid_strategy_index()
-                                .min(strategy_catalog.len().saturating_sub(1));
-                            let created = strategy_catalog.add_custom_from_index(base_index);
-                            refresh_strategy_lists(
+                            let _ = handle_grid_strategy_action(
+                                cmd,
                                 &mut app_state,
-                                &strategy_catalog,
-                                &enabled_strategy_tags,
-                            );
-                            app_state.set_selected_grid_strategy_index(
-                                strategy_catalog.index_of_label(&created.label).unwrap_or(0),
-                            );
-                            app_state.set_strategy_editor_open(true);
-                            app_state.strategy_editor_index = app_state.selected_grid_strategy_index();
-                            app_state.strategy_editor_field = 0;
-                            app_state.strategy_editor_symbol_index = app_state
-                                .symbol_items
-                                .iter()
-                                .position(|item| item == &created.symbol)
-                                .unwrap_or(0);
-                            app_state.strategy_editor_fast = created.fast_period;
-                            app_state.strategy_editor_slow = created.slow_period;
-                            app_state.strategy_editor_cooldown = created.min_ticks_between_signals;
-                            app_state
-                                .push_log(format!("Grid strategy registered: {}", created.label));
-                            publish_and_persist_strategy_state(
-                                &mut app_state,
-                                &strategy_catalog,
-                                &current_strategy_profile,
-                                &enabled_strategy_tags,
+                                &mut strategy_catalog,
+                                &mut enabled_strategy_tags,
+                                &mut current_symbol,
+                                &mut current_strategy_profile,
+                                &ws_symbol_tx,
+                                &rest_client,
+                                &config,
+                                &app_tx,
+                                &strategy_profile_tx,
                                 &strategy_profiles_tx,
                                 &enabled_strategy_tags_tx,
+                                &strategy_enabled_tx,
                                 &ws_instruments_tx,
                             );
                         }
@@ -1618,227 +1842,89 @@ async fn main() -> Result<()> {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
-                            if let Some(selected_label) = app_state
-                                .strategy_items
-                                .get(app_state.selected_grid_strategy_index())
-                                .cloned()
-                            {
-                                if let Some(idx) = strategy_catalog.index_of_label(&selected_label)
-                                {
-                                    if let Some(profile) = strategy_catalog.get(idx).cloned() {
-                                        app_state.set_strategy_editor_open(true);
-                                        app_state.strategy_editor_index = idx;
-                                        app_state.strategy_editor_field = 0;
-                                        app_state.strategy_editor_symbol_index = app_state
-                                            .symbol_items
-                                            .iter()
-                                            .position(|item| item == &profile.symbol)
-                                            .unwrap_or(0);
-                                        app_state.strategy_editor_fast = profile.fast_period;
-                                        app_state.strategy_editor_slow = profile.slow_period;
-                                        app_state.strategy_editor_cooldown =
-                                            profile.min_ticks_between_signals;
-                                    }
-                                }
-                            }
+                            let _ = handle_grid_strategy_action(
+                                cmd,
+                                &mut app_state,
+                                &mut strategy_catalog,
+                                &mut enabled_strategy_tags,
+                                &mut current_symbol,
+                                &mut current_strategy_profile,
+                                &ws_symbol_tx,
+                                &rest_client,
+                                &config,
+                                &app_tx,
+                                &strategy_profile_tx,
+                                &strategy_profiles_tx,
+                                &enabled_strategy_tags_tx,
+                                &strategy_enabled_tx,
+                                &ws_instruments_tx,
+                            );
                         }
                         GridCommand::DeleteStrategy => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
-                            let selected_idx = app_state
-                                .selected_grid_strategy_index()
-                                .min(strategy_catalog.len().saturating_sub(1));
-                            let selected_profile = strategy_catalog.get(selected_idx).cloned();
-                            if let Some(profile) = selected_profile {
-                                if !StrategyCatalog::is_custom_source_tag(&profile.source_tag) {
-                                    app_state.push_log(format!(
-                                        "Strategy delete blocked (builtin): {}",
-                                        profile.label
-                                    ));
-                                } else if strategy_catalog
-                                    .remove_custom_profile(selected_idx)
-                                    .is_some()
-                                {
-                                    enabled_strategy_tags.remove(&profile.source_tag);
-                                    let mut fallback_idx = selected_idx.saturating_sub(1);
-                                    if strategy_catalog.len() > 0 {
-                                        fallback_idx = fallback_idx
-                                            .min(strategy_catalog.len().saturating_sub(1));
-                                    }
-                                    if profile.source_tag == current_strategy_profile.source_tag {
-                                        set_strategy_enabled(
-                                            &mut strategy_catalog,
-                                            &mut enabled_strategy_tags,
-                                            &current_strategy_profile.source_tag,
-                                            false,
-                                            app_state.paused,
-                                        );
-                                        if let Some(next_profile) =
-                                            strategy_catalog.get(fallback_idx).cloned()
-                                        {
-                                            set_strategy_enabled(
-                                                &mut strategy_catalog,
-                                                &mut enabled_strategy_tags,
-                                                &next_profile.source_tag,
-                                                true,
-                                                app_state.paused,
-                                            );
-                                            current_strategy_profile = next_profile.clone();
-                                            app_state.strategy_label = next_profile.label.clone();
-                                            app_state.set_focus_strategy_id(Some(
-                                                next_profile.label.clone(),
-                                            ));
-                                            apply_symbol_selection(
-                                                &next_profile.symbol,
-                                                &mut current_symbol,
-                                                &mut app_state,
-                                                &ws_symbol_tx,
-                                                &rest_client,
-                                                &config,
-                                                &app_tx,
-                                            );
-                                            app_state.fast_sma = None;
-                                            app_state.slow_sma = None;
-                                            let _ = strategy_profile_tx.send(next_profile);
-                                        }
-                                    }
-                                    publish_strategy_runtime_updates(
-                                        &strategy_catalog,
-                                        &enabled_strategy_tags,
-                                        &strategy_profiles_tx,
-                                        &enabled_strategy_tags_tx,
-                                        &ws_instruments_tx,
-                                    );
-                                    refresh_and_sync_strategy_panel(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &enabled_strategy_tags,
-                                    );
-                                    app_state.set_selected_grid_strategy_index(
-                                        fallback_idx.min(strategy_catalog.len().saturating_sub(1)),
-                                    );
-                                    app_state
-                                        .push_log(format!("Strategy deleted: {}", profile.label));
-                                    persist_strategy_session_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
-                                        &enabled_strategy_tags,
-                                    );
-                                }
-                            }
+                            let _ = handle_grid_strategy_action(
+                                cmd,
+                                &mut app_state,
+                                &mut strategy_catalog,
+                                &mut enabled_strategy_tags,
+                                &mut current_symbol,
+                                &mut current_strategy_profile,
+                                &ws_symbol_tx,
+                                &rest_client,
+                                &config,
+                                &app_tx,
+                                &strategy_profile_tx,
+                                &strategy_profiles_tx,
+                                &enabled_strategy_tags_tx,
+                                &strategy_enabled_tx,
+                                &ws_instruments_tx,
+                            );
                         }
                         GridCommand::ToggleStrategyOnOff => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
-                            if let Some(item) = app_state
-                                .strategy_items
-                                .get(app_state.selected_grid_strategy_index())
-                                .cloned()
-                            {
-                                if let Some(next_profile) = strategy_catalog
-                                    .index_of_label(&item)
-                                    .and_then(|idx| strategy_catalog.get(idx).cloned())
-                                {
-                                    if enabled_strategy_tags.contains(&next_profile.source_tag) {
-                                        set_strategy_enabled(
-                                            &mut strategy_catalog,
-                                            &mut enabled_strategy_tags,
-                                            &next_profile.source_tag,
-                                            false,
-                                            app_state.paused,
-                                        );
-                                        app_state.push_log(format!(
-                                            "Strategy OFF: {}",
-                                            next_profile.label
-                                        ));
-                                    } else {
-                                        set_strategy_enabled(
-                                            &mut strategy_catalog,
-                                            &mut enabled_strategy_tags,
-                                            &next_profile.source_tag,
-                                            true,
-                                            app_state.paused,
-                                        );
-                                        app_state.paused = false;
-                                        let _ = strategy_enabled_tx.send(true);
-                                        app_state.push_log(format!(
-                                            "Strategy ON from grid: {}",
-                                            next_profile.label
-                                        ));
-                                    }
-                                    publish_and_persist_strategy_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
-                                        &enabled_strategy_tags,
-                                        &strategy_profiles_tx,
-                                        &enabled_strategy_tags_tx,
-                                        &ws_instruments_tx,
-                                    );
-                                    refresh_and_sync_strategy_panel(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &enabled_strategy_tags,
-                                    );
-                                }
-                            }
+                            let _ = handle_grid_strategy_action(
+                                cmd,
+                                &mut app_state,
+                                &mut strategy_catalog,
+                                &mut enabled_strategy_tags,
+                                &mut current_symbol,
+                                &mut current_strategy_profile,
+                                &ws_symbol_tx,
+                                &rest_client,
+                                &config,
+                                &app_tx,
+                                &strategy_profile_tx,
+                                &strategy_profiles_tx,
+                                &enabled_strategy_tags_tx,
+                                &strategy_enabled_tx,
+                                &ws_instruments_tx,
+                            );
                         }
                         GridCommand::ActivateStrategy => {
                             if app_state.grid_tab() != GridTab::Strategies {
                                 continue;
                             }
-                            if let Some(item) = app_state
-                                .strategy_items
-                                .get(app_state.selected_grid_strategy_index())
-                                .cloned()
-                            {
-                                app_state.set_focus_symbol(Some(app_state.symbol.clone()));
-                                app_state.set_focus_strategy_id(Some(item.clone()));
-                                if let Some(next_profile) = strategy_catalog
-                                    .index_of_label(&item)
-                                    .and_then(|idx| strategy_catalog.get(idx).cloned())
-                                {
-                                    set_strategy_enabled(
-                                        &mut strategy_catalog,
-                                        &mut enabled_strategy_tags,
-                                        &next_profile.source_tag,
-                                        true,
-                                        app_state.paused,
-                                    );
-                                    apply_symbol_selection(
-                                        &next_profile.symbol,
-                                        &mut current_symbol,
-                                        &mut app_state,
-                                        &ws_symbol_tx,
-                                        &rest_client,
-                                        &config,
-                                        &app_tx,
-                                    );
-                                    current_strategy_profile = next_profile.clone();
-                                    app_state.strategy_label = next_profile.label.clone();
-                                    app_state.fast_sma = None;
-                                    app_state.slow_sma = None;
-                                    let _ = strategy_profile_tx.send(next_profile.clone());
-                                    publish_and_persist_strategy_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
-                                        &enabled_strategy_tags,
-                                        &strategy_profiles_tx,
-                                        &enabled_strategy_tags_tx,
-                                        &ws_instruments_tx,
-                                    );
-                                    app_state.push_log(format!(
-                                        "Strategy selected from grid: {} (ON)",
-                                        next_profile.label
-                                    ));
-                                }
-                                app_state.set_grid_open(false);
-                                app_state.set_focus_popup_open(false);
-                            }
+                            let _ = handle_grid_strategy_action(
+                                cmd,
+                                &mut app_state,
+                                &mut strategy_catalog,
+                                &mut enabled_strategy_tags,
+                                &mut current_symbol,
+                                &mut current_strategy_profile,
+                                &ws_symbol_tx,
+                                &rest_client,
+                                &config,
+                                &app_tx,
+                                &strategy_profile_tx,
+                                &strategy_profiles_tx,
+                                &enabled_strategy_tags_tx,
+                                &strategy_enabled_tx,
+                                &ws_instruments_tx,
+                            );
                         }
                         GridCommand::CloseGrid => {
                             app_state.set_grid_open(false);
