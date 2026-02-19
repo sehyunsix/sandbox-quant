@@ -1,3 +1,8 @@
+## v0.12.2 - 2026-02-19
+
+- docs(rfc): add detailed strategy creation lifecycle and governance (3bf6790)
+- docs(rfc): add strategy-expansion-first direction roadmap (914ec77)
+
 ## v0.12.1 - 2026-02-19
 
 - docs(rfc): add de-scope and core stabilization plan (3f76633)
