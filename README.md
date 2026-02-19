@@ -52,13 +52,22 @@ cargo run --bin sandbox-quant
 
 ## UI Overview
 
-
-
+- **Main Dashboard**: Live chart view with active position summary, strategy metrics, and runtime logs.
 ![Main Dashboard](docs/ui/screenshots/dashboard-main.png)
+
+- **Portfolio Grid - Assets Tab**: Consolidated asset balances, position quantities, and realized/unrealized PnL.
 ![Portfolio Grid - Assets Tab](docs/ui/screenshots/grid-assets.png)
+
+- **Portfolio Grid - Strategies Tab**: ON/OFF strategy panels with per-strategy stats (`W/L/T/PnL`) and running time.
 ![Portfolio Grid - Strategies Tab](docs/ui/screenshots/grid-strategies.png)
+
+- **Portfolio Grid - Strategies + Config Popup**: Strategy configuration editor for symbol and parameter tuning.
 ![Portfolio Grid - Strategies + Config Popup](docs/ui/screenshots/grid-strategies-config.png)
+
+- **Portfolio Grid - Network Tab**: Operational network health panel (latency, drop rates, reconnect signals).
 ![Portfolio Grid - Network Tab](docs/ui/screenshots/grid-network.png)
+
+- **Account Popup**: Quick account balance overview for available assets and quote holdings.
 ![Account Popup](docs/ui/screenshots/popup-account.png)
 
 
