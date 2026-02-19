@@ -112,6 +112,24 @@ fn build_asset_pnl_snapshot(
         .collect()
 }
 
+fn canonical_strategy_tag(tag: &str) -> String {
+    match tag.trim() {
+        "MA(Config)" => "cfg".to_string(),
+        "MA(Fast 5/20)" => "fst".to_string(),
+        "MA(Slow 20/60)" => "slw".to_string(),
+        "MANUAL" => "mnl".to_string(),
+        other => other.to_ascii_lowercase(),
+    }
+}
+
+fn strategy_stats_scope_key(instrument: &str, tag: &str) -> String {
+    format!(
+        "{}::{}",
+        normalize_instrument_label(instrument),
+        canonical_strategy_tag(tag)
+    )
+}
+
 fn app_log(level: LogLevel, domain: LogDomain, event: &'static str, msg: impl Into<String>) -> AppEvent {
     AppEvent::LogRecord(LogRecord::new(level, domain, event, msg))
 }
@@ -811,7 +829,8 @@ async fn main() -> Result<()> {
                                 realized_pnl_by_symbol
                                     .insert(instrument.clone(), history.stats.realized_pnl);
                                 for (tag, s) in history.strategy_stats {
-                                    let slot = aggregated_stats.entry(tag).or_default();
+                                    let scoped_key = strategy_stats_scope_key(instrument, &tag);
+                                    let slot = aggregated_stats.entry(scoped_key).or_default();
                                     slot.trade_count = slot.trade_count.saturating_add(s.trade_count);
                                     slot.win_count = slot.win_count.saturating_add(s.win_count);
                                     slot.lose_count = slot.lose_count.saturating_add(s.lose_count);
