@@ -10,6 +10,7 @@ use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
 use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
+use sandbox_quant::input::{parse_main_command, UiCommand};
 use sandbox_quant::model::position::Position;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
@@ -1776,8 +1777,9 @@ async fn main() -> Result<()> {
                     }
                     continue;
                 }
-                match key.code {
-                    KeyCode::Char('p') | KeyCode::Char('P') => {
+                if let Some(cmd) = parse_main_command(&key.code) {
+                    match cmd {
+                    UiCommand::Pause => {
                         if !app_state.paused {
                             for source_tag in enabled_strategy_tags.clone() {
                                 mark_strategy_stopped(&mut strategy_catalog, &source_tag);
@@ -1788,7 +1790,7 @@ async fn main() -> Result<()> {
                             let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
                         }
                     }
-                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                    UiCommand::Resume => {
                         if app_state.paused {
                             for source_tag in enabled_strategy_tags.clone() {
                                 mark_strategy_running(&mut strategy_catalog, &source_tag);
@@ -1799,36 +1801,21 @@ async fn main() -> Result<()> {
                             let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
                         }
                     }
-                    KeyCode::Char('b') | KeyCode::Char('B') => {
+                    UiCommand::ManualBuy => {
                         app_state.push_log(format!(
                             "Manual BUY ({:.2} USDT)",
                             config.strategy.order_amount_usdt
                         ));
                         let _ = manual_order_tx.try_send(Signal::Buy);
                     }
-                    KeyCode::Char('s') | KeyCode::Char('S') => {
+                    UiCommand::ManualSell => {
                         app_state.push_log("Manual SELL (position)".to_string());
                         let _ = manual_order_tx.try_send(Signal::Sell);
                     }
-                    KeyCode::Char('0') => {
-                        switch_timeframe(&current_symbol, "1s", &rest_client, &config, &app_tx);
+                    UiCommand::SwitchTimeframe(interval) => {
+                        switch_timeframe(&current_symbol, interval, &rest_client, &config, &app_tx);
                     }
-                    KeyCode::Char('1') => {
-                        switch_timeframe(&current_symbol, "1m", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('h') | KeyCode::Char('H') => {
-                        switch_timeframe(&current_symbol, "1h", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('d') | KeyCode::Char('D') => {
-                        switch_timeframe(&current_symbol, "1d", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('w') | KeyCode::Char('W') => {
-                        switch_timeframe(&current_symbol, "1w", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('m') | KeyCode::Char('M') => {
-                        switch_timeframe(&current_symbol, "1M", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('t') | KeyCode::Char('T') => {
+                    UiCommand::OpenSymbolSelector => {
                         app_state.set_symbol_selector_index(
                             app_state
                                 .symbol_items
@@ -1838,7 +1825,7 @@ async fn main() -> Result<()> {
                         );
                         app_state.set_symbol_selector_open(true);
                     }
-                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    UiCommand::OpenStrategySelector => {
                         app_state.set_strategy_selector_index(
                             strategy_catalog
                                 .index_of_label(&current_strategy_profile.label)
@@ -1846,20 +1833,17 @@ async fn main() -> Result<()> {
                         );
                         app_state.set_strategy_selector_open(true);
                     }
-                    KeyCode::Char('a') | KeyCode::Char('A') => {
+                    UiCommand::OpenAccountPopup => {
                         app_state.set_account_popup_open(true);
                     }
-                    KeyCode::Char('i') | KeyCode::Char('I') => {
+                    UiCommand::OpenHistoryPopup => {
                         app_state.refresh_history_rows();
                         app_state.set_history_popup_open(true);
                     }
-                    KeyCode::Char('g') | KeyCode::Char('G') => {
+                    UiCommand::OpenGrid => {
                         open_grid_from_current_selection(&mut app_state, &current_symbol);
                     }
-                    KeyCode::Char('f') | KeyCode::Char('F') => {
-                        open_grid_from_current_selection(&mut app_state, &current_symbol);
                     }
-                    _ => {}
                 }
             }
         }
