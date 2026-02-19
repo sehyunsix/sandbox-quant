@@ -920,6 +920,91 @@ fn handle_grid_strategy_action(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_grid_key(
+    key_code: &KeyCode,
+    app_state: &mut AppState,
+    strategy_catalog: &mut StrategyCatalog,
+    enabled_strategy_tags: &mut HashSet<String>,
+    current_symbol: &mut String,
+    current_strategy_profile: &mut StrategyProfile,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+    strategy_profile_tx: &watch::Sender<StrategyProfile>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    strategy_enabled_tx: &watch::Sender<bool>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) {
+    if let Some(cmd) = parse_grid_command(key_code) {
+        match cmd {
+            GridCommand::TabAssets => app_state.set_grid_tab(GridTab::Assets),
+            GridCommand::TabStrategies => app_state.set_grid_tab(GridTab::Strategies),
+            GridCommand::TabRisk => app_state.set_grid_tab(GridTab::Risk),
+            GridCommand::TabNetwork => app_state.set_grid_tab(GridTab::Network),
+            GridCommand::TabSystemLog => app_state.set_grid_tab(GridTab::SystemLog),
+            GridCommand::CloseGrid => app_state.set_grid_open(false),
+            GridCommand::ToggleOnOffPanel => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    toggle_grid_panel_selection(app_state);
+                }
+            }
+            GridCommand::StrategyUp => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    move_grid_strategy_selection(app_state, true);
+                }
+            }
+            GridCommand::StrategyDown => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    move_grid_strategy_selection(app_state, false);
+                }
+            }
+            GridCommand::SymbolLeft => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    app_state.set_selected_grid_symbol_index(
+                        app_state.selected_grid_symbol_index().saturating_sub(1),
+                    );
+                }
+            }
+            GridCommand::SymbolRight => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    app_state.set_selected_grid_symbol_index(
+                        (app_state.selected_grid_symbol_index() + 1)
+                            .min(app_state.symbol_items.len().saturating_sub(1)),
+                    );
+                }
+            }
+            GridCommand::NewStrategy
+            | GridCommand::EditStrategyConfig
+            | GridCommand::DeleteStrategy
+            | GridCommand::ToggleStrategyOnOff
+            | GridCommand::ActivateStrategy => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    let _ = handle_grid_strategy_action(
+                        cmd,
+                        app_state,
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        current_symbol,
+                        current_strategy_profile,
+                        ws_symbol_tx,
+                        rest_client,
+                        config,
+                        app_tx,
+                        strategy_profile_tx,
+                        strategy_profiles_tx,
+                        enabled_strategy_tags_tx,
+                        strategy_enabled_tx,
+                        ws_instruments_tx,
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider (required by rustls 0.23+)
@@ -1764,173 +1849,23 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 if app_state.is_grid_open() {
-                    if let Some(cmd) = parse_grid_command(&key.code) {
-                        match cmd {
-                        GridCommand::TabAssets => {
-                            app_state.set_grid_tab(GridTab::Assets);
-                        }
-                        GridCommand::TabStrategies => {
-                            app_state.set_grid_tab(GridTab::Strategies);
-                        }
-                        GridCommand::TabRisk => {
-                            app_state.set_grid_tab(GridTab::Risk);
-                        }
-                        GridCommand::TabNetwork => {
-                            app_state.set_grid_tab(GridTab::Network);
-                        }
-                        GridCommand::TabSystemLog => {
-                            app_state.set_grid_tab(GridTab::SystemLog);
-                        }
-                        GridCommand::ToggleOnOffPanel => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            toggle_grid_panel_selection(&mut app_state);
-                        }
-                        GridCommand::StrategyUp => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            move_grid_strategy_selection(&mut app_state, true);
-                        }
-                        GridCommand::StrategyDown => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            move_grid_strategy_selection(&mut app_state, false);
-                        }
-                        GridCommand::SymbolLeft => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            app_state.set_selected_grid_symbol_index(
-                                app_state.selected_grid_symbol_index().saturating_sub(1),
-                            );
-                        }
-                        GridCommand::SymbolRight => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            app_state.set_selected_grid_symbol_index(
-                                (app_state.selected_grid_symbol_index() + 1)
-                                    .min(app_state.symbol_items.len().saturating_sub(1)),
-                            );
-                        }
-                        GridCommand::NewStrategy => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let _ = handle_grid_strategy_action(
-                                cmd,
-                                &mut app_state,
-                                &mut strategy_catalog,
-                                &mut enabled_strategy_tags,
-                                &mut current_symbol,
-                                &mut current_strategy_profile,
-                                &ws_symbol_tx,
-                                &rest_client,
-                                &config,
-                                &app_tx,
-                                &strategy_profile_tx,
-                                &strategy_profiles_tx,
-                                &enabled_strategy_tags_tx,
-                                &strategy_enabled_tx,
-                                &ws_instruments_tx,
-                            );
-                        }
-                        GridCommand::EditStrategyConfig => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let _ = handle_grid_strategy_action(
-                                cmd,
-                                &mut app_state,
-                                &mut strategy_catalog,
-                                &mut enabled_strategy_tags,
-                                &mut current_symbol,
-                                &mut current_strategy_profile,
-                                &ws_symbol_tx,
-                                &rest_client,
-                                &config,
-                                &app_tx,
-                                &strategy_profile_tx,
-                                &strategy_profiles_tx,
-                                &enabled_strategy_tags_tx,
-                                &strategy_enabled_tx,
-                                &ws_instruments_tx,
-                            );
-                        }
-                        GridCommand::DeleteStrategy => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let _ = handle_grid_strategy_action(
-                                cmd,
-                                &mut app_state,
-                                &mut strategy_catalog,
-                                &mut enabled_strategy_tags,
-                                &mut current_symbol,
-                                &mut current_strategy_profile,
-                                &ws_symbol_tx,
-                                &rest_client,
-                                &config,
-                                &app_tx,
-                                &strategy_profile_tx,
-                                &strategy_profiles_tx,
-                                &enabled_strategy_tags_tx,
-                                &strategy_enabled_tx,
-                                &ws_instruments_tx,
-                            );
-                        }
-                        GridCommand::ToggleStrategyOnOff => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let _ = handle_grid_strategy_action(
-                                cmd,
-                                &mut app_state,
-                                &mut strategy_catalog,
-                                &mut enabled_strategy_tags,
-                                &mut current_symbol,
-                                &mut current_strategy_profile,
-                                &ws_symbol_tx,
-                                &rest_client,
-                                &config,
-                                &app_tx,
-                                &strategy_profile_tx,
-                                &strategy_profiles_tx,
-                                &enabled_strategy_tags_tx,
-                                &strategy_enabled_tx,
-                                &ws_instruments_tx,
-                            );
-                        }
-                        GridCommand::ActivateStrategy => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let _ = handle_grid_strategy_action(
-                                cmd,
-                                &mut app_state,
-                                &mut strategy_catalog,
-                                &mut enabled_strategy_tags,
-                                &mut current_symbol,
-                                &mut current_strategy_profile,
-                                &ws_symbol_tx,
-                                &rest_client,
-                                &config,
-                                &app_tx,
-                                &strategy_profile_tx,
-                                &strategy_profiles_tx,
-                                &enabled_strategy_tags_tx,
-                                &strategy_enabled_tx,
-                                &ws_instruments_tx,
-                            );
-                        }
-                        GridCommand::CloseGrid => {
-                            app_state.set_grid_open(false);
-                        }
-                        }
-                    }
+                    handle_grid_key(
+                        &key.code,
+                        &mut app_state,
+                        &mut strategy_catalog,
+                        &mut enabled_strategy_tags,
+                        &mut current_symbol,
+                        &mut current_strategy_profile,
+                        &ws_symbol_tx,
+                        &rest_client,
+                        &config,
+                        &app_tx,
+                        &strategy_profile_tx,
+                        &strategy_profiles_tx,
+                        &enabled_strategy_tags_tx,
+                        &strategy_enabled_tx,
+                        &ws_instruments_tx,
+                    );
                     continue;
                 }
                 if let Some(cmd) = parse_main_command(&key.code) {
