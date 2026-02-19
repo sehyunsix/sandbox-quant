@@ -1,3 +1,8 @@
+## v0.12.1 - 2026-02-19
+
+- docs(rfc): add de-scope and core stabilization plan (3f76633)
+- fix(ui): align strategy realized pnl with symbol-scoped asset pnl (57fd809)
+
 ## v0.12.0 - 2026-02-18
 
 - feat(ui): add rate-based network SLI metrics and health view (d4c4547)
