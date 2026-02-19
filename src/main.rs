@@ -511,6 +511,132 @@ fn handle_focus_popup_command(cmd: PopupCommand, app_state: &mut AppState) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_strategy_editor_key(
+    key_code: &KeyCode,
+    app_state: &mut AppState,
+    strategy_catalog: &mut StrategyCatalog,
+    enabled_strategy_tags: &mut HashSet<String>,
+    current_symbol: &mut String,
+    current_strategy_profile: &mut StrategyProfile,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+    strategy_profile_tx: &watch::Sender<StrategyProfile>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) {
+    match key_code {
+        KeyCode::Esc => {
+            app_state.set_strategy_editor_open(false);
+        }
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+            app_state.strategy_editor_field = app_state.strategy_editor_field.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+            app_state.strategy_editor_field = (app_state.strategy_editor_field + 1).min(3);
+        }
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => match app_state.strategy_editor_field {
+            0 => {
+                app_state.strategy_editor_symbol_index =
+                    app_state.strategy_editor_symbol_index.saturating_sub(1)
+            }
+            1 => {
+                app_state.strategy_editor_fast =
+                    app_state.strategy_editor_fast.saturating_sub(1).max(2)
+            }
+            2 => {
+                app_state.strategy_editor_slow =
+                    app_state.strategy_editor_slow.saturating_sub(1).max(3)
+            }
+            _ => {
+                app_state.strategy_editor_cooldown =
+                    app_state.strategy_editor_cooldown.saturating_sub(1).max(1)
+            }
+        },
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => match app_state.strategy_editor_field {
+            0 => {
+                app_state.strategy_editor_symbol_index = (app_state.strategy_editor_symbol_index + 1)
+                    .min(app_state.symbol_items.len().saturating_sub(1))
+            }
+            1 => app_state.strategy_editor_fast += 1,
+            2 => app_state.strategy_editor_slow += 1,
+            _ => app_state.strategy_editor_cooldown += 1,
+        },
+        KeyCode::Enter => {
+            let edited_profile = strategy_catalog.get(app_state.strategy_editor_index).cloned();
+            let selected_symbol = app_state
+                .symbol_items
+                .get(app_state.strategy_editor_symbol_index)
+                .cloned()
+                .unwrap_or_else(|| app_state.symbol.clone());
+            let maybe_updated = strategy_catalog.fork_profile(
+                app_state.strategy_editor_index,
+                &selected_symbol,
+                app_state.strategy_editor_fast,
+                app_state.strategy_editor_slow,
+                app_state.strategy_editor_cooldown,
+            );
+            if let Some(updated) = maybe_updated {
+                refresh_strategy_lists(app_state, strategy_catalog, enabled_strategy_tags);
+                app_state
+                    .set_selected_grid_strategy_index(strategy_catalog.index_of_label(&updated.label).unwrap_or(0));
+                if edited_profile.as_ref().map(|p| p.source_tag.as_str())
+                    == Some(current_strategy_profile.source_tag.as_str())
+                {
+                    set_strategy_enabled(
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        &current_strategy_profile.source_tag,
+                        false,
+                        app_state.paused,
+                    );
+                    set_strategy_enabled(
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        &updated.source_tag,
+                        true,
+                        app_state.paused,
+                    );
+                    *current_strategy_profile = updated.clone();
+                    app_state.strategy_label = updated.label.clone();
+                    app_state.set_focus_strategy_id(Some(updated.label.clone()));
+                    apply_symbol_selection(
+                        &updated.symbol,
+                        current_symbol,
+                        app_state,
+                        ws_symbol_tx,
+                        rest_client,
+                        config,
+                        app_tx,
+                    );
+                    app_state.fast_sma = None;
+                    app_state.slow_sma = None;
+                    let _ = strategy_profile_tx.send(updated.clone());
+                }
+                if let Some(before) = edited_profile.as_ref() {
+                    app_state.push_log(format!("Strategy forked: {} -> {}", before.label, updated.label));
+                } else {
+                    app_state.push_log(format!("Strategy forked: {}", updated.label));
+                }
+                persist_and_publish_strategy_state(
+                    app_state,
+                    strategy_catalog,
+                    current_strategy_profile,
+                    enabled_strategy_tags,
+                    strategy_profiles_tx,
+                    enabled_strategy_tags_tx,
+                    ws_instruments_tx,
+                );
+            }
+            app_state.set_strategy_editor_open(false);
+        }
+        _ => {}
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider (required by rustls 0.23+)
@@ -1336,131 +1462,22 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 if app_state.is_strategy_editor_open() {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app_state.set_strategy_editor_open(false);
-                        }
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                            app_state.strategy_editor_field =
-                                app_state.strategy_editor_field.saturating_sub(1);
-                        }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            app_state.strategy_editor_field =
-                                (app_state.strategy_editor_field + 1).min(3);
-                        }
-                        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
-                            match app_state.strategy_editor_field {
-                                0 => {
-                                    app_state.strategy_editor_symbol_index =
-                                        app_state.strategy_editor_symbol_index.saturating_sub(1)
-                                }
-                                1 => {
-                                    app_state.strategy_editor_fast =
-                                        app_state.strategy_editor_fast.saturating_sub(1).max(2)
-                                }
-                                2 => {
-                                    app_state.strategy_editor_slow =
-                                        app_state.strategy_editor_slow.saturating_sub(1).max(3)
-                                }
-                                _ => {
-                                    app_state.strategy_editor_cooldown =
-                                        app_state.strategy_editor_cooldown.saturating_sub(1).max(1)
-                                }
-                            }
-                        }
-                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
-                            match app_state.strategy_editor_field {
-                                0 => {
-                                    app_state.strategy_editor_symbol_index =
-                                        (app_state.strategy_editor_symbol_index + 1)
-                                            .min(app_state.symbol_items.len().saturating_sub(1))
-                                }
-                                1 => app_state.strategy_editor_fast += 1,
-                                2 => app_state.strategy_editor_slow += 1,
-                                _ => app_state.strategy_editor_cooldown += 1,
-                            }
-                        }
-                        KeyCode::Enter => {
-                            let edited_profile = strategy_catalog
-                                .get(app_state.strategy_editor_index)
-                                .cloned();
-                            let selected_symbol = app_state
-                                .symbol_items
-                                .get(app_state.strategy_editor_symbol_index)
-                                .cloned()
-                                .unwrap_or_else(|| app_state.symbol.clone());
-                            let maybe_updated = strategy_catalog.fork_profile(
-                                app_state.strategy_editor_index,
-                                &selected_symbol,
-                                app_state.strategy_editor_fast,
-                                app_state.strategy_editor_slow,
-                                app_state.strategy_editor_cooldown,
-                            );
-                            if let Some(updated) = maybe_updated {
-                                refresh_strategy_lists(
-                                    &mut app_state,
-                                    &strategy_catalog,
-                                    &enabled_strategy_tags,
-                                );
-                                app_state.set_selected_grid_strategy_index(
-                                    strategy_catalog.index_of_label(&updated.label).unwrap_or(0),
-                                );
-                                if edited_profile.as_ref().map(|p| p.source_tag.as_str())
-                                    == Some(current_strategy_profile.source_tag.as_str())
-                                {
-                                    set_strategy_enabled(
-                                        &mut strategy_catalog,
-                                        &mut enabled_strategy_tags,
-                                        &current_strategy_profile.source_tag,
-                                        false,
-                                        app_state.paused,
-                                    );
-                                    set_strategy_enabled(
-                                        &mut strategy_catalog,
-                                        &mut enabled_strategy_tags,
-                                        &updated.source_tag,
-                                        true,
-                                        app_state.paused,
-                                    );
-                                    current_strategy_profile = updated.clone();
-                                    app_state.strategy_label = updated.label.clone();
-                                    app_state.set_focus_strategy_id(Some(updated.label.clone()));
-                                    apply_symbol_selection(
-                                        &updated.symbol,
-                                        &mut current_symbol,
-                                        &mut app_state,
-                                        &ws_symbol_tx,
-                                        &rest_client,
-                                        &config,
-                                        &app_tx,
-                                    );
-                                    app_state.fast_sma = None;
-                                    app_state.slow_sma = None;
-                                    let _ = strategy_profile_tx.send(updated.clone());
-                                }
-                                if let Some(before) = edited_profile.as_ref() {
-                                    app_state.push_log(format!(
-                                        "Strategy forked: {} -> {}",
-                                        before.label, updated.label
-                                    ));
-                                } else {
-                                    app_state
-                                        .push_log(format!("Strategy forked: {}", updated.label));
-                                }
-                                persist_and_publish_strategy_state(
-                                    &mut app_state,
-                                    &strategy_catalog,
-                                    &current_strategy_profile,
-                                    &enabled_strategy_tags,
-                                    &strategy_profiles_tx,
-                                    &enabled_strategy_tags_tx,
-                                    &ws_instruments_tx,
-                                );
-                            }
-                            app_state.set_strategy_editor_open(false);
-                        }
-                        _ => {}
-                    }
+                    handle_strategy_editor_key(
+                        &key.code,
+                        &mut app_state,
+                        &mut strategy_catalog,
+                        &mut enabled_strategy_tags,
+                        &mut current_symbol,
+                        &mut current_strategy_profile,
+                        &ws_symbol_tx,
+                        &rest_client,
+                        &config,
+                        &app_tx,
+                        &strategy_profile_tx,
+                        &strategy_profiles_tx,
+                        &enabled_strategy_tags_tx,
+                        &ws_instruments_tx,
+                    );
                     continue;
                 }
                 if app_state.is_grid_open() {
