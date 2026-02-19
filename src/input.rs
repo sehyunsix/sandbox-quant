@@ -34,6 +34,26 @@ pub enum GridCommand {
     CloseGrid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopupKind {
+    SymbolSelector,
+    StrategySelector,
+    Account,
+    History,
+    Focus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopupCommand {
+    Close,
+    Up,
+    Down,
+    Confirm,
+    HistoryDay,
+    HistoryHour,
+    HistoryMonth,
+}
+
 pub fn parse_main_command(key_code: &KeyCode) -> Option<UiCommand> {
     match key_code {
         KeyCode::Char('0') => Some(UiCommand::SwitchTimeframe("1s")),
@@ -87,5 +107,45 @@ pub fn parse_grid_command(key_code: &KeyCode) -> Option<GridCommand> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+pub fn parse_popup_command(kind: PopupKind, key_code: &KeyCode) -> Option<PopupCommand> {
+    match kind {
+        PopupKind::SymbolSelector => match key_code {
+            KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('T') => Some(PopupCommand::Close),
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => Some(PopupCommand::Up),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => Some(PopupCommand::Down),
+            KeyCode::Enter => Some(PopupCommand::Confirm),
+            _ => None,
+        },
+        PopupKind::StrategySelector => match key_code {
+            KeyCode::Esc | KeyCode::Char('y') | KeyCode::Char('Y') => Some(PopupCommand::Close),
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => Some(PopupCommand::Up),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => Some(PopupCommand::Down),
+            KeyCode::Enter => Some(PopupCommand::Confirm),
+            _ => None,
+        },
+        PopupKind::Account => match key_code {
+            KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Enter => {
+                Some(PopupCommand::Close)
+            }
+            _ => None,
+        },
+        PopupKind::History => match key_code {
+            KeyCode::Char('d') | KeyCode::Char('D') => Some(PopupCommand::HistoryDay),
+            KeyCode::Char('h') | KeyCode::Char('H') => Some(PopupCommand::HistoryHour),
+            KeyCode::Char('m') | KeyCode::Char('M') => Some(PopupCommand::HistoryMonth),
+            KeyCode::Esc | KeyCode::Char('i') | KeyCode::Char('I') | KeyCode::Enter => {
+                Some(PopupCommand::Close)
+            }
+            _ => None,
+        },
+        PopupKind::Focus => match key_code {
+            KeyCode::Esc | KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Enter => {
+                Some(PopupCommand::Close)
+            }
+            _ => None,
+        },
     }
 }

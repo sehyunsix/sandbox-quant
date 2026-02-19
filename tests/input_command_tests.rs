@@ -1,5 +1,8 @@
 use crossterm::event::KeyCode;
-use sandbox_quant::input::{parse_grid_command, parse_main_command, GridCommand, UiCommand};
+use sandbox_quant::input::{
+    parse_grid_command, parse_main_command, parse_popup_command, GridCommand, PopupCommand,
+    PopupKind, UiCommand,
+};
 
 #[test]
 fn parse_main_command_maps_case_insensitive_char_keys() {
@@ -138,5 +141,61 @@ fn parse_grid_command_maps_navigation_and_actions() {
     assert_eq!(
         parse_grid_command(&KeyCode::Esc),
         Some(GridCommand::CloseGrid)
+    );
+}
+
+#[test]
+fn parse_popup_command_maps_symbol_strategy_selectors() {
+    assert_eq!(
+        parse_popup_command(PopupKind::SymbolSelector, &KeyCode::Char('t')),
+        Some(PopupCommand::Close)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::SymbolSelector, &KeyCode::Char('k')),
+        Some(PopupCommand::Up)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::SymbolSelector, &KeyCode::Down),
+        Some(PopupCommand::Down)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::SymbolSelector, &KeyCode::Enter),
+        Some(PopupCommand::Confirm)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::StrategySelector, &KeyCode::Char('Y')),
+        Some(PopupCommand::Close)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::StrategySelector, &KeyCode::Up),
+        Some(PopupCommand::Up)
+    );
+}
+
+#[test]
+fn parse_popup_command_maps_account_history_focus() {
+    assert_eq!(
+        parse_popup_command(PopupKind::Account, &KeyCode::Enter),
+        Some(PopupCommand::Close)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::History, &KeyCode::Char('d')),
+        Some(PopupCommand::HistoryDay)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::History, &KeyCode::Char('H')),
+        Some(PopupCommand::HistoryHour)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::History, &KeyCode::Char('m')),
+        Some(PopupCommand::HistoryMonth)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::Focus, &KeyCode::Esc),
+        Some(PopupCommand::Close)
+    );
+    assert_eq!(
+        parse_popup_command(PopupKind::Focus, &KeyCode::Char('z')),
+        None
     );
 }

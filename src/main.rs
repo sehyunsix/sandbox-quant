@@ -10,7 +10,10 @@ use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
 use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
-use sandbox_quant::input::{parse_grid_command, parse_main_command, GridCommand, UiCommand};
+use sandbox_quant::input::{
+    parse_grid_command, parse_main_command, parse_popup_command, GridCommand, PopupCommand,
+    PopupKind, UiCommand,
+};
 use sandbox_quant::model::position::Position;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
@@ -1119,22 +1122,23 @@ async fn main() -> Result<()> {
                     break;
                 }
                 if app_state.is_symbol_selector_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('T') => {
+                    if let Some(cmd) = parse_popup_command(PopupKind::SymbolSelector, &key.code) {
+                        match cmd {
+                        PopupCommand::Close => {
                             app_state.set_symbol_selector_open(false);
                         }
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                        PopupCommand::Up => {
                             app_state.set_symbol_selector_index(
                                 app_state.symbol_selector_index().saturating_sub(1),
                             );
                         }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                        PopupCommand::Down => {
                             app_state.set_symbol_selector_index(
                                 (app_state.symbol_selector_index() + 1)
                                     .min(app_state.symbol_items.len().saturating_sub(1)),
                             );
                         }
-                        KeyCode::Enter => {
+                        PopupCommand::Confirm => {
                             if let Some(next_symbol) = app_state
                                 .symbol_items
                                 .get(app_state.symbol_selector_index())
@@ -1153,26 +1157,30 @@ async fn main() -> Result<()> {
                             app_state.set_symbol_selector_open(false);
                         }
                         _ => {}
+                        }
                     }
                     continue;
                 }
                 if app_state.is_strategy_selector_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(cmd) =
+                        parse_popup_command(PopupKind::StrategySelector, &key.code)
+                    {
+                        match cmd {
+                        PopupCommand::Close => {
                             app_state.set_strategy_selector_open(false);
                         }
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+                        PopupCommand::Up => {
                             app_state.set_strategy_selector_index(
                                 app_state.strategy_selector_index().saturating_sub(1),
                             );
                         }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+                        PopupCommand::Down => {
                             app_state.set_strategy_selector_index(
                                 (app_state.strategy_selector_index() + 1)
                                     .min(app_state.strategy_items.len().saturating_sub(1)),
                             );
                         }
-                        KeyCode::Enter => {
+                        PopupCommand::Confirm => {
                             if let Some(next_profile) = strategy_catalog
                                 .get(app_state.strategy_selector_index())
                                 .cloned()
@@ -1226,45 +1234,52 @@ async fn main() -> Result<()> {
                             app_state.set_strategy_selector_open(false);
                         }
                         _ => {}
+                        }
                     }
                     continue;
                 }
                 if app_state.is_account_popup_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Enter => {
+                    if let Some(cmd) = parse_popup_command(PopupKind::Account, &key.code) {
+                        match cmd {
+                        PopupCommand::Close => {
                             app_state.set_account_popup_open(false);
                         }
                         _ => {}
+                        }
                     }
                     continue;
                 }
                 if app_state.is_history_popup_open() {
-                    match key.code {
-                        KeyCode::Char('d') | KeyCode::Char('D') => {
+                    if let Some(cmd) = parse_popup_command(PopupKind::History, &key.code) {
+                        match cmd {
+                        PopupCommand::HistoryDay => {
                             app_state.history_bucket = order_store::HistoryBucket::Day;
                             app_state.refresh_history_rows();
                         }
-                        KeyCode::Char('h') | KeyCode::Char('H') => {
+                        PopupCommand::HistoryHour => {
                             app_state.history_bucket = order_store::HistoryBucket::Hour;
                             app_state.refresh_history_rows();
                         }
-                        KeyCode::Char('m') | KeyCode::Char('M') => {
+                        PopupCommand::HistoryMonth => {
                             app_state.history_bucket = order_store::HistoryBucket::Month;
                             app_state.refresh_history_rows();
                         }
-                        KeyCode::Esc | KeyCode::Char('i') | KeyCode::Char('I') | KeyCode::Enter => {
+                        PopupCommand::Close => {
                             app_state.set_history_popup_open(false);
                         }
                         _ => {}
+                        }
                     }
                     continue;
                 }
                 if app_state.is_focus_popup_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Enter => {
+                    if let Some(cmd) = parse_popup_command(PopupKind::Focus, &key.code) {
+                        match cmd {
+                        PopupCommand::Close => {
                             app_state.set_focus_popup_open(false);
                         }
                         _ => {}
+                        }
                     }
                     continue;
                 }
