@@ -1,5 +1,8 @@
 # sandbox-quant
 
+[![docs.rs](docs/assets/docsrs-badge.svg)](https://docs.rs/sandbox-quant)
+[![crates.io](docs/assets/cratesio-badge.svg)](https://crates.io/crates/sandbox-quant)
+
 Terminal-based Rust trading sandbox for Binance Spot Testnet.
 
 It provides real-time market streaming, strategy-driven order execution, cumulative trade history, and a `ratatui` dashboard for monitoring positions and performance.
@@ -49,28 +52,15 @@ cargo run --bin sandbox-quant
 
 ## UI Overview
 
-<!-- UI_DOCS:START -->
-### UI Captures (Manual)
 
-Add screenshots manually to these fixed paths:
 
-- `docs/ui/screenshots/dashboard-main.png`
-- `docs/ui/screenshots/grid-assets.png`
-- `docs/ui/screenshots/grid-strategies.png`
-- `docs/ui/screenshots/grid-strategies-config.png`
-- `docs/ui/screenshots/grid-network.png`
-- `docs/ui/screenshots/popup-account.png`
-
-Markdown embed targets (paste after adding images):
-
-```md
 ![Main Dashboard](docs/ui/screenshots/dashboard-main.png)
 ![Portfolio Grid - Assets Tab](docs/ui/screenshots/grid-assets.png)
 ![Portfolio Grid - Strategies Tab](docs/ui/screenshots/grid-strategies.png)
 ![Portfolio Grid - Strategies + Config Popup](docs/ui/screenshots/grid-strategies-config.png)
 ![Portfolio Grid - Network Tab](docs/ui/screenshots/grid-network.png)
 ![Account Popup](docs/ui/screenshots/popup-account.png)
-```
+
 
 <!-- UI_DOCS:END -->
 
@@ -86,6 +76,7 @@ Common knobs:
 ## Documentation Links
 
 - API Docs (`docs.rs`): https://docs.rs/sandbox-quant
+- Crate Page (`crates.io`): https://crates.io/crates/sandbox-quant
 - Markdown Book (`docs-site`):
 
 ```bash
