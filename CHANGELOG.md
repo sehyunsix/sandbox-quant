@@ -1,3 +1,9 @@
+## v0.12.3 - 2026-02-19
+
+- docs(readme): add English captions for UI screenshots (d341bcf)
+- docs(readme): add docs/crates badges with local asset images (fbdb732)
+- docs(readme): remove auto ui-docs flow and keep manual screenshot slots (7bdf23a)
+
 ## v0.12.2 - 2026-02-19
 
 - docs(rfc): add detailed strategy creation lifecycle and governance (3bf6790)
