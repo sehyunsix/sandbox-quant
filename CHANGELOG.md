@@ -1,3 +1,9 @@
+## v0.12.4 - 2026-02-19
+
+- refactor(main): centralize strategy state sync side-effects (98b8460)
+- refactor(main): extract repeated runtime side-effects helpers (531bee7)
+- docs(rfc): analyze main runtime orchestration with mermaid (a29e1af)
+
 ## v0.12.3 - 2026-02-19
 
 - docs(readme): add English captions for UI screenshots (d341bcf)
