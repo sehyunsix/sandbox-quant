@@ -56,11 +56,11 @@ Current strategy implementation status (code-based):
 
 | Strategy | Category | Status | Source | Test | Doc |
 |---|---|---|---|---|---|
-| MA Crossover | Trend | [x] Implemented | `src/strategy/ma_crossover.rs` | `tests/ma_crossover_tests.rs` | `docs/strategy/ma-crossover.md` |
-| EMA Crossover | Trend | [x] Implemented | `src/strategy/ema_crossover.rs` | `tests/ema_crossover_tests.rs` | `docs/strategy/ema-crossover.md` |
-| ATR Expansion | Volatility | [x] Implemented | `src/strategy/atr_expansion.rs` | `tests/atr_expansion_tests.rs` | `docs/strategy/atr-expansion.md` |
-| Channel Breakout | Breakout | [x] Implemented | `src/strategy/channel_breakout.rs` | `tests/channel_breakout_tests.rs` | `docs/strategy/channel-breakout.md` |
-| RSA | Hybrid | [x] Implemented | `src/strategy/rsa.rs` | `tests/rsa_strategy_tests.rs` | `docs/strategy/rsa.md` |
+| MA Crossover | Trend | [x] Implemented | [src/strategy/ma_crossover.rs](src/strategy/ma_crossover.rs) | [tests/ma_crossover_tests.rs](tests/ma_crossover_tests.rs) | [docs/strategy/ma-crossover.md](docs/strategy/ma-crossover.md) |
+| EMA Crossover | Trend | [x] Implemented | [src/strategy/ema_crossover.rs](src/strategy/ema_crossover.rs) | [tests/ema_crossover_tests.rs](tests/ema_crossover_tests.rs) | [docs/strategy/ema-crossover.md](docs/strategy/ema-crossover.md) |
+| ATR Expansion | Volatility | [x] Implemented | [src/strategy/atr_expansion.rs](src/strategy/atr_expansion.rs) | [tests/atr_expansion_tests.rs](tests/atr_expansion_tests.rs) | [docs/strategy/atr-expansion.md](docs/strategy/atr-expansion.md) |
+| Channel Breakout | Breakout | [x] Implemented | [src/strategy/channel_breakout.rs](src/strategy/channel_breakout.rs) | [tests/channel_breakout_tests.rs](tests/channel_breakout_tests.rs) | [docs/strategy/channel-breakout.md](docs/strategy/channel-breakout.md) |
+| RSA | Hybrid | [x] Implemented | [src/strategy/rsa.rs](src/strategy/rsa.rs) | [tests/rsa_strategy_tests.rs](tests/rsa_strategy_tests.rs) | [docs/strategy/rsa.md](docs/strategy/rsa.md) |
 | Donchian Trend | Trend | [ ] Planned | - | - | - |
 | MA Reversion | MeanReversion | [ ] Planned | - | - | - |
 | Bollinger Reversion | MeanReversion | [ ] Planned | - | - | - |
@@ -106,7 +106,7 @@ Common knobs:
 
 - API Docs (`docs.rs`): https://docs.rs/sandbox-quant
 - Crate Page (`crates.io`): https://crates.io/crates/sandbox-quant
-- Strategy Docs Index: `docs/strategy/README.md`
+- Strategy Docs Index: [docs/strategy/README.md](docs/strategy/README.md)
 - Markdown Book (`docs-site`):
 
 ```bash
