@@ -5,6 +5,14 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
+      task_type:
+        description: "Task type"
+        required: true
+        default: "strategy_creation"
+        type: choice
+        options:
+          - strategy_creation
+          - general
       scope:
         description: "Scoped task for Gemini (e.g. add ATR strategy tests)"
         required: true
@@ -29,7 +37,7 @@ permissions:
 
 concurrency:
   group: gemini-pr-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   prepare:
@@ -42,6 +50,8 @@ jobs:
       draft: ${{ steps.eval.outputs.draft }}
       requester: ${{ steps.eval.outputs.requester }}
       trigger: ${{ steps.eval.outputs.trigger }}
+      task_type: ${{ steps.eval.outputs.task_type }}
+      enforce_strategy_gate: ${{ steps.eval.outputs.enforce_strategy_gate }}
     steps:
       - name: Evaluate event and authorization
         id: eval
@@ -52,7 +62,10 @@ jobs:
             core.setOutput('trigger', ev);
             if (ev === 'workflow_dispatch') {
               const inputs = context.payload.inputs || {};
+              const taskType = inputs.task_type || 'strategy_creation';
               core.setOutput('should_run', 'true');
+              core.setOutput('task_type', taskType);
+              core.setOutput('enforce_strategy_gate', String(taskType === 'strategy_creation'));
               core.setOutput('scope', inputs.scope || 'Implement requested change');
               core.setOutput('base_branch', inputs.base_branch || 'main');
               core.setOutput('draft', String(inputs.draft ?? 'true'));
@@ -62,6 +75,8 @@ jobs:
 
             if (ev === 'schedule') {
               core.setOutput('should_run', 'true');
+              core.setOutput('task_type', 'strategy_creation');
+              core.setOutput('enforce_strategy_gate', 'true');
               core.setOutput('scope', 'Daily Gemini maintenance batch');
               core.setOutput('base_branch', 'main');
               core.setOutput('draft', 'true');
@@ -82,6 +97,8 @@ jobs:
               const scopeMatch = body.match(/scope\s*=\s*(.+)$/i);
               const scope = scopeMatch ? scopeMatch[1].trim() : 'Implement requested change from issue comment';
               core.setOutput('should_run', 'true');
+              core.setOutput('task_type', 'strategy_creation');
+              core.setOutput('enforce_strategy_gate', 'true');
               core.setOutput('scope', scope);
               core.setOutput('base_branch', 'main');
               core.setOutput('draft', 'true');
@@ -90,12 +107,15 @@ jobs:
             }
 
             core.setOutput('should_run', 'false');
+            core.setOutput('task_type', 'general');
+            core.setOutput('enforce_strategy_gate', 'false');
 
   gemini_pr:
     name: Generate Changes and Open PR
     needs: prepare
     if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout base branch
         uses: actions/checkout@v4
@@ -124,6 +144,7 @@ jobs:
           prompt: |
             You are working in a Rust repository.
             Task scope: ${{ needs.prepare.outputs.scope }}
+            Task type: ${{ needs.prepare.outputs.task_type }}
 
             Requirements:
             - Keep changes strictly in scope.
@@ -131,6 +152,43 @@ jobs:
             - Add or update tests under tests/ when behavior changes.
             - Do not merge or release.
             - Keep repository buildable.
+            - Do NOT submit trivial test-only changes like tests/smoke_test.rs.
+            - If task type is strategy_creation:
+              - Add a real strategy implementation under src/strategy/.
+              - Register strategy in runtime/catalog paths.
+              - Add corresponding tests under tests/*_tests.rs.
+
+      - name: Strategy creation structural gate
+        if: needs.prepare.outputs.enforce_strategy_gate == 'true'
+        run: |
+          set -euo pipefail
+          changed="$(git status --porcelain | awk '{print $2}')"
+          echo "Changed files:"
+          echo "$changed"
+
+          has_strategy_file=0
+          has_strategy_test=0
+          has_registration=0
+
+          if echo "$changed" | grep -E '^src/strategy/.+\.rs$' >/dev/null; then
+            has_strategy_file=1
+          fi
+          if echo "$changed" | grep -E '^tests/.+_tests\.rs$' >/dev/null; then
+            has_strategy_test=1
+          fi
+          if echo "$changed" | grep -E '^(src/main\.rs|src/strategy_catalog\.rs|src/strategy/mod\.rs)$' >/dev/null; then
+            has_registration=1
+          fi
+
+          if [ "$has_strategy_file" -ne 1 ] || [ "$has_strategy_test" -ne 1 ] || [ "$has_registration" -ne 1 ]; then
+            echo "Strategy gate failed: must include strategy source + strategy tests + registration changes."
+            exit 1
+          fi
+
+          if echo "$changed" | grep -E '^tests/smoke_test\.rs$' >/dev/null && [ "$(echo "$changed" | wc -l | tr -d ' ')" -le 2 ]; then
+            echo "Strategy gate failed: smoke_test-only change is not allowed."
+            exit 1
+          fi
 
       - name: Compile-time safety gates
         run: |
@@ -164,6 +222,7 @@ jobs:
             ## Summary
             - Scope: `${{ needs.prepare.outputs.scope }}`
             - Trigger: `${{ needs.prepare.outputs.trigger }}`
+            - Task type: `${{ needs.prepare.outputs.task_type }}`
 
             ## Compile-time Safety Gates
             - [x] `cargo fmt --check`
