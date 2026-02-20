@@ -1,29 +1,26 @@
 # GEMINI.md
 
-This document defines guardrails for Gemini-assisted changes and PR generation in this repository.
+This document defines guardrails for Gemini-assisted RFC/issue proposal PR generation in this repository.
 
 ## Purpose
 - Keep AI-generated changes safe, reviewable, and scoped.
-- Prevent Gemini workflow mechanics from overlapping strategy-domain governance.
+- Restrict automation to proposal artifacts (RFC/issue docs), not runtime strategy code generation.
 
 ## Trigger Modes
 - `workflow_dispatch` in `.github/workflows/gemini-pr.yml`
 - Issue comment command (authorized users only):
-  - `/gemini-pr scope=<short task>`
+  - `/gemini-rfc scope=<short task>`
+  - `/gemini-issue scope=<short task>`
 
-## Required Safety Gates
+## Required Validation Gates
 Before a Gemini PR is mergeable, all must pass:
-- `cargo fmt --check`
-- `cargo check --all-targets`
-- `cargo clippy --all-targets -- -D warnings`
-- `cargo test -q`
+- docs-only scope gate
+- task-type structural gate (`docs/rfcs` for RFC, `docs/issues` for issue triage)
 
 ## Scope Discipline
 - Keep each Gemini PR single-purpose and small.
-- Do not mix workflow-infra changes and large strategy-domain refactors in one PR.
-- If both are needed, split into two PRs:
-  - PR A: workflow/mechanics (`workflow:gemini`)
-  - PR B: strategy logic (`domain:strategy`)
+- Do not modify runtime files (`src/**`, `tests/**`, `Cargo.toml`, `Cargo.lock`) from Gemini automation lane.
+- Keep workflow-infra updates separate from proposal content when possible.
 
 ## Attribution Rules
 For AI-assisted PRs, include:
@@ -42,6 +39,9 @@ Recommended commit trailers:
 - Repeated failures move strategy to quarantined state.
 - Quarantined strategy requires explicit human action to re-enable.
 
+Note:
+- Strategy implementation/registration/testing is manual lane only for now.
+
 ## Non-Negotiable Do/Do Not
 Do:
 - Add/update tests in `tests/` for behavior changes.
@@ -53,6 +53,7 @@ Do Not:
 - Bypass required checks.
 - Introduce destructive git operations in automation.
 - Expand scope beyond requested task without opening follow-up PR.
+- Use Gemini automation lane to generate production strategy code.
 
 ## Review Policy
 - Every Gemini PR requires human review.

@@ -1,20 +1,18 @@
 name: Gemini PR Workflow
 
 on:
-  schedule:
-    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       task_type:
         description: "Task type"
         required: true
-        default: "strategy_creation"
+        default: "architecture_rfc"
         type: choice
         options:
-          - strategy_creation
-          - general
+          - architecture_rfc
+          - issue_triage
       scope:
-        description: "Scoped task for Gemini (e.g. add ATR strategy tests)"
+        description: "Scoped task for Gemini (e.g. portfolio tab split RFC)"
         required: true
         type: string
       base_branch:
@@ -51,7 +49,7 @@ jobs:
       requester: ${{ steps.eval.outputs.requester }}
       trigger: ${{ steps.eval.outputs.trigger }}
       task_type: ${{ steps.eval.outputs.task_type }}
-      enforce_strategy_gate: ${{ steps.eval.outputs.enforce_strategy_gate }}
+      enforce_docs_gate: ${{ steps.eval.outputs.enforce_docs_gate }}
     steps:
       - name: Evaluate event and authorization
         id: eval
@@ -62,25 +60,14 @@ jobs:
             core.setOutput('trigger', ev);
             if (ev === 'workflow_dispatch') {
               const inputs = context.payload.inputs || {};
-              const taskType = inputs.task_type || 'strategy_creation';
+              const taskType = inputs.task_type || 'architecture_rfc';
               core.setOutput('should_run', 'true');
               core.setOutput('task_type', taskType);
-              core.setOutput('enforce_strategy_gate', String(taskType === 'strategy_creation'));
+              core.setOutput('enforce_docs_gate', 'true');
               core.setOutput('scope', inputs.scope || 'Implement requested change');
               core.setOutput('base_branch', inputs.base_branch || 'main');
               core.setOutput('draft', String(inputs.draft ?? 'true'));
               core.setOutput('requester', context.actor);
-              return;
-            }
-
-            if (ev === 'schedule') {
-              core.setOutput('should_run', 'true');
-              core.setOutput('task_type', 'strategy_creation');
-              core.setOutput('enforce_strategy_gate', 'true');
-              core.setOutput('scope', 'Daily Gemini maintenance batch');
-              core.setOutput('base_branch', 'main');
-              core.setOutput('draft', 'true');
-              core.setOutput('requester', context.actor || 'github-actions[bot]');
               return;
             }
 
@@ -89,7 +76,10 @@ jobs:
               const assoc = context.payload.comment?.author_association || '';
               const allowed = ['OWNER', 'MEMBER', 'COLLABORATOR'];
               const isIssue = !context.payload.issue?.pull_request;
-              if (!isIssue || !body.toLowerCase().startsWith('/gemini-pr') || !allowed.includes(assoc)) {
+              const bodyLower = body.toLowerCase();
+              const isGeminiRfc = bodyLower.startsWith('/gemini-rfc');
+              const isGeminiIssue = bodyLower.startsWith('/gemini-issue');
+              if (!isIssue || (!isGeminiRfc && !isGeminiIssue) || !allowed.includes(assoc)) {
                 core.setOutput('should_run', 'false');
                 return;
               }
@@ -97,8 +87,8 @@ jobs:
               const scopeMatch = body.match(/scope\s*=\s*(.+)$/i);
               const scope = scopeMatch ? scopeMatch[1].trim() : 'Implement requested change from issue comment';
               core.setOutput('should_run', 'true');
-              core.setOutput('task_type', 'strategy_creation');
-              core.setOutput('enforce_strategy_gate', 'true');
+              core.setOutput('task_type', isGeminiIssue ? 'issue_triage' : 'architecture_rfc');
+              core.setOutput('enforce_docs_gate', 'true');
               core.setOutput('scope', scope);
               core.setOutput('base_branch', 'main');
               core.setOutput('draft', 'true');
@@ -108,14 +98,14 @@ jobs:
 
             core.setOutput('should_run', 'false');
             core.setOutput('task_type', 'general');
-            core.setOutput('enforce_strategy_gate', 'false');
+            core.setOutput('enforce_docs_gate', 'false');
 
   gemini_pr:
     name: Generate Changes and Open PR
     needs: prepare
     if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - name: Checkout base branch
         uses: actions/checkout@v4
@@ -149,62 +139,64 @@ jobs:
             Requirements:
             - Keep changes strictly in scope.
             - Prefer minimal diff.
-            - Add or update tests under tests/ when behavior changes.
             - Do not merge or release.
-            - Keep repository buildable.
-            - Do NOT submit trivial test-only changes like tests/smoke_test.rs.
-            - If task type is strategy_creation:
-              - Add a real strategy implementation under src/strategy/.
-              - Register strategy in runtime/catalog paths.
-              - Add corresponding tests under tests/*_tests.rs.
+            - This workflow is docs/architecture lane only: never modify src/, tests/, Cargo.toml, or Cargo.lock.
+            - If task type is architecture_rfc:
+              - Create or update RFC docs under docs/rfcs/.
+              - Keep proposals concrete with problem, options, recommendation, and rollout.
+            - If task type is issue_triage:
+              - Create or update issue proposals under docs/issues/.
+              - Include reproduction, impact, priority, and suggested owner.
 
-      - name: Strategy creation structural gate
-        if: needs.prepare.outputs.enforce_strategy_gate == 'true'
+      - name: Docs-only structural gate
+        if: needs.prepare.outputs.enforce_docs_gate == 'true'
         run: |
           set -euo pipefail
           changed="$(git status --porcelain | awk '{print $2}')"
           echo "Changed files:"
           echo "$changed"
 
-          has_strategy_file=0
-          has_strategy_test=0
-          has_registration=0
-
-          if echo "$changed" | grep -E '^src/strategy/.+\.rs$' >/dev/null; then
-            has_strategy_file=1
-          fi
-          if echo "$changed" | grep -E '^tests/.+_tests\.rs$' >/dev/null; then
-            has_strategy_test=1
-          fi
-          if echo "$changed" | grep -E '^(src/main\.rs|src/strategy_catalog\.rs|src/strategy/mod\.rs)$' >/dev/null; then
-            has_registration=1
-          fi
-
-          if [ "$has_strategy_file" -ne 1 ] || [ "$has_strategy_test" -ne 1 ] || [ "$has_registration" -ne 1 ]; then
-            echo "Strategy gate failed: must include strategy source + strategy tests + registration changes."
+          if [ -z "$changed" ]; then
+            echo "Docs gate failed: no changes generated."
             exit 1
           fi
 
-          disallowed="$(echo "$changed" | grep -Ev '^(src/strategy/.+\.rs|src/strategy/mod\.rs|src/main\.rs|src/strategy_catalog\.rs|tests/.+_tests\.rs|docs/rfcs/.+\.md|README\.md|Cargo\.toml|Cargo\.lock)$' || true)"
+          disallowed="$(echo "$changed" | grep -Ev '^(.github/workflows/gemini-pr\.yml|docs/rfcs/.+\.md|docs/issues/.+\.md|README\.md|GEMINI\.md)$' || true)"
           if [ -n "$disallowed" ]; then
-            echo "Strategy gate failed: changed files outside strategy scope:"
+            echo "Docs gate failed: changed files outside docs scope:"
             echo "$disallowed"
             exit 1
           fi
 
-          if echo "$changed" | grep -E '^tests/smoke_test\.rs$' >/dev/null && [ "$(echo "$changed" | wc -l | tr -d ' ')" -le 2 ]; then
-            echo "Strategy gate failed: smoke_test-only change is not allowed."
-            exit 1
+          task_type="${{ needs.prepare.outputs.task_type }}"
+          if [ "$task_type" = "architecture_rfc" ]; then
+            if ! echo "$changed" | grep -E '^docs/rfcs/.+\.md$' >/dev/null; then
+              echo "Docs gate failed: architecture_rfc requires docs/rfcs/*.md changes."
+              exit 1
+            fi
           fi
 
-      - name: Compile-time safety gates
+          if [ "$task_type" = "issue_triage" ]; then
+            if ! echo "$changed" | grep -E '^docs/issues/.+\.md$' >/dev/null; then
+              echo "Docs gate failed: issue_triage requires docs/issues/*.md changes."
+              exit 1
+            fi
+          fi
+
+      - name: Ensure docs directories
         run: |
           set -euo pipefail
-          cargo fmt
-          cargo fmt --check
-          cargo check --all-targets
-          cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious
-          cargo test -q
+          mkdir -p docs/issues docs/rfcs
+
+      - name: Fast validation gates
+        run: |
+          set -euo pipefail
+          git diff --name-only
+          changed="$(git status --porcelain | awk '{print $2}')"
+          if echo "$changed" | grep -E '^(src/|tests/|Cargo\.toml|Cargo\.lock)' >/dev/null; then
+            echo "Validation failed: code/runtime files changed in docs-only lane."
+            exit 1
+          fi
 
       - name: Reset working tree to base branch before PR action
         run: |
@@ -218,7 +210,7 @@ jobs:
         with:
           branch: ${{ steps.branch.outputs.name }}
           base: ${{ needs.prepare.outputs.base_branch }}
-          title: "chore(gemini): ${{ needs.prepare.outputs.scope }}"
+          title: "docs(gemini): ${{ needs.prepare.outputs.scope }}"
           draft: ${{ needs.prepare.outputs.draft == 'true' }}
           commit-message: |
             chore(gemini): ${{ needs.prepare.outputs.scope }}
@@ -231,11 +223,9 @@ jobs:
             - Trigger: `${{ needs.prepare.outputs.trigger }}`
             - Task type: `${{ needs.prepare.outputs.task_type }}`
 
-            ## Compile-time Safety Gates
-            - [x] `cargo fmt --check`
-            - [x] `cargo check --all-targets`
-            - [x] `cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious`
-            - [x] `cargo test -q`
+            ## Validation Gates
+            - [x] docs-only scope gate
+            - [x] task-type structural gate
 
             ## AI Attribution
             - Generated-by: Gemini
@@ -256,10 +246,6 @@ jobs:
             workflow:gemini
           add-paths: |
             .github/**
-            src/**
-            tests/**
             docs/**
             README.md
             GEMINI.md
-            Cargo.toml
-            Cargo.lock
