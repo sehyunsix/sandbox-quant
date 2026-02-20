@@ -1,3 +1,7 @@
+## v0.12.6 - 2026-02-20
+
+- chore(workflow): add gemini pr workflow and policy docs (a720ed7)
+
 ## v0.12.5 - 2026-02-20
 
 - refactor(main): route grid key block via handle_grid_key (b98edde)
