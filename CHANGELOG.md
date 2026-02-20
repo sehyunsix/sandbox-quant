@@ -1,3 +1,7 @@
+## v0.12.8 - 2026-02-20
+
+- fix(workflow): force reset to base branch before PR action (9150d63)
+
 ## v0.12.7 - 2026-02-20
 
 - fix(workflow): let create-pull-request manage branch lifecycle (3162094)
