@@ -26,8 +26,10 @@ use sandbox_quant::strategy::donchian_trend::DonchianTrendStrategy;
 use sandbox_quant::strategy::ema_crossover::EmaCrossover;
 use sandbox_quant::strategy::ma_crossover::MaCrossover;
 use sandbox_quant::strategy::ma_reversion::MaReversionStrategy;
+use sandbox_quant::strategy::opening_range_breakout::OpeningRangeBreakoutStrategy;
 use sandbox_quant::strategy::rsa::RsaStrategy;
 use sandbox_quant::strategy::stochastic_reversion::StochasticReversionStrategy;
+use sandbox_quant::strategy::volatility_compression::VolatilityCompressionStrategy;
 use sandbox_quant::strategy_catalog::{
     strategy_kind_category_for_label, strategy_type_options_by_category, StrategyCatalog,
     StrategyKind, StrategyProfile,
@@ -44,7 +46,9 @@ enum StrategyRuntime {
     Ma(MaCrossover),
     Ema(EmaCrossover),
     Atr(AtrExpansionStrategy),
+    Vlc(VolatilityCompressionStrategy),
     Chb(ChannelBreakoutStrategy),
+    Orb(OpeningRangeBreakoutStrategy),
     Rsa(RsaStrategy),
     Dct(DonchianTrendStrategy),
     Mrv(MaReversionStrategy),
@@ -67,7 +71,9 @@ impl StrategyRuntime {
             StrategyKind::Bbr => Self::Bbr(BollingerReversionStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Sto => Self::Sto(StochasticReversionStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Atr => Self::Atr(AtrExpansionStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Vlc => Self::Vlc(VolatilityCompressionStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Chb => Self::Chb(ChannelBreakoutStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Orb => Self::Orb(OpeningRangeBreakoutStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Ema => Self::Ema(EmaCrossover::new(fast, slow, min_ticks)),
             StrategyKind::Ma => Self::Ma(MaCrossover::new(fast, slow, min_ticks)),
         }
@@ -78,7 +84,9 @@ impl StrategyRuntime {
             Self::Ma(s) => s.on_tick(tick),
             Self::Ema(s) => s.on_tick(tick),
             Self::Atr(s) => s.on_tick(tick),
+            Self::Vlc(s) => s.on_tick(tick),
             Self::Chb(s) => s.on_tick(tick),
+            Self::Orb(s) => s.on_tick(tick),
             Self::Rsa(s) => s.on_tick(tick),
             Self::Dct(s) => s.on_tick(tick),
             Self::Mrv(s) => s.on_tick(tick),
@@ -92,7 +100,9 @@ impl StrategyRuntime {
             Self::Ma(s) => s.fast_sma_value(),
             Self::Ema(s) => s.fast_ema_value(),
             Self::Atr(_) => None,
+            Self::Vlc(s) => s.mean_value(),
             Self::Chb(_) => None,
+            Self::Orb(_) => None,
             Self::Rsa(_) => None,
             Self::Dct(_) => None,
             Self::Mrv(s) => s.mean_value(),
@@ -106,7 +116,9 @@ impl StrategyRuntime {
             Self::Ma(s) => s.slow_sma_value(),
             Self::Ema(s) => s.slow_ema_value(),
             Self::Atr(_) => None,
+            Self::Vlc(_) => None,
             Self::Chb(_) => None,
+            Self::Orb(_) => None,
             Self::Rsa(_) => None,
             Self::Dct(_) => None,
             Self::Mrv(_) => None,
@@ -220,6 +232,23 @@ fn strategy_stats_scope_key(instrument: &str, tag: &str) -> String {
         normalize_instrument_label(instrument),
         canonical_strategy_tag(tag)
     )
+}
+
+fn build_scoped_strategy_stats(
+    by_instrument: &HashMap<String, HashMap<String, OrderHistoryStats>>,
+) -> HashMap<String, OrderHistoryStats> {
+    let mut aggregated: HashMap<String, OrderHistoryStats> = HashMap::new();
+    for (instrument, stats_by_tag) in by_instrument {
+        for (tag, s) in stats_by_tag {
+            let scoped_key = strategy_stats_scope_key(instrument, tag);
+            let slot = aggregated.entry(scoped_key).or_default();
+            slot.trade_count = slot.trade_count.saturating_add(s.trade_count);
+            slot.win_count = slot.win_count.saturating_add(s.win_count);
+            slot.lose_count = slot.lose_count.saturating_add(s.lose_count);
+            slot.realized_pnl += s.realized_pnl;
+        }
+    }
+    aggregated
 }
 
 fn app_log(level: LogLevel, domain: LogDomain, event: &'static str, msg: impl Into<String>) -> AppEvent {
@@ -1536,6 +1565,8 @@ async fn main() -> Result<()> {
             .collect();
         let mut order_managers: HashMap<String, OrderManager> = HashMap::new();
         let mut realized_pnl_by_symbol: HashMap<String, f64> = HashMap::new();
+        let mut strategy_stats_by_instrument: HashMap<String, HashMap<String, OrderHistoryStats>> =
+            HashMap::new();
         let (risk_eval_tx, mut risk_eval_rx) = mpsc::channel::<(Signal, String, String)>(64);
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
@@ -1590,9 +1621,18 @@ async fn main() -> Result<()> {
             }
             match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
                 Ok(history) => {
+                    strategy_stats_by_instrument
+                        .insert(selected_symbol.clone(), history.strategy_stats.clone());
                     realized_pnl_by_symbol.insert(selected_symbol.clone(), history.stats.realized_pnl);
                     let _ = strat_app_tx
                         .send(AppEvent::OrderHistoryUpdate(history))
+                        .await;
+                    let _ = strat_app_tx
+                        .send(AppEvent::StrategyStatsUpdate {
+                            strategy_stats: build_scoped_strategy_stats(
+                                &strategy_stats_by_instrument,
+                            ),
+                        })
                         .await;
                 }
                 Err(e) => {
@@ -1760,35 +1800,48 @@ async fn main() -> Result<()> {
                                     let _ = strat_app_tx
                                         .send(AppEvent::OrderUpdate(update.clone()))
                                         .await;
-                                    match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                                        Ok(history) => {
-                                            realized_pnl_by_symbol.insert(
-                                                instrument.clone(),
-                                                history.stats.realized_pnl,
-                                            );
+                                }
+                                match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                    Ok(history) => {
+                                        strategy_stats_by_instrument
+                                            .insert(instrument.clone(), history.strategy_stats.clone());
+                                        realized_pnl_by_symbol.insert(
+                                            instrument.clone(),
+                                            history.stats.realized_pnl,
+                                        );
+                                        if instrument == selected_symbol {
                                             let _ = strat_app_tx
                                                 .send(AppEvent::OrderHistoryUpdate(history))
                                                 .await;
                                         }
-                                        Err(e) => {
-                                            let _ = strat_app_tx
-                                                .send(app_log(
-                                                    LogLevel::Warn,
-                                                    LogDomain::Order,
-                                                    "history.refresh.fail",
-                                                    format!("Order history refresh failed: {}", e),
-                                                ))
-                                                .await;
-                                        }
-                                    }
-                                    if matches!(update, sandbox_quant::order_manager::OrderUpdate::Filled { .. }) {
                                         let _ = strat_app_tx
-                                            .send(AppEvent::BalanceUpdate(mgr.balances().clone()))
+                                            .send(AppEvent::StrategyStatsUpdate {
+                                                strategy_stats: build_scoped_strategy_stats(
+                                                    &strategy_stats_by_instrument,
+                                                ),
+                                            })
                                             .await;
                                     }
-                                    emit_asset_snapshot = true;
-                                    emit_rate_snapshot(&strat_app_tx, mgr);
+                                    Err(e) => {
+                                        let _ = strat_app_tx
+                                            .send(app_log(
+                                                LogLevel::Warn,
+                                                LogDomain::Order,
+                                                "history.refresh.fail",
+                                                format!("Order history refresh failed: {}", e),
+                                            ))
+                                            .await;
+                                    }
                                 }
+                                if matches!(update, sandbox_quant::order_manager::OrderUpdate::Filled { .. }) {
+                                    if let Ok(balances) = mgr.refresh_balances().await {
+                                        if instrument == selected_symbol {
+                                            let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                                        }
+                                    }
+                                }
+                                emit_asset_snapshot = true;
+                                emit_rate_snapshot(&strat_app_tx, mgr);
                             }
                             Ok(None) => {}
                             Err(e) => {
@@ -1808,7 +1861,6 @@ async fn main() -> Result<()> {
                     }
                 }
                 _ = order_history_sync.tick() => {
-                    let mut aggregated_stats: HashMap<String, OrderHistoryStats> = HashMap::new();
                     for (instrument, mgr) in order_managers.iter_mut() {
                         match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
                             Ok(history) => {
@@ -1817,16 +1869,10 @@ async fn main() -> Result<()> {
                                         .send(AppEvent::OrderHistoryUpdate(history.clone()))
                                         .await;
                                 }
+                                strategy_stats_by_instrument
+                                    .insert(instrument.clone(), history.strategy_stats.clone());
                                 realized_pnl_by_symbol
                                     .insert(instrument.clone(), history.stats.realized_pnl);
-                                for (tag, s) in history.strategy_stats {
-                                    let scoped_key = strategy_stats_scope_key(instrument, &tag);
-                                    let slot = aggregated_stats.entry(scoped_key).or_default();
-                                    slot.trade_count = slot.trade_count.saturating_add(s.trade_count);
-                                    slot.win_count = slot.win_count.saturating_add(s.win_count);
-                                    slot.lose_count = slot.lose_count.saturating_add(s.lose_count);
-                                    slot.realized_pnl += s.realized_pnl;
-                                }
                             }
                             Err(e) => {
                                 let _ = strat_app_tx
@@ -1846,7 +1892,7 @@ async fn main() -> Result<()> {
                     }
                     let _ = strat_app_tx
                         .send(AppEvent::StrategyStatsUpdate {
-                            strategy_stats: aggregated_stats,
+                            strategy_stats: build_scoped_strategy_stats(&strategy_stats_by_instrument),
                         })
                         .await;
                     let _ = strat_app_tx
@@ -1884,9 +1930,18 @@ async fn main() -> Result<()> {
                     let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
                         if let Ok(history) = mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                            strategy_stats_by_instrument
+                                .insert(selected_symbol.clone(), history.strategy_stats.clone());
                             realized_pnl_by_symbol
                                 .insert(selected_symbol.clone(), history.stats.realized_pnl);
                             let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                            let _ = strat_app_tx
+                                .send(AppEvent::StrategyStatsUpdate {
+                                    strategy_stats: build_scoped_strategy_stats(
+                                        &strategy_stats_by_instrument,
+                                    ),
+                                })
+                                .await;
                             emit_asset_snapshot = true;
                         }
                         if let Ok(balances) = mgr.refresh_balances().await {

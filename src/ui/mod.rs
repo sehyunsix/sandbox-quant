@@ -850,8 +850,13 @@ impl AppState {
                         reason_code,
                         reason,
                     } => {
+                        let level = if reason_code == "risk.qty_too_small" {
+                            LogLevel::Warn
+                        } else {
+                            LogLevel::Error
+                        };
                         let mut record = LogRecord::new(
-                            LogLevel::Error,
+                            level,
                             LogDomain::Order,
                             "reject.received",
                             format!(
@@ -2655,6 +2660,8 @@ fn source_tag_for_strategy_item(item: &str) -> Option<String> {
         "MRV(SMA 20 -2.00%)" => return Some("mrv".to_string()),
         "BBR(BB 20 2.00x)" => return Some("bbr".to_string()),
         "STO(Stoch 14 20/80)" => return Some("sto".to_string()),
+        "VLC(Compression 20 1.20%)" => return Some("vlc".to_string()),
+        "ORB(Opening 12/8)" => return Some("orb".to_string()),
         _ => {}
     }
     if let Some((_, tail)) = item.rsplit_once('[') {
