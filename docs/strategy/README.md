@@ -17,6 +17,10 @@ This directory documents each strategy implementation under `src/strategy/`.
 - `ma-reversion.md`
 - `bollinger-reversion.md`
 - `stochastic-reversion.md`
+- `volatility-compression.md`
+- `opening-range-breakout.md`
+- `regime-switch.md`
+- `ensemble-vote.md`
 
 ## Authoring Rule
 - Use `docs/strategy/_template.md` when adding a new strategy.

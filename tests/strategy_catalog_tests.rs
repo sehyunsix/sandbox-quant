@@ -9,7 +9,7 @@ use sandbox_quant::strategy_catalog::{
 fn strategy_catalog_starts_with_builtin_profiles() {
     let catalog = StrategyCatalog::new("BTCUSDT", 7, 25, 2);
     let labels = catalog.labels();
-    assert_eq!(labels.len(), 8);
+    assert_eq!(labels.len(), 12);
     assert_eq!(labels[0], "MA(Config)");
     assert_eq!(labels[1], "MA(Fast 5/20)");
     assert_eq!(labels[2], "MA(Slow 20/60)");
@@ -18,6 +18,10 @@ fn strategy_catalog_starts_with_builtin_profiles() {
     assert_eq!(labels[5], "MRV(SMA 20 -2.00%)");
     assert_eq!(labels[6], "BBR(BB 20 2.00x)");
     assert_eq!(labels[7], "STO(Stoch 14 20/80)");
+    assert_eq!(labels[8], "VLC(Compression 20 1.20%)");
+    assert_eq!(labels[9], "ORB(Opening 12/8)");
+    assert_eq!(labels[10], "REG(Regime 10/30)");
+    assert_eq!(labels[11], "ENS(Vote 10/30)");
     let first = catalog.get(0).expect("builtin profile should exist");
     assert_eq!(first.symbol, "BTCUSDT");
     assert!(first.created_at_ms > 0);
@@ -37,8 +41,8 @@ fn strategy_catalog_registers_custom_profile() {
     assert!(catalog.index_of_label(&custom.label).is_some());
 
     let labels = catalog.labels();
-    assert_eq!(labels.len(), 9);
-    assert_eq!(labels[8], custom.label);
+    assert_eq!(labels.len(), 13);
+    assert_eq!(labels[12], custom.label);
 }
 
 #[test]
@@ -178,11 +182,19 @@ fn strategy_catalog_from_profiles_injects_missing_builtin_profiles() {
     assert!(catalog.get_by_source_tag("mrv").is_some());
     assert!(catalog.get_by_source_tag("bbr").is_some());
     assert!(catalog.get_by_source_tag("sto").is_some());
+    assert!(catalog.get_by_source_tag("vlc").is_some());
+    assert!(catalog.get_by_source_tag("orb").is_some());
+    assert!(catalog.get_by_source_tag("reg").is_some());
+    assert!(catalog.get_by_source_tag("ens").is_some());
     assert!(catalog.labels().iter().any(|l| l == "RSA(RSI 14 30/70)"));
     assert!(catalog.labels().iter().any(|l| l == "DCT(Donchian 20/10)"));
     assert!(catalog.labels().iter().any(|l| l == "MRV(SMA 20 -2.00%)"));
     assert!(catalog.labels().iter().any(|l| l == "BBR(BB 20 2.00x)"));
     assert!(catalog.labels().iter().any(|l| l == "STO(Stoch 14 20/80)"));
+    assert!(catalog.labels().iter().any(|l| l == "VLC(Compression 20 1.20%)"));
+    assert!(catalog.labels().iter().any(|l| l == "ORB(Opening 12/8)"));
+    assert!(catalog.labels().iter().any(|l| l == "REG(Regime 10/30)"));
+    assert!(catalog.labels().iter().any(|l| l == "ENS(Vote 10/30)"));
 }
 
 #[test]
@@ -196,12 +208,16 @@ fn strategy_kind_labels_include_supported_candidates() {
             "MA".to_string(),
             "EMA".to_string(),
             "ATR".to_string(),
+            "VLC".to_string(),
             "CHB".to_string(),
+            "ORB".to_string(),
             "RSA".to_string(),
             "DCT".to_string(),
             "MRV".to_string(),
             "BBR".to_string(),
-            "STO".to_string()
+            "STO".to_string(),
+            "REG".to_string(),
+            "ENS".to_string(),
         ]
     );
     assert_eq!(
@@ -229,12 +245,19 @@ fn strategy_kind_labels_include_supported_candidates() {
     );
     assert_eq!(
         strategy_kind_labels_by_category("Volatility"),
-        vec!["ATR".to_string()]
+        vec!["ATR".to_string(), "VLC".to_string()]
     );
     assert_eq!(
         strategy_kind_labels_by_category("Breakout"),
-        vec!["CHB".to_string()]
+        vec!["CHB".to_string(), "ORB".to_string()]
     );
+    let breakout_options = strategy_type_options_by_category("Breakout");
+    assert!(breakout_options
+        .iter()
+        .any(|opt| opt.display_label == "CHB" && opt.strategy_label.as_deref() == Some("CHB")));
+    assert!(breakout_options
+        .iter()
+        .any(|opt| opt.display_label == "ORB" && opt.strategy_label.as_deref() == Some("ORB")));
     let trend_options = strategy_type_options_by_category("Trend");
     assert!(trend_options
         .iter()
@@ -264,15 +287,26 @@ fn strategy_kind_labels_include_supported_candidates() {
     assert!(mr_options
         .iter()
         .all(|opt| !opt.display_label.contains("Coming soon") || opt.strategy_label.is_none()));
+    let hybrid_options = strategy_type_options_by_category("Hybrid");
+    assert!(hybrid_options
+        .iter()
+        .any(|opt| opt.display_label == "REG" && opt.strategy_label.as_deref() == Some("REG")));
+    assert!(hybrid_options
+        .iter()
+        .any(|opt| opt.display_label == "ENS" && opt.strategy_label.as_deref() == Some("ENS")));
     assert_eq!(StrategyKind::from_label("ma"), Some(StrategyKind::Ma));
     assert_eq!(StrategyKind::from_label("ema"), Some(StrategyKind::Ema));
     assert_eq!(StrategyKind::from_label("atr"), Some(StrategyKind::Atr));
+    assert_eq!(StrategyKind::from_label("vlc"), Some(StrategyKind::Vlc));
     assert_eq!(StrategyKind::from_label("chb"), Some(StrategyKind::Chb));
+    assert_eq!(StrategyKind::from_label("orb"), Some(StrategyKind::Orb));
     assert_eq!(StrategyKind::from_label("rsa"), Some(StrategyKind::Rsa));
     assert_eq!(StrategyKind::from_label("dct"), Some(StrategyKind::Dct));
     assert_eq!(StrategyKind::from_label("mrv"), Some(StrategyKind::Mrv));
     assert_eq!(StrategyKind::from_label("bbr"), Some(StrategyKind::Bbr));
     assert_eq!(StrategyKind::from_label("sto"), Some(StrategyKind::Sto));
+    assert_eq!(StrategyKind::from_label("reg"), Some(StrategyKind::Reg));
+    assert_eq!(StrategyKind::from_label("ens"), Some(StrategyKind::Ens));
 }
 
 #[test]

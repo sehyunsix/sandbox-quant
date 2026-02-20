@@ -67,8 +67,8 @@ Current strategy implementation status (code-based):
 | Stochastic Reversion | MeanReversion | ✅ | [src/strategy/stochastic_reversion.rs](src/strategy/stochastic_reversion.rs) | [tests/stochastic_reversion_tests.rs](tests/stochastic_reversion_tests.rs) | [docs/strategy/stochastic-reversion.md](docs/strategy/stochastic-reversion.md) |
 | Volatility Compression | Volatility | ✅ | [src/strategy/volatility_compression.rs](src/strategy/volatility_compression.rs) | [tests/volatility_compression_tests.rs](tests/volatility_compression_tests.rs) | [docs/strategy/volatility-compression.md](docs/strategy/volatility-compression.md) |
 | Opening Range Breakout | Breakout | ✅ | [src/strategy/opening_range_breakout.rs](src/strategy/opening_range_breakout.rs) | [tests/opening_range_breakout_tests.rs](tests/opening_range_breakout_tests.rs) | [docs/strategy/opening-range-breakout.md](docs/strategy/opening-range-breakout.md) |
-| Regime Switch | Hybrid | ❌ | - | - | - |
-| Ensemble Vote | Hybrid | ❌ | - | - | - |
+| Regime Switch | Hybrid | ✅ | [src/strategy/regime_switch.rs](src/strategy/regime_switch.rs) | [tests/regime_switch_tests.rs](tests/regime_switch_tests.rs) | [docs/strategy/regime-switch.md](docs/strategy/regime-switch.md) |
+| Ensemble Vote | Hybrid | ✅ | [src/strategy/ensemble_vote.rs](src/strategy/ensemble_vote.rs) | [tests/ensemble_vote_tests.rs](tests/ensemble_vote_tests.rs) | [docs/strategy/ensemble-vote.md](docs/strategy/ensemble-vote.md) |
 
 ## UI Overview
 

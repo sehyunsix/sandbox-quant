@@ -23,10 +23,12 @@ use sandbox_quant::strategy::atr_expansion::AtrExpansionStrategy;
 use sandbox_quant::strategy::bollinger_reversion::BollingerReversionStrategy;
 use sandbox_quant::strategy::channel_breakout::ChannelBreakoutStrategy;
 use sandbox_quant::strategy::donchian_trend::DonchianTrendStrategy;
+use sandbox_quant::strategy::ensemble_vote::EnsembleVoteStrategy;
 use sandbox_quant::strategy::ema_crossover::EmaCrossover;
 use sandbox_quant::strategy::ma_crossover::MaCrossover;
 use sandbox_quant::strategy::ma_reversion::MaReversionStrategy;
 use sandbox_quant::strategy::opening_range_breakout::OpeningRangeBreakoutStrategy;
+use sandbox_quant::strategy::regime_switch::RegimeSwitchStrategy;
 use sandbox_quant::strategy::rsa::RsaStrategy;
 use sandbox_quant::strategy::stochastic_reversion::StochasticReversionStrategy;
 use sandbox_quant::strategy::volatility_compression::VolatilityCompressionStrategy;
@@ -54,6 +56,8 @@ enum StrategyRuntime {
     Mrv(MaReversionStrategy),
     Bbr(BollingerReversionStrategy),
     Sto(StochasticReversionStrategy),
+    Reg(RegimeSwitchStrategy),
+    Ens(EnsembleVoteStrategy),
 }
 
 impl StrategyRuntime {
@@ -75,6 +79,8 @@ impl StrategyRuntime {
             StrategyKind::Chb => Self::Chb(ChannelBreakoutStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Orb => Self::Orb(OpeningRangeBreakoutStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Ema => Self::Ema(EmaCrossover::new(fast, slow, min_ticks)),
+            StrategyKind::Reg => Self::Reg(RegimeSwitchStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Ens => Self::Ens(EnsembleVoteStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Ma => Self::Ma(MaCrossover::new(fast, slow, min_ticks)),
         }
     }
@@ -92,6 +98,8 @@ impl StrategyRuntime {
             Self::Mrv(s) => s.on_tick(tick),
             Self::Bbr(s) => s.on_tick(tick),
             Self::Sto(s) => s.on_tick(tick),
+            Self::Reg(s) => s.on_tick(tick),
+            Self::Ens(s) => s.on_tick(tick),
         }
     }
 
@@ -108,6 +116,8 @@ impl StrategyRuntime {
             Self::Mrv(s) => s.mean_value(),
             Self::Bbr(s) => s.mean_value(),
             Self::Sto(_) => None,
+            Self::Reg(_) => None,
+            Self::Ens(_) => None,
         }
     }
 
@@ -124,6 +134,8 @@ impl StrategyRuntime {
             Self::Mrv(_) => None,
             Self::Bbr(_) => None,
             Self::Sto(_) => None,
+            Self::Reg(_) => None,
+            Self::Ens(_) => None,
         }
     }
 }

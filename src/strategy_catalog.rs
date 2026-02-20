@@ -5,12 +5,16 @@ pub enum StrategyKind {
     Ma,
     Ema,
     Atr,
+    Vlc,
     Chb,
+    Orb,
     Rsa,
     Dct,
     Mrv,
     Bbr,
     Sto,
+    Reg,
+    Ens,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +33,7 @@ pub struct StrategyTypeOption {
     pub strategy_label: Option<String>,
 }
 
-const STRATEGY_KIND_SPECS: [StrategyKindSpec; 9] = [
+const STRATEGY_KIND_SPECS: [StrategyKindSpec; 13] = [
     StrategyKindSpec {
         kind: StrategyKind::Ma,
         label: "MA",
@@ -55,11 +59,27 @@ const STRATEGY_KIND_SPECS: [StrategyKindSpec; 9] = [
         default_cooldown: 1,
     },
     StrategyKindSpec {
+        kind: StrategyKind::Vlc,
+        label: "VLC",
+        category: "Volatility",
+        default_fast: 20,
+        default_slow: 120,
+        default_cooldown: 1,
+    },
+    StrategyKindSpec {
         kind: StrategyKind::Chb,
         label: "CHB",
         category: "Breakout",
         default_fast: 20,
         default_slow: 10,
+        default_cooldown: 1,
+    },
+    StrategyKindSpec {
+        kind: StrategyKind::Orb,
+        label: "ORB",
+        category: "Breakout",
+        default_fast: 12,
+        default_slow: 8,
         default_cooldown: 1,
     },
     StrategyKindSpec {
@@ -100,6 +120,22 @@ const STRATEGY_KIND_SPECS: [StrategyKindSpec; 9] = [
         category: "MeanReversion",
         default_fast: 14,
         default_slow: 80,
+        default_cooldown: 1,
+    },
+    StrategyKindSpec {
+        kind: StrategyKind::Reg,
+        label: "REG",
+        category: "Hybrid",
+        default_fast: 10,
+        default_slow: 30,
+        default_cooldown: 1,
+    },
+    StrategyKindSpec {
+        kind: StrategyKind::Ens,
+        label: "ENS",
+        category: "Hybrid",
+        default_fast: 10,
+        default_slow: 30,
         default_cooldown: 1,
     },
 ];
@@ -179,19 +215,7 @@ pub fn strategy_type_options_by_category(category: &str) -> Vec<StrategyTypeOpti
             strategy_label: Some(spec.label.to_string()),
         })
         .collect();
-    let coming_soon: &[&str] = if category.eq_ignore_ascii_case("Trend") {
-        &[]
-    } else if category.eq_ignore_ascii_case("MeanReversion") {
-        &[]
-    } else if category.eq_ignore_ascii_case("Volatility") {
-        &["Volatility Compression"]
-    } else if category.eq_ignore_ascii_case("Breakout") {
-        &["Opening Range Breakout"]
-    } else if category.eq_ignore_ascii_case("Hybrid") {
-        &["Regime Switch", "Ensemble Vote"]
-    } else {
-        &[]
-    };
+    let coming_soon: &[&str] = &[];
     options.extend(coming_soon.iter().map(|name| StrategyTypeOption {
         display_label: format!("{} (Coming soon)", name),
         strategy_label: None,
@@ -240,6 +264,10 @@ impl StrategyProfile {
 
     pub fn strategy_kind(&self) -> StrategyKind {
         match self.strategy_type.trim().to_ascii_lowercase().as_str() {
+            "ens" => return StrategyKind::Ens,
+            "reg" => return StrategyKind::Reg,
+            "orb" => return StrategyKind::Orb,
+            "vlc" => return StrategyKind::Vlc,
             "sto" => return StrategyKind::Sto,
             "bbr" => return StrategyKind::Bbr,
             "mrv" => return StrategyKind::Mrv,
@@ -251,10 +279,26 @@ impl StrategyProfile {
             "ma" => return StrategyKind::Ma,
             _ => {}
         }
-        if self.source_tag.eq_ignore_ascii_case("rsa")
+        if self.source_tag.eq_ignore_ascii_case("ens")
+            || self.label.to_ascii_uppercase().starts_with("ENS(")
+        {
+            StrategyKind::Ens
+        } else if self.source_tag.eq_ignore_ascii_case("reg")
+            || self.label.to_ascii_uppercase().starts_with("REG(")
+        {
+            StrategyKind::Reg
+        } else if self.source_tag.eq_ignore_ascii_case("rsa")
             || self.label.to_ascii_uppercase().starts_with("RSA(")
         {
             StrategyKind::Rsa
+        } else if self.source_tag.eq_ignore_ascii_case("vlc")
+            || self.label.to_ascii_uppercase().starts_with("VLC(")
+        {
+            StrategyKind::Vlc
+        } else if self.source_tag.eq_ignore_ascii_case("orb")
+            || self.label.to_ascii_uppercase().starts_with("ORB(")
+        {
+            StrategyKind::Orb
         } else if self.source_tag.eq_ignore_ascii_case("bbr")
             || self.label.to_ascii_uppercase().starts_with("BBR(")
         {
@@ -407,6 +451,54 @@ impl StrategyCatalog {
                 last_started_at_ms: None,
                 fast_period: 14,
                 slow_period: 80,
+                min_ticks_between_signals,
+            },
+            StrategyProfile {
+                label: "VLC(Compression 20 1.20%)".to_string(),
+                source_tag: "vlc".to_string(),
+                strategy_type: "vlc".to_string(),
+                symbol: default_symbol.trim().to_ascii_uppercase(),
+                created_at_ms: now_ms(),
+                cumulative_running_ms: 0,
+                last_started_at_ms: None,
+                fast_period: 20,
+                slow_period: 120,
+                min_ticks_between_signals,
+            },
+            StrategyProfile {
+                label: "ORB(Opening 12/8)".to_string(),
+                source_tag: "orb".to_string(),
+                strategy_type: "orb".to_string(),
+                symbol: default_symbol.trim().to_ascii_uppercase(),
+                created_at_ms: now_ms(),
+                cumulative_running_ms: 0,
+                last_started_at_ms: None,
+                fast_period: 12,
+                slow_period: 8,
+                min_ticks_between_signals,
+            },
+            StrategyProfile {
+                label: "REG(Regime 10/30)".to_string(),
+                source_tag: "reg".to_string(),
+                strategy_type: "reg".to_string(),
+                symbol: default_symbol.trim().to_ascii_uppercase(),
+                created_at_ms: now_ms(),
+                cumulative_running_ms: 0,
+                last_started_at_ms: None,
+                fast_period: 10,
+                slow_period: 30,
+                min_ticks_between_signals,
+            },
+            StrategyProfile {
+                label: "ENS(Vote 10/30)".to_string(),
+                source_tag: "ens".to_string(),
+                strategy_type: "ens".to_string(),
+                symbol: default_symbol.trim().to_ascii_uppercase(),
+                created_at_ms: now_ms(),
+                cumulative_running_ms: 0,
+                last_started_at_ms: None,
+                fast_period: 10,
+                slow_period: 30,
                 min_ticks_between_signals,
             },
         ]
@@ -654,10 +746,29 @@ impl StrategyCatalog {
                     threshold_x100,
                 )
             }
+            StrategyKind::Vlc => {
+                let threshold_bps = slow_period.clamp(10, 5000);
+                (
+                    format!(
+                        "VLC(Custom {} {:.2}%) [{}]",
+                        fast,
+                        threshold_bps as f64 / 100.0,
+                        tag
+                    ),
+                    threshold_bps,
+                )
+            }
             StrategyKind::Chb => {
                 let exit_window = slow_period.max(2);
                 (
                     format!("CHB(Custom {}/{}) [{}]", fast, exit_window, tag),
+                    exit_window,
+                )
+            }
+            StrategyKind::Orb => {
+                let exit_window = slow_period.max(2);
+                (
+                    format!("ORB(Custom {}/{}) [{}]", fast, exit_window, tag),
                     exit_window,
                 )
             }
@@ -707,6 +818,14 @@ impl StrategyCatalog {
                     format!("STO(Custom {} {}/{}) [{}]", fast, lower, upper, tag),
                     upper,
                 )
+            }
+            StrategyKind::Reg => {
+                let slow = slow_period.max(fast + 1);
+                (format!("REG(Custom {}/{}) [{}]", fast, slow, tag), slow)
+            }
+            StrategyKind::Ens => {
+                let slow = slow_period.max(fast + 1);
+                (format!("ENS(Custom {}/{}) [{}]", fast, slow, tag), slow)
             }
         };
         let profile = StrategyProfile {
