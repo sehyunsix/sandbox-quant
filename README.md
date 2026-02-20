@@ -50,6 +50,26 @@ cargo run --bin sandbox-quant
 | Timeframe | `0/1/H/D/W/M` | `1s/1m/1h/1d/1w/1M` |
 | Grid | `G` | Open/Close Portfolio Grid |
 
+## Strategy Status
+
+Current strategy implementation status (code-based):
+
+| Strategy | Category | Status | Source | Test | Doc |
+|---|---|---|---|---|---|
+| MA Crossover | Trend | [x] Implemented | `src/strategy/ma_crossover.rs` | `tests/ma_crossover_tests.rs` | `docs/strategy/ma-crossover.md` |
+| EMA Crossover | Trend | [x] Implemented | `src/strategy/ema_crossover.rs` | `tests/ema_crossover_tests.rs` | `docs/strategy/ema-crossover.md` |
+| ATR Expansion | Volatility | [x] Implemented | `src/strategy/atr_expansion.rs` | `tests/atr_expansion_tests.rs` | `docs/strategy/atr-expansion.md` |
+| Channel Breakout | Breakout | [x] Implemented | `src/strategy/channel_breakout.rs` | `tests/channel_breakout_tests.rs` | `docs/strategy/channel-breakout.md` |
+| RSA | Hybrid | [x] Implemented | `src/strategy/rsa.rs` | `tests/rsa_strategy_tests.rs` | `docs/strategy/rsa.md` |
+| Donchian Trend | Trend | [ ] Planned | - | - | - |
+| MA Reversion | MeanReversion | [ ] Planned | - | - | - |
+| Bollinger Reversion | MeanReversion | [ ] Planned | - | - | - |
+| Stochastic Reversion | MeanReversion | [ ] Planned | - | - | - |
+| Volatility Compression | Volatility | [ ] Planned | - | - | - |
+| Opening Range Breakout | Breakout | [ ] Planned | - | - | - |
+| Regime Switch | Hybrid | [ ] Planned | - | - | - |
+| Ensemble Vote | Hybrid | [ ] Planned | - | - | - |
+
 ## UI Overview
 
 - **Main Dashboard**: Live chart view with active position summary, strategy metrics, and runtime logs.
