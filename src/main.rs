@@ -10,6 +10,10 @@ use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
 use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
+use sandbox_quant::input::{
+    parse_grid_command, parse_main_command, parse_popup_command, GridCommand, PopupCommand,
+    PopupKind, UiCommand,
+};
 use sandbox_quant::model::position::Position;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
@@ -228,6 +232,48 @@ fn open_grid_from_current_selection(app_state: &mut AppState, current_symbol: &s
     app_state.set_grid_open(true);
 }
 
+fn grid_panel_indices(app_state: &AppState) -> Vec<usize> {
+    app_state
+        .strategy_item_active
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, active)| {
+            if *active == app_state.is_on_panel_selected() {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn toggle_grid_panel_selection(app_state: &mut AppState) {
+    app_state.set_on_panel_selected(!app_state.is_on_panel_selected());
+    let panel_indices = grid_panel_indices(app_state);
+    if !panel_indices.contains(&app_state.selected_grid_strategy_index()) {
+        if let Some(first) = panel_indices.first().copied() {
+            app_state.set_selected_grid_strategy_index(first);
+        }
+    }
+}
+
+fn move_grid_strategy_selection(app_state: &mut AppState, up: bool) {
+    let panel_indices = grid_panel_indices(app_state);
+    if let Some(pos) = panel_indices
+        .iter()
+        .position(|idx| *idx == app_state.selected_grid_strategy_index())
+    {
+        let next_pos = if up {
+            pos.saturating_sub(1)
+        } else {
+            (pos + 1).min(panel_indices.len().saturating_sub(1))
+        };
+        app_state.set_selected_grid_strategy_index(panel_indices[next_pos]);
+    } else if let Some(first) = panel_indices.first().copied() {
+        app_state.set_selected_grid_strategy_index(first);
+    }
+}
+
 fn refresh_and_sync_strategy_panel(
     app_state: &mut AppState,
     strategy_catalog: &StrategyCatalog,
@@ -345,6 +391,617 @@ fn apply_symbol_selection(
     let (_, market) = parse_instrument_label(current_symbol);
     if market == MarketKind::Futures {
         app_state.push_log("Futures mode enabled (orders + chart)".to_string());
+    }
+}
+
+fn handle_symbol_selector_popup_command(
+    cmd: PopupCommand,
+    app_state: &mut AppState,
+    current_symbol: &mut String,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+) {
+    match cmd {
+        PopupCommand::Close => {
+            app_state.set_symbol_selector_open(false);
+        }
+        PopupCommand::Up => {
+            app_state.set_symbol_selector_index(app_state.symbol_selector_index().saturating_sub(1));
+        }
+        PopupCommand::Down => {
+            app_state.set_symbol_selector_index(
+                (app_state.symbol_selector_index() + 1)
+                    .min(app_state.symbol_items.len().saturating_sub(1)),
+            );
+        }
+        PopupCommand::Confirm => {
+            if let Some(next_symbol) = app_state
+                .symbol_items
+                .get(app_state.symbol_selector_index())
+                .cloned()
+            {
+                apply_symbol_selection(
+                    &next_symbol,
+                    current_symbol,
+                    app_state,
+                    ws_symbol_tx,
+                    rest_client,
+                    config,
+                    app_tx,
+                );
+            }
+            app_state.set_symbol_selector_open(false);
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_strategy_selector_popup_command(
+    cmd: PopupCommand,
+    app_state: &mut AppState,
+    strategy_catalog: &mut StrategyCatalog,
+    enabled_strategy_tags: &mut HashSet<String>,
+    current_symbol: &mut String,
+    current_strategy_profile: &mut StrategyProfile,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+    strategy_profile_tx: &watch::Sender<StrategyProfile>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) {
+    match cmd {
+        PopupCommand::Close => {
+            app_state.set_strategy_selector_open(false);
+        }
+        PopupCommand::Up => {
+            app_state.set_strategy_selector_index(
+                app_state.strategy_selector_index().saturating_sub(1),
+            );
+        }
+        PopupCommand::Down => {
+            app_state.set_strategy_selector_index(
+                (app_state.strategy_selector_index() + 1)
+                    .min(app_state.strategy_items.len().saturating_sub(1)),
+            );
+        }
+        PopupCommand::Confirm => {
+            if let Some(next_profile) = strategy_catalog
+                .get(app_state.strategy_selector_index())
+                .cloned()
+            {
+                set_strategy_enabled(
+                    strategy_catalog,
+                    enabled_strategy_tags,
+                    &next_profile.source_tag,
+                    true,
+                    app_state.paused,
+                );
+                apply_symbol_selection(
+                    &next_profile.symbol,
+                    current_symbol,
+                    app_state,
+                    ws_symbol_tx,
+                    rest_client,
+                    config,
+                    app_tx,
+                );
+                *current_strategy_profile = next_profile.clone();
+                app_state.strategy_label = next_profile.label.clone();
+                app_state.set_focus_strategy_id(Some(next_profile.label.clone()));
+                refresh_strategy_lists(app_state, strategy_catalog, enabled_strategy_tags);
+                app_state.set_selected_grid_strategy_index(
+                    strategy_catalog
+                        .index_of_label(&next_profile.label)
+                        .unwrap_or(0),
+                );
+                app_state.fast_sma = None;
+                app_state.slow_sma = None;
+                let _ = strategy_profile_tx.send(next_profile.clone());
+                publish_and_persist_strategy_state(
+                    app_state,
+                    strategy_catalog,
+                    current_strategy_profile,
+                    enabled_strategy_tags,
+                    strategy_profiles_tx,
+                    enabled_strategy_tags_tx,
+                    ws_instruments_tx,
+                );
+                app_state.push_log(format!("Strategy selected: {} (ON)", next_profile.label));
+            }
+            app_state.set_strategy_selector_open(false);
+        }
+        _ => {}
+    }
+}
+
+fn handle_account_popup_command(cmd: PopupCommand, app_state: &mut AppState) {
+    if cmd == PopupCommand::Close {
+        app_state.set_account_popup_open(false);
+    }
+}
+
+fn handle_history_popup_command(cmd: PopupCommand, app_state: &mut AppState) {
+    match cmd {
+        PopupCommand::HistoryDay => {
+            app_state.history_bucket = order_store::HistoryBucket::Day;
+            app_state.refresh_history_rows();
+        }
+        PopupCommand::HistoryHour => {
+            app_state.history_bucket = order_store::HistoryBucket::Hour;
+            app_state.refresh_history_rows();
+        }
+        PopupCommand::HistoryMonth => {
+            app_state.history_bucket = order_store::HistoryBucket::Month;
+            app_state.refresh_history_rows();
+        }
+        PopupCommand::Close => {
+            app_state.set_history_popup_open(false);
+        }
+        _ => {}
+    }
+}
+
+fn handle_focus_popup_command(cmd: PopupCommand, app_state: &mut AppState) {
+    if cmd == PopupCommand::Close {
+        app_state.set_focus_popup_open(false);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_strategy_editor_key(
+    key_code: &KeyCode,
+    app_state: &mut AppState,
+    strategy_catalog: &mut StrategyCatalog,
+    enabled_strategy_tags: &mut HashSet<String>,
+    current_symbol: &mut String,
+    current_strategy_profile: &mut StrategyProfile,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+    strategy_profile_tx: &watch::Sender<StrategyProfile>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) {
+    match key_code {
+        KeyCode::Esc => {
+            app_state.set_strategy_editor_open(false);
+        }
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
+            app_state.strategy_editor_field = app_state.strategy_editor_field.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
+            app_state.strategy_editor_field = (app_state.strategy_editor_field + 1).min(3);
+        }
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => match app_state.strategy_editor_field {
+            0 => {
+                app_state.strategy_editor_symbol_index =
+                    app_state.strategy_editor_symbol_index.saturating_sub(1)
+            }
+            1 => {
+                app_state.strategy_editor_fast =
+                    app_state.strategy_editor_fast.saturating_sub(1).max(2)
+            }
+            2 => {
+                app_state.strategy_editor_slow =
+                    app_state.strategy_editor_slow.saturating_sub(1).max(3)
+            }
+            _ => {
+                app_state.strategy_editor_cooldown =
+                    app_state.strategy_editor_cooldown.saturating_sub(1).max(1)
+            }
+        },
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => match app_state.strategy_editor_field {
+            0 => {
+                app_state.strategy_editor_symbol_index = (app_state.strategy_editor_symbol_index + 1)
+                    .min(app_state.symbol_items.len().saturating_sub(1))
+            }
+            1 => app_state.strategy_editor_fast += 1,
+            2 => app_state.strategy_editor_slow += 1,
+            _ => app_state.strategy_editor_cooldown += 1,
+        },
+        KeyCode::Enter => {
+            let edited_profile = strategy_catalog.get(app_state.strategy_editor_index).cloned();
+            let selected_symbol = app_state
+                .symbol_items
+                .get(app_state.strategy_editor_symbol_index)
+                .cloned()
+                .unwrap_or_else(|| app_state.symbol.clone());
+            let maybe_updated = strategy_catalog.fork_profile(
+                app_state.strategy_editor_index,
+                &selected_symbol,
+                app_state.strategy_editor_fast,
+                app_state.strategy_editor_slow,
+                app_state.strategy_editor_cooldown,
+            );
+            if let Some(updated) = maybe_updated {
+                refresh_strategy_lists(app_state, strategy_catalog, enabled_strategy_tags);
+                app_state
+                    .set_selected_grid_strategy_index(strategy_catalog.index_of_label(&updated.label).unwrap_or(0));
+                if edited_profile.as_ref().map(|p| p.source_tag.as_str())
+                    == Some(current_strategy_profile.source_tag.as_str())
+                {
+                    set_strategy_enabled(
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        &current_strategy_profile.source_tag,
+                        false,
+                        app_state.paused,
+                    );
+                    set_strategy_enabled(
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        &updated.source_tag,
+                        true,
+                        app_state.paused,
+                    );
+                    *current_strategy_profile = updated.clone();
+                    app_state.strategy_label = updated.label.clone();
+                    app_state.set_focus_strategy_id(Some(updated.label.clone()));
+                    apply_symbol_selection(
+                        &updated.symbol,
+                        current_symbol,
+                        app_state,
+                        ws_symbol_tx,
+                        rest_client,
+                        config,
+                        app_tx,
+                    );
+                    app_state.fast_sma = None;
+                    app_state.slow_sma = None;
+                    let _ = strategy_profile_tx.send(updated.clone());
+                }
+                if let Some(before) = edited_profile.as_ref() {
+                    app_state.push_log(format!("Strategy forked: {} -> {}", before.label, updated.label));
+                } else {
+                    app_state.push_log(format!("Strategy forked: {}", updated.label));
+                }
+                persist_and_publish_strategy_state(
+                    app_state,
+                    strategy_catalog,
+                    current_strategy_profile,
+                    enabled_strategy_tags,
+                    strategy_profiles_tx,
+                    enabled_strategy_tags_tx,
+                    ws_instruments_tx,
+                );
+            }
+            app_state.set_strategy_editor_open(false);
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_grid_strategy_action(
+    cmd: GridCommand,
+    app_state: &mut AppState,
+    strategy_catalog: &mut StrategyCatalog,
+    enabled_strategy_tags: &mut HashSet<String>,
+    current_symbol: &mut String,
+    current_strategy_profile: &mut StrategyProfile,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+    strategy_profile_tx: &watch::Sender<StrategyProfile>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    strategy_enabled_tx: &watch::Sender<bool>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) -> bool {
+    match cmd {
+        GridCommand::NewStrategy => {
+            let base_index = app_state
+                .selected_grid_strategy_index()
+                .min(strategy_catalog.len().saturating_sub(1));
+            let created = strategy_catalog.add_custom_from_index(base_index);
+            refresh_strategy_lists(app_state, strategy_catalog, enabled_strategy_tags);
+            app_state
+                .set_selected_grid_strategy_index(strategy_catalog.index_of_label(&created.label).unwrap_or(0));
+            app_state.set_strategy_editor_open(true);
+            app_state.strategy_editor_index = app_state.selected_grid_strategy_index();
+            app_state.strategy_editor_field = 0;
+            app_state.strategy_editor_symbol_index = app_state
+                .symbol_items
+                .iter()
+                .position(|item| item == &created.symbol)
+                .unwrap_or(0);
+            app_state.strategy_editor_fast = created.fast_period;
+            app_state.strategy_editor_slow = created.slow_period;
+            app_state.strategy_editor_cooldown = created.min_ticks_between_signals;
+            app_state.push_log(format!("Grid strategy registered: {}", created.label));
+            publish_and_persist_strategy_state(
+                app_state,
+                strategy_catalog,
+                current_strategy_profile,
+                enabled_strategy_tags,
+                strategy_profiles_tx,
+                enabled_strategy_tags_tx,
+                ws_instruments_tx,
+            );
+            true
+        }
+        GridCommand::EditStrategyConfig => {
+            if let Some(selected_label) = app_state
+                .strategy_items
+                .get(app_state.selected_grid_strategy_index())
+                .cloned()
+            {
+                if let Some(idx) = strategy_catalog.index_of_label(&selected_label) {
+                    if let Some(profile) = strategy_catalog.get(idx).cloned() {
+                        app_state.set_strategy_editor_open(true);
+                        app_state.strategy_editor_index = idx;
+                        app_state.strategy_editor_field = 0;
+                        app_state.strategy_editor_symbol_index = app_state
+                            .symbol_items
+                            .iter()
+                            .position(|item| item == &profile.symbol)
+                            .unwrap_or(0);
+                        app_state.strategy_editor_fast = profile.fast_period;
+                        app_state.strategy_editor_slow = profile.slow_period;
+                        app_state.strategy_editor_cooldown = profile.min_ticks_between_signals;
+                    }
+                }
+            }
+            true
+        }
+        GridCommand::DeleteStrategy => {
+            let selected_idx = app_state
+                .selected_grid_strategy_index()
+                .min(strategy_catalog.len().saturating_sub(1));
+            let selected_profile = strategy_catalog.get(selected_idx).cloned();
+            if let Some(profile) = selected_profile {
+                if !StrategyCatalog::is_custom_source_tag(&profile.source_tag) {
+                    app_state.push_log(format!("Strategy delete blocked (builtin): {}", profile.label));
+                } else if strategy_catalog.remove_custom_profile(selected_idx).is_some() {
+                    enabled_strategy_tags.remove(&profile.source_tag);
+                    let mut fallback_idx = selected_idx.saturating_sub(1);
+                    if strategy_catalog.len() > 0 {
+                        fallback_idx = fallback_idx.min(strategy_catalog.len().saturating_sub(1));
+                    }
+                    if profile.source_tag == current_strategy_profile.source_tag {
+                        set_strategy_enabled(
+                            strategy_catalog,
+                            enabled_strategy_tags,
+                            &current_strategy_profile.source_tag,
+                            false,
+                            app_state.paused,
+                        );
+                        if let Some(next_profile) = strategy_catalog.get(fallback_idx).cloned() {
+                            set_strategy_enabled(
+                                strategy_catalog,
+                                enabled_strategy_tags,
+                                &next_profile.source_tag,
+                                true,
+                                app_state.paused,
+                            );
+                            *current_strategy_profile = next_profile.clone();
+                            app_state.strategy_label = next_profile.label.clone();
+                            app_state.set_focus_strategy_id(Some(next_profile.label.clone()));
+                            apply_symbol_selection(
+                                &next_profile.symbol,
+                                current_symbol,
+                                app_state,
+                                ws_symbol_tx,
+                                rest_client,
+                                config,
+                                app_tx,
+                            );
+                            app_state.fast_sma = None;
+                            app_state.slow_sma = None;
+                            let _ = strategy_profile_tx.send(next_profile);
+                        }
+                    }
+                    publish_strategy_runtime_updates(
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        strategy_profiles_tx,
+                        enabled_strategy_tags_tx,
+                        ws_instruments_tx,
+                    );
+                    refresh_and_sync_strategy_panel(app_state, strategy_catalog, enabled_strategy_tags);
+                    app_state.set_selected_grid_strategy_index(
+                        fallback_idx.min(strategy_catalog.len().saturating_sub(1)),
+                    );
+                    app_state.push_log(format!("Strategy deleted: {}", profile.label));
+                    persist_strategy_session_state(
+                        app_state,
+                        strategy_catalog,
+                        current_strategy_profile,
+                        enabled_strategy_tags,
+                    );
+                }
+            }
+            true
+        }
+        GridCommand::ToggleStrategyOnOff => {
+            if let Some(item) = app_state
+                .strategy_items
+                .get(app_state.selected_grid_strategy_index())
+                .cloned()
+            {
+                if let Some(next_profile) = strategy_catalog
+                    .index_of_label(&item)
+                    .and_then(|idx| strategy_catalog.get(idx).cloned())
+                {
+                    if enabled_strategy_tags.contains(&next_profile.source_tag) {
+                        set_strategy_enabled(
+                            strategy_catalog,
+                            enabled_strategy_tags,
+                            &next_profile.source_tag,
+                            false,
+                            app_state.paused,
+                        );
+                        app_state.push_log(format!("Strategy OFF: {}", next_profile.label));
+                    } else {
+                        set_strategy_enabled(
+                            strategy_catalog,
+                            enabled_strategy_tags,
+                            &next_profile.source_tag,
+                            true,
+                            app_state.paused,
+                        );
+                        app_state.paused = false;
+                        let _ = strategy_enabled_tx.send(true);
+                        app_state.push_log(format!("Strategy ON from grid: {}", next_profile.label));
+                    }
+                    publish_and_persist_strategy_state(
+                        app_state,
+                        strategy_catalog,
+                        current_strategy_profile,
+                        enabled_strategy_tags,
+                        strategy_profiles_tx,
+                        enabled_strategy_tags_tx,
+                        ws_instruments_tx,
+                    );
+                    refresh_and_sync_strategy_panel(app_state, strategy_catalog, enabled_strategy_tags);
+                }
+            }
+            true
+        }
+        GridCommand::ActivateStrategy => {
+            if let Some(item) = app_state
+                .strategy_items
+                .get(app_state.selected_grid_strategy_index())
+                .cloned()
+            {
+                app_state.set_focus_symbol(Some(app_state.symbol.clone()));
+                app_state.set_focus_strategy_id(Some(item.clone()));
+                if let Some(next_profile) = strategy_catalog
+                    .index_of_label(&item)
+                    .and_then(|idx| strategy_catalog.get(idx).cloned())
+                {
+                    set_strategy_enabled(
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        &next_profile.source_tag,
+                        true,
+                        app_state.paused,
+                    );
+                    apply_symbol_selection(
+                        &next_profile.symbol,
+                        current_symbol,
+                        app_state,
+                        ws_symbol_tx,
+                        rest_client,
+                        config,
+                        app_tx,
+                    );
+                    *current_strategy_profile = next_profile.clone();
+                    app_state.strategy_label = next_profile.label.clone();
+                    app_state.fast_sma = None;
+                    app_state.slow_sma = None;
+                    let _ = strategy_profile_tx.send(next_profile.clone());
+                    publish_and_persist_strategy_state(
+                        app_state,
+                        strategy_catalog,
+                        current_strategy_profile,
+                        enabled_strategy_tags,
+                        strategy_profiles_tx,
+                        enabled_strategy_tags_tx,
+                        ws_instruments_tx,
+                    );
+                    app_state.push_log(format!("Strategy selected from grid: {} (ON)", next_profile.label));
+                }
+                app_state.set_grid_open(false);
+                app_state.set_focus_popup_open(false);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_grid_key(
+    key_code: &KeyCode,
+    app_state: &mut AppState,
+    strategy_catalog: &mut StrategyCatalog,
+    enabled_strategy_tags: &mut HashSet<String>,
+    current_symbol: &mut String,
+    current_strategy_profile: &mut StrategyProfile,
+    ws_symbol_tx: &watch::Sender<String>,
+    rest_client: &Arc<BinanceRestClient>,
+    config: &Config,
+    app_tx: &mpsc::Sender<AppEvent>,
+    strategy_profile_tx: &watch::Sender<StrategyProfile>,
+    strategy_profiles_tx: &watch::Sender<Vec<StrategyProfile>>,
+    enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
+    strategy_enabled_tx: &watch::Sender<bool>,
+    ws_instruments_tx: &watch::Sender<Vec<String>>,
+) {
+    if let Some(cmd) = parse_grid_command(key_code) {
+        match cmd {
+            GridCommand::TabAssets => app_state.set_grid_tab(GridTab::Assets),
+            GridCommand::TabStrategies => app_state.set_grid_tab(GridTab::Strategies),
+            GridCommand::TabRisk => app_state.set_grid_tab(GridTab::Risk),
+            GridCommand::TabNetwork => app_state.set_grid_tab(GridTab::Network),
+            GridCommand::TabSystemLog => app_state.set_grid_tab(GridTab::SystemLog),
+            GridCommand::CloseGrid => app_state.set_grid_open(false),
+            GridCommand::ToggleOnOffPanel => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    toggle_grid_panel_selection(app_state);
+                }
+            }
+            GridCommand::StrategyUp => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    move_grid_strategy_selection(app_state, true);
+                }
+            }
+            GridCommand::StrategyDown => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    move_grid_strategy_selection(app_state, false);
+                }
+            }
+            GridCommand::SymbolLeft => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    app_state.set_selected_grid_symbol_index(
+                        app_state.selected_grid_symbol_index().saturating_sub(1),
+                    );
+                }
+            }
+            GridCommand::SymbolRight => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    app_state.set_selected_grid_symbol_index(
+                        (app_state.selected_grid_symbol_index() + 1)
+                            .min(app_state.symbol_items.len().saturating_sub(1)),
+                    );
+                }
+            }
+            GridCommand::NewStrategy
+            | GridCommand::EditStrategyConfig
+            | GridCommand::DeleteStrategy
+            | GridCommand::ToggleStrategyOnOff
+            | GridCommand::ActivateStrategy => {
+                if app_state.grid_tab() == GridTab::Strategies {
+                    let _ = handle_grid_strategy_action(
+                        cmd,
+                        app_state,
+                        strategy_catalog,
+                        enabled_strategy_tags,
+                        current_symbol,
+                        current_strategy_profile,
+                        ws_symbol_tx,
+                        rest_client,
+                        config,
+                        app_tx,
+                        strategy_profile_tx,
+                        strategy_profiles_tx,
+                        enabled_strategy_tags_tx,
+                        strategy_enabled_tx,
+                        ws_instruments_tx,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -1118,666 +1775,102 @@ async fn main() -> Result<()> {
                     break;
                 }
                 if app_state.is_symbol_selector_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('T') => {
-                            app_state.set_symbol_selector_open(false);
-                        }
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                            app_state.set_symbol_selector_index(
-                                app_state.symbol_selector_index().saturating_sub(1),
-                            );
-                        }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            app_state.set_symbol_selector_index(
-                                (app_state.symbol_selector_index() + 1)
-                                    .min(app_state.symbol_items.len().saturating_sub(1)),
-                            );
-                        }
-                        KeyCode::Enter => {
-                            if let Some(next_symbol) = app_state
-                                .symbol_items
-                                .get(app_state.symbol_selector_index())
-                                .cloned()
-                            {
-                                apply_symbol_selection(
-                                    &next_symbol,
-                                    &mut current_symbol,
-                                    &mut app_state,
-                                    &ws_symbol_tx,
-                                    &rest_client,
-                                    &config,
-                                    &app_tx,
-                                );
-                            }
-                            app_state.set_symbol_selector_open(false);
-                        }
-                        _ => {}
+                    if let Some(cmd) = parse_popup_command(PopupKind::SymbolSelector, &key.code) {
+                        handle_symbol_selector_popup_command(
+                            cmd,
+                            &mut app_state,
+                            &mut current_symbol,
+                            &ws_symbol_tx,
+                            &rest_client,
+                            &config,
+                            &app_tx,
+                        );
                     }
                     continue;
                 }
                 if app_state.is_strategy_selector_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                            app_state.set_strategy_selector_open(false);
-                        }
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                            app_state.set_strategy_selector_index(
-                                app_state.strategy_selector_index().saturating_sub(1),
-                            );
-                        }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            app_state.set_strategy_selector_index(
-                                (app_state.strategy_selector_index() + 1)
-                                    .min(app_state.strategy_items.len().saturating_sub(1)),
-                            );
-                        }
-                        KeyCode::Enter => {
-                            if let Some(next_profile) = strategy_catalog
-                                .get(app_state.strategy_selector_index())
-                                .cloned()
-                            {
-                                set_strategy_enabled(
-                                    &mut strategy_catalog,
-                                    &mut enabled_strategy_tags,
-                                    &next_profile.source_tag,
-                                    true,
-                                    app_state.paused,
-                                );
-                                apply_symbol_selection(
-                                    &next_profile.symbol,
-                                    &mut current_symbol,
-                                    &mut app_state,
-                                    &ws_symbol_tx,
-                                    &rest_client,
-                                    &config,
-                                    &app_tx,
-                                );
-                                current_strategy_profile = next_profile.clone();
-                                app_state.strategy_label = next_profile.label.clone();
-                                app_state.set_focus_strategy_id(Some(next_profile.label.clone()));
-                                refresh_strategy_lists(
-                                    &mut app_state,
-                                    &strategy_catalog,
-                                    &enabled_strategy_tags,
-                                );
-                                app_state.set_selected_grid_strategy_index(
-                                    strategy_catalog
-                                        .index_of_label(&next_profile.label)
-                                        .unwrap_or(0),
-                                );
-                                app_state.fast_sma = None;
-                                app_state.slow_sma = None;
-                                let _ = strategy_profile_tx.send(next_profile.clone());
-                                publish_and_persist_strategy_state(
-                                    &mut app_state,
-                                    &strategy_catalog,
-                                    &current_strategy_profile,
-                                    &enabled_strategy_tags,
-                                    &strategy_profiles_tx,
-                                    &enabled_strategy_tags_tx,
-                                    &ws_instruments_tx,
-                                );
-                                app_state.push_log(format!(
-                                    "Strategy selected: {} (ON)",
-                                    next_profile.label
-                                ));
-                            }
-                            app_state.set_strategy_selector_open(false);
-                        }
-                        _ => {}
+                    if let Some(cmd) =
+                        parse_popup_command(PopupKind::StrategySelector, &key.code)
+                    {
+                        handle_strategy_selector_popup_command(
+                            cmd,
+                            &mut app_state,
+                            &mut strategy_catalog,
+                            &mut enabled_strategy_tags,
+                            &mut current_symbol,
+                            &mut current_strategy_profile,
+                            &ws_symbol_tx,
+                            &rest_client,
+                            &config,
+                            &app_tx,
+                            &strategy_profile_tx,
+                            &strategy_profiles_tx,
+                            &enabled_strategy_tags_tx,
+                            &ws_instruments_tx,
+                        );
                     }
                     continue;
                 }
                 if app_state.is_account_popup_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Enter => {
-                            app_state.set_account_popup_open(false);
-                        }
-                        _ => {}
+                    if let Some(cmd) = parse_popup_command(PopupKind::Account, &key.code) {
+                        handle_account_popup_command(cmd, &mut app_state);
                     }
                     continue;
                 }
                 if app_state.is_history_popup_open() {
-                    match key.code {
-                        KeyCode::Char('d') | KeyCode::Char('D') => {
-                            app_state.history_bucket = order_store::HistoryBucket::Day;
-                            app_state.refresh_history_rows();
-                        }
-                        KeyCode::Char('h') | KeyCode::Char('H') => {
-                            app_state.history_bucket = order_store::HistoryBucket::Hour;
-                            app_state.refresh_history_rows();
-                        }
-                        KeyCode::Char('m') | KeyCode::Char('M') => {
-                            app_state.history_bucket = order_store::HistoryBucket::Month;
-                            app_state.refresh_history_rows();
-                        }
-                        KeyCode::Esc | KeyCode::Char('i') | KeyCode::Char('I') | KeyCode::Enter => {
-                            app_state.set_history_popup_open(false);
-                        }
-                        _ => {}
+                    if let Some(cmd) = parse_popup_command(PopupKind::History, &key.code) {
+                        handle_history_popup_command(cmd, &mut app_state);
                     }
                     continue;
                 }
                 if app_state.is_focus_popup_open() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Enter => {
-                            app_state.set_focus_popup_open(false);
-                        }
-                        _ => {}
+                    if let Some(cmd) = parse_popup_command(PopupKind::Focus, &key.code) {
+                        handle_focus_popup_command(cmd, &mut app_state);
                     }
                     continue;
                 }
                 if app_state.is_strategy_editor_open() {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app_state.set_strategy_editor_open(false);
-                        }
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                            app_state.strategy_editor_field =
-                                app_state.strategy_editor_field.saturating_sub(1);
-                        }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            app_state.strategy_editor_field =
-                                (app_state.strategy_editor_field + 1).min(3);
-                        }
-                        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
-                            match app_state.strategy_editor_field {
-                                0 => {
-                                    app_state.strategy_editor_symbol_index =
-                                        app_state.strategy_editor_symbol_index.saturating_sub(1)
-                                }
-                                1 => {
-                                    app_state.strategy_editor_fast =
-                                        app_state.strategy_editor_fast.saturating_sub(1).max(2)
-                                }
-                                2 => {
-                                    app_state.strategy_editor_slow =
-                                        app_state.strategy_editor_slow.saturating_sub(1).max(3)
-                                }
-                                _ => {
-                                    app_state.strategy_editor_cooldown =
-                                        app_state.strategy_editor_cooldown.saturating_sub(1).max(1)
-                                }
-                            }
-                        }
-                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
-                            match app_state.strategy_editor_field {
-                                0 => {
-                                    app_state.strategy_editor_symbol_index =
-                                        (app_state.strategy_editor_symbol_index + 1)
-                                            .min(app_state.symbol_items.len().saturating_sub(1))
-                                }
-                                1 => app_state.strategy_editor_fast += 1,
-                                2 => app_state.strategy_editor_slow += 1,
-                                _ => app_state.strategy_editor_cooldown += 1,
-                            }
-                        }
-                        KeyCode::Enter => {
-                            let edited_profile = strategy_catalog
-                                .get(app_state.strategy_editor_index)
-                                .cloned();
-                            let selected_symbol = app_state
-                                .symbol_items
-                                .get(app_state.strategy_editor_symbol_index)
-                                .cloned()
-                                .unwrap_or_else(|| app_state.symbol.clone());
-                            let maybe_updated = strategy_catalog.fork_profile(
-                                app_state.strategy_editor_index,
-                                &selected_symbol,
-                                app_state.strategy_editor_fast,
-                                app_state.strategy_editor_slow,
-                                app_state.strategy_editor_cooldown,
-                            );
-                            if let Some(updated) = maybe_updated {
-                                refresh_strategy_lists(
-                                    &mut app_state,
-                                    &strategy_catalog,
-                                    &enabled_strategy_tags,
-                                );
-                                app_state.set_selected_grid_strategy_index(
-                                    strategy_catalog.index_of_label(&updated.label).unwrap_or(0),
-                                );
-                                if edited_profile.as_ref().map(|p| p.source_tag.as_str())
-                                    == Some(current_strategy_profile.source_tag.as_str())
-                                {
-                                    set_strategy_enabled(
-                                        &mut strategy_catalog,
-                                        &mut enabled_strategy_tags,
-                                        &current_strategy_profile.source_tag,
-                                        false,
-                                        app_state.paused,
-                                    );
-                                    set_strategy_enabled(
-                                        &mut strategy_catalog,
-                                        &mut enabled_strategy_tags,
-                                        &updated.source_tag,
-                                        true,
-                                        app_state.paused,
-                                    );
-                                    current_strategy_profile = updated.clone();
-                                    app_state.strategy_label = updated.label.clone();
-                                    app_state.set_focus_strategy_id(Some(updated.label.clone()));
-                                    apply_symbol_selection(
-                                        &updated.symbol,
-                                        &mut current_symbol,
-                                        &mut app_state,
-                                        &ws_symbol_tx,
-                                        &rest_client,
-                                        &config,
-                                        &app_tx,
-                                    );
-                                    app_state.fast_sma = None;
-                                    app_state.slow_sma = None;
-                                    let _ = strategy_profile_tx.send(updated.clone());
-                                }
-                                if let Some(before) = edited_profile.as_ref() {
-                                    app_state.push_log(format!(
-                                        "Strategy forked: {} -> {}",
-                                        before.label, updated.label
-                                    ));
-                                } else {
-                                    app_state
-                                        .push_log(format!("Strategy forked: {}", updated.label));
-                                }
-                                persist_and_publish_strategy_state(
-                                    &mut app_state,
-                                    &strategy_catalog,
-                                    &current_strategy_profile,
-                                    &enabled_strategy_tags,
-                                    &strategy_profiles_tx,
-                                    &enabled_strategy_tags_tx,
-                                    &ws_instruments_tx,
-                                );
-                            }
-                            app_state.set_strategy_editor_open(false);
-                        }
-                        _ => {}
-                    }
+                    handle_strategy_editor_key(
+                        &key.code,
+                        &mut app_state,
+                        &mut strategy_catalog,
+                        &mut enabled_strategy_tags,
+                        &mut current_symbol,
+                        &mut current_strategy_profile,
+                        &ws_symbol_tx,
+                        &rest_client,
+                        &config,
+                        &app_tx,
+                        &strategy_profile_tx,
+                        &strategy_profiles_tx,
+                        &enabled_strategy_tags_tx,
+                        &ws_instruments_tx,
+                    );
                     continue;
                 }
                 if app_state.is_grid_open() {
-                    match key.code {
-                        KeyCode::Char('1') => {
-                            app_state.set_grid_tab(GridTab::Assets);
-                        }
-                        KeyCode::Char('2') => {
-                            app_state.set_grid_tab(GridTab::Strategies);
-                        }
-                        KeyCode::Char('3') => {
-                            app_state.set_grid_tab(GridTab::Risk);
-                        }
-                        KeyCode::Char('4') => {
-                            app_state.set_grid_tab(GridTab::Network);
-                        }
-                        KeyCode::Char('5') => {
-                            app_state.set_grid_tab(GridTab::SystemLog);
-                        }
-                        KeyCode::Tab => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            app_state.set_on_panel_selected(!app_state.is_on_panel_selected());
-                            let panel_indices: Vec<usize> = app_state
-                                .strategy_item_active
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(idx, active)| {
-                                    if *active == app_state.is_on_panel_selected() {
-                                        Some(idx)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if !panel_indices.contains(&app_state.selected_grid_strategy_index()) {
-                                if let Some(first) = panel_indices.first().copied() {
-                                    app_state.set_selected_grid_strategy_index(first);
-                                }
-                            }
-                        }
-                        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let panel_indices: Vec<usize> = app_state
-                                .strategy_item_active
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(idx, active)| {
-                                    if *active == app_state.is_on_panel_selected() {
-                                        Some(idx)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if let Some(pos) = panel_indices
-                                .iter()
-                                .position(|idx| *idx == app_state.selected_grid_strategy_index())
-                            {
-                                let next_pos = pos.saturating_sub(1);
-                                app_state.set_selected_grid_strategy_index(panel_indices[next_pos]);
-                            } else if let Some(first) = panel_indices.first().copied() {
-                                app_state.set_selected_grid_strategy_index(first);
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let panel_indices: Vec<usize> = app_state
-                                .strategy_item_active
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(idx, active)| {
-                                    if *active == app_state.is_on_panel_selected() {
-                                        Some(idx)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            if let Some(pos) = panel_indices
-                                .iter()
-                                .position(|idx| *idx == app_state.selected_grid_strategy_index())
-                            {
-                                let next_pos = (pos + 1).min(panel_indices.len().saturating_sub(1));
-                                app_state.set_selected_grid_strategy_index(panel_indices[next_pos]);
-                            } else if let Some(first) = panel_indices.first().copied() {
-                                app_state.set_selected_grid_strategy_index(first);
-                            }
-                        }
-                        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            app_state.set_selected_grid_symbol_index(
-                                app_state.selected_grid_symbol_index().saturating_sub(1),
-                            );
-                        }
-                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            app_state.set_selected_grid_symbol_index(
-                                (app_state.selected_grid_symbol_index() + 1)
-                                    .min(app_state.symbol_items.len().saturating_sub(1)),
-                            );
-                        }
-                        KeyCode::Char('n') | KeyCode::Char('N') => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let base_index = app_state
-                                .selected_grid_strategy_index()
-                                .min(strategy_catalog.len().saturating_sub(1));
-                            let created = strategy_catalog.add_custom_from_index(base_index);
-                            refresh_strategy_lists(
-                                &mut app_state,
-                                &strategy_catalog,
-                                &enabled_strategy_tags,
-                            );
-                            app_state.set_selected_grid_strategy_index(
-                                strategy_catalog.index_of_label(&created.label).unwrap_or(0),
-                            );
-                            app_state.set_strategy_editor_open(true);
-                            app_state.strategy_editor_index = app_state.selected_grid_strategy_index();
-                            app_state.strategy_editor_field = 0;
-                            app_state.strategy_editor_symbol_index = app_state
-                                .symbol_items
-                                .iter()
-                                .position(|item| item == &created.symbol)
-                                .unwrap_or(0);
-                            app_state.strategy_editor_fast = created.fast_period;
-                            app_state.strategy_editor_slow = created.slow_period;
-                            app_state.strategy_editor_cooldown = created.min_ticks_between_signals;
-                            app_state
-                                .push_log(format!("Grid strategy registered: {}", created.label));
-                            publish_and_persist_strategy_state(
-                                &mut app_state,
-                                &strategy_catalog,
-                                &current_strategy_profile,
-                                &enabled_strategy_tags,
-                                &strategy_profiles_tx,
-                                &enabled_strategy_tags_tx,
-                                &ws_instruments_tx,
-                            );
-                        }
-                        KeyCode::Char('c') | KeyCode::Char('C') => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            if let Some(selected_label) = app_state
-                                .strategy_items
-                                .get(app_state.selected_grid_strategy_index())
-                                .cloned()
-                            {
-                                if let Some(idx) = strategy_catalog.index_of_label(&selected_label)
-                                {
-                                    if let Some(profile) = strategy_catalog.get(idx).cloned() {
-                                        app_state.set_strategy_editor_open(true);
-                                        app_state.strategy_editor_index = idx;
-                                        app_state.strategy_editor_field = 0;
-                                        app_state.strategy_editor_symbol_index = app_state
-                                            .symbol_items
-                                            .iter()
-                                            .position(|item| item == &profile.symbol)
-                                            .unwrap_or(0);
-                                        app_state.strategy_editor_fast = profile.fast_period;
-                                        app_state.strategy_editor_slow = profile.slow_period;
-                                        app_state.strategy_editor_cooldown =
-                                            profile.min_ticks_between_signals;
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            let selected_idx = app_state
-                                .selected_grid_strategy_index()
-                                .min(strategy_catalog.len().saturating_sub(1));
-                            let selected_profile = strategy_catalog.get(selected_idx).cloned();
-                            if let Some(profile) = selected_profile {
-                                if !StrategyCatalog::is_custom_source_tag(&profile.source_tag) {
-                                    app_state.push_log(format!(
-                                        "Strategy delete blocked (builtin): {}",
-                                        profile.label
-                                    ));
-                                } else if strategy_catalog
-                                    .remove_custom_profile(selected_idx)
-                                    .is_some()
-                                {
-                                    enabled_strategy_tags.remove(&profile.source_tag);
-                                    let mut fallback_idx = selected_idx.saturating_sub(1);
-                                    if strategy_catalog.len() > 0 {
-                                        fallback_idx = fallback_idx
-                                            .min(strategy_catalog.len().saturating_sub(1));
-                                    }
-                                    if profile.source_tag == current_strategy_profile.source_tag {
-                                        set_strategy_enabled(
-                                            &mut strategy_catalog,
-                                            &mut enabled_strategy_tags,
-                                            &current_strategy_profile.source_tag,
-                                            false,
-                                            app_state.paused,
-                                        );
-                                        if let Some(next_profile) =
-                                            strategy_catalog.get(fallback_idx).cloned()
-                                        {
-                                            set_strategy_enabled(
-                                                &mut strategy_catalog,
-                                                &mut enabled_strategy_tags,
-                                                &next_profile.source_tag,
-                                                true,
-                                                app_state.paused,
-                                            );
-                                            current_strategy_profile = next_profile.clone();
-                                            app_state.strategy_label = next_profile.label.clone();
-                                            app_state.set_focus_strategy_id(Some(
-                                                next_profile.label.clone(),
-                                            ));
-                                            apply_symbol_selection(
-                                                &next_profile.symbol,
-                                                &mut current_symbol,
-                                                &mut app_state,
-                                                &ws_symbol_tx,
-                                                &rest_client,
-                                                &config,
-                                                &app_tx,
-                                            );
-                                            app_state.fast_sma = None;
-                                            app_state.slow_sma = None;
-                                            let _ = strategy_profile_tx.send(next_profile);
-                                        }
-                                    }
-                                    publish_strategy_runtime_updates(
-                                        &strategy_catalog,
-                                        &enabled_strategy_tags,
-                                        &strategy_profiles_tx,
-                                        &enabled_strategy_tags_tx,
-                                        &ws_instruments_tx,
-                                    );
-                                    refresh_and_sync_strategy_panel(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &enabled_strategy_tags,
-                                    );
-                                    app_state.set_selected_grid_strategy_index(
-                                        fallback_idx.min(strategy_catalog.len().saturating_sub(1)),
-                                    );
-                                    app_state
-                                        .push_log(format!("Strategy deleted: {}", profile.label));
-                                    persist_strategy_session_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
-                                        &enabled_strategy_tags,
-                                    );
-                                }
-                            }
-                        }
-                        KeyCode::Char('o') | KeyCode::Char('O') => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            if let Some(item) = app_state
-                                .strategy_items
-                                .get(app_state.selected_grid_strategy_index())
-                                .cloned()
-                            {
-                                if let Some(next_profile) = strategy_catalog
-                                    .index_of_label(&item)
-                                    .and_then(|idx| strategy_catalog.get(idx).cloned())
-                                {
-                                    if enabled_strategy_tags.contains(&next_profile.source_tag) {
-                                        set_strategy_enabled(
-                                            &mut strategy_catalog,
-                                            &mut enabled_strategy_tags,
-                                            &next_profile.source_tag,
-                                            false,
-                                            app_state.paused,
-                                        );
-                                        app_state.push_log(format!(
-                                            "Strategy OFF: {}",
-                                            next_profile.label
-                                        ));
-                                    } else {
-                                        set_strategy_enabled(
-                                            &mut strategy_catalog,
-                                            &mut enabled_strategy_tags,
-                                            &next_profile.source_tag,
-                                            true,
-                                            app_state.paused,
-                                        );
-                                        app_state.paused = false;
-                                        let _ = strategy_enabled_tx.send(true);
-                                        app_state.push_log(format!(
-                                            "Strategy ON from grid: {}",
-                                            next_profile.label
-                                        ));
-                                    }
-                                    publish_and_persist_strategy_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
-                                        &enabled_strategy_tags,
-                                        &strategy_profiles_tx,
-                                        &enabled_strategy_tags_tx,
-                                        &ws_instruments_tx,
-                                    );
-                                    refresh_and_sync_strategy_panel(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &enabled_strategy_tags,
-                                    );
-                                }
-                            }
-                        }
-                        KeyCode::Enter | KeyCode::Char('f') | KeyCode::Char('F') => {
-                            if app_state.grid_tab() != GridTab::Strategies {
-                                continue;
-                            }
-                            if let Some(item) = app_state
-                                .strategy_items
-                                .get(app_state.selected_grid_strategy_index())
-                                .cloned()
-                            {
-                                app_state.set_focus_symbol(Some(app_state.symbol.clone()));
-                                app_state.set_focus_strategy_id(Some(item.clone()));
-                                if let Some(next_profile) = strategy_catalog
-                                    .index_of_label(&item)
-                                    .and_then(|idx| strategy_catalog.get(idx).cloned())
-                                {
-                                    set_strategy_enabled(
-                                        &mut strategy_catalog,
-                                        &mut enabled_strategy_tags,
-                                        &next_profile.source_tag,
-                                        true,
-                                        app_state.paused,
-                                    );
-                                    apply_symbol_selection(
-                                        &next_profile.symbol,
-                                        &mut current_symbol,
-                                        &mut app_state,
-                                        &ws_symbol_tx,
-                                        &rest_client,
-                                        &config,
-                                        &app_tx,
-                                    );
-                                    current_strategy_profile = next_profile.clone();
-                                    app_state.strategy_label = next_profile.label.clone();
-                                    app_state.fast_sma = None;
-                                    app_state.slow_sma = None;
-                                    let _ = strategy_profile_tx.send(next_profile.clone());
-                                    publish_and_persist_strategy_state(
-                                        &mut app_state,
-                                        &strategy_catalog,
-                                        &current_strategy_profile,
-                                        &enabled_strategy_tags,
-                                        &strategy_profiles_tx,
-                                        &enabled_strategy_tags_tx,
-                                        &ws_instruments_tx,
-                                    );
-                                    app_state.push_log(format!(
-                                        "Strategy selected from grid: {} (ON)",
-                                        next_profile.label
-                                    ));
-                                }
-                                app_state.set_grid_open(false);
-                                app_state.set_focus_popup_open(false);
-                            }
-                        }
-                        KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('G') => {
-                            app_state.set_grid_open(false);
-                        }
-                        _ => {}
-                    }
+                    handle_grid_key(
+                        &key.code,
+                        &mut app_state,
+                        &mut strategy_catalog,
+                        &mut enabled_strategy_tags,
+                        &mut current_symbol,
+                        &mut current_strategy_profile,
+                        &ws_symbol_tx,
+                        &rest_client,
+                        &config,
+                        &app_tx,
+                        &strategy_profile_tx,
+                        &strategy_profiles_tx,
+                        &enabled_strategy_tags_tx,
+                        &strategy_enabled_tx,
+                        &ws_instruments_tx,
+                    );
                     continue;
                 }
-                match key.code {
-                    KeyCode::Char('p') | KeyCode::Char('P') => {
+                if let Some(cmd) = parse_main_command(&key.code) {
+                    match cmd {
+                    UiCommand::Pause => {
                         if !app_state.paused {
                             for source_tag in enabled_strategy_tags.clone() {
                                 mark_strategy_stopped(&mut strategy_catalog, &source_tag);
@@ -1788,7 +1881,7 @@ async fn main() -> Result<()> {
                             let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
                         }
                     }
-                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                    UiCommand::Resume => {
                         if app_state.paused {
                             for source_tag in enabled_strategy_tags.clone() {
                                 mark_strategy_running(&mut strategy_catalog, &source_tag);
@@ -1799,36 +1892,21 @@ async fn main() -> Result<()> {
                             let _ = strategy_profiles_tx.send(strategy_catalog.profiles().to_vec());
                         }
                     }
-                    KeyCode::Char('b') | KeyCode::Char('B') => {
+                    UiCommand::ManualBuy => {
                         app_state.push_log(format!(
                             "Manual BUY ({:.2} USDT)",
                             config.strategy.order_amount_usdt
                         ));
                         let _ = manual_order_tx.try_send(Signal::Buy);
                     }
-                    KeyCode::Char('s') | KeyCode::Char('S') => {
+                    UiCommand::ManualSell => {
                         app_state.push_log("Manual SELL (position)".to_string());
                         let _ = manual_order_tx.try_send(Signal::Sell);
                     }
-                    KeyCode::Char('0') => {
-                        switch_timeframe(&current_symbol, "1s", &rest_client, &config, &app_tx);
+                    UiCommand::SwitchTimeframe(interval) => {
+                        switch_timeframe(&current_symbol, interval, &rest_client, &config, &app_tx);
                     }
-                    KeyCode::Char('1') => {
-                        switch_timeframe(&current_symbol, "1m", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('h') | KeyCode::Char('H') => {
-                        switch_timeframe(&current_symbol, "1h", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('d') | KeyCode::Char('D') => {
-                        switch_timeframe(&current_symbol, "1d", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('w') | KeyCode::Char('W') => {
-                        switch_timeframe(&current_symbol, "1w", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('m') | KeyCode::Char('M') => {
-                        switch_timeframe(&current_symbol, "1M", &rest_client, &config, &app_tx);
-                    }
-                    KeyCode::Char('t') | KeyCode::Char('T') => {
+                    UiCommand::OpenSymbolSelector => {
                         app_state.set_symbol_selector_index(
                             app_state
                                 .symbol_items
@@ -1838,7 +1916,7 @@ async fn main() -> Result<()> {
                         );
                         app_state.set_symbol_selector_open(true);
                     }
-                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    UiCommand::OpenStrategySelector => {
                         app_state.set_strategy_selector_index(
                             strategy_catalog
                                 .index_of_label(&current_strategy_profile.label)
@@ -1846,20 +1924,17 @@ async fn main() -> Result<()> {
                         );
                         app_state.set_strategy_selector_open(true);
                     }
-                    KeyCode::Char('a') | KeyCode::Char('A') => {
+                    UiCommand::OpenAccountPopup => {
                         app_state.set_account_popup_open(true);
                     }
-                    KeyCode::Char('i') | KeyCode::Char('I') => {
+                    UiCommand::OpenHistoryPopup => {
                         app_state.refresh_history_rows();
                         app_state.set_history_popup_open(true);
                     }
-                    KeyCode::Char('g') | KeyCode::Char('G') => {
+                    UiCommand::OpenGrid => {
                         open_grid_from_current_selection(&mut app_state, &current_symbol);
                     }
-                    KeyCode::Char('f') | KeyCode::Char('F') => {
-                        open_grid_from_current_selection(&mut app_state, &current_symbol);
                     }
-                    _ => {}
                 }
             }
         }
