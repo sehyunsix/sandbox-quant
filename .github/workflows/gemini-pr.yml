@@ -140,6 +140,13 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test -q
 
+      - name: Reset working tree to base branch before PR action
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ needs.prepare.outputs.base_branch }}"
+          git checkout "${{ needs.prepare.outputs.base_branch }}"
+          git reset --hard "origin/${{ needs.prepare.outputs.base_branch }}"
+
       - name: Create Pull Request (Draft)
         uses: peter-evans/create-pull-request@v6
         with:
