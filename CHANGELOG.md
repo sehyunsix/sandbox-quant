@@ -1,3 +1,7 @@
+## v0.13.0 - 2026-02-20
+
+- feat(workflow): enforce strategy_creation mode with structural gates (c4e2a05)
+
 ## v0.12.9 - 2026-02-20
 
 - fix(workflow): auto-format and restrict PR paths for gemini runs (3b36b7a)
