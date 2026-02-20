@@ -1,3 +1,7 @@
+## v0.13.2 - 2026-02-20
+
+- ci: switch gemini workflow to docs-only RFC/issue lane (9c0d315)
+
 ## v0.13.1 - 2026-02-20
 
 - ci: tighten strategy scope gate and relax clippy gate (50d88dc)
