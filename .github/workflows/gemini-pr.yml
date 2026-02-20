@@ -135,6 +135,7 @@ jobs:
       - name: Compile-time safety gates
         run: |
           set -euo pipefail
+          cargo fmt
           cargo fmt --check
           cargo check --all-targets
           cargo clippy --all-targets -- -D warnings
@@ -187,3 +188,12 @@ jobs:
             ai-generated
             needs-human-review
             workflow:gemini
+          add-paths: |
+            .github/**
+            src/**
+            tests/**
+            docs/**
+            README.md
+            GEMINI.md
+            Cargo.toml
+            Cargo.lock
