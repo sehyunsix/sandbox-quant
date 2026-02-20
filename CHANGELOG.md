@@ -1,3 +1,7 @@
+## v0.12.9 - 2026-02-20
+
+- fix(workflow): auto-format and restrict PR paths for gemini runs (3b36b7a)
+
 ## v0.12.8 - 2026-02-20
 
 - fix(workflow): force reset to base branch before PR action (9150d63)
