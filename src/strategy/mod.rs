@@ -1,13 +1,16 @@
 pub mod atr_expansion;
+pub mod aroon_trend;
 pub mod bollinger_reversion;
 pub mod channel_breakout;
 pub mod donchian_trend;
 pub mod ensemble_vote;
 pub mod ema_crossover;
+pub mod macd_crossover;
 pub mod ma_crossover;
 pub mod ma_reversion;
 pub mod opening_range_breakout;
 pub mod regime_switch;
+pub mod roc_momentum;
 pub mod rsa;
 pub mod stochastic_reversion;
 pub mod volatility_compression;

@@ -21,6 +21,9 @@ This directory documents each strategy implementation under `src/strategy/`.
 - `opening-range-breakout.md`
 - `regime-switch.md`
 - `ensemble-vote.md`
+- `macd-crossover.md`
+- `roc-momentum.md`
+- `aroon-trend.md`
 
 ## Authoring Rule
 - Use `docs/strategy/_template.md` when adding a new strategy.

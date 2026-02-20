@@ -9,7 +9,7 @@ use sandbox_quant::strategy_catalog::{
 fn strategy_catalog_starts_with_builtin_profiles() {
     let catalog = StrategyCatalog::new("BTCUSDT", 7, 25, 2);
     let labels = catalog.labels();
-    assert_eq!(labels.len(), 12);
+    assert_eq!(labels.len(), 15);
     assert_eq!(labels[0], "MA(Config)");
     assert_eq!(labels[1], "MA(Fast 5/20)");
     assert_eq!(labels[2], "MA(Slow 20/60)");
@@ -22,6 +22,9 @@ fn strategy_catalog_starts_with_builtin_profiles() {
     assert_eq!(labels[9], "ORB(Opening 12/8)");
     assert_eq!(labels[10], "REG(Regime 10/30)");
     assert_eq!(labels[11], "ENS(Vote 10/30)");
+    assert_eq!(labels[12], "MAC(MACD 12/26)");
+    assert_eq!(labels[13], "ROC(ROC 10 0.20%)");
+    assert_eq!(labels[14], "ARN(Aroon 14 70)");
     let first = catalog.get(0).expect("builtin profile should exist");
     assert_eq!(first.symbol, "BTCUSDT");
     assert!(first.created_at_ms > 0);
@@ -41,8 +44,8 @@ fn strategy_catalog_registers_custom_profile() {
     assert!(catalog.index_of_label(&custom.label).is_some());
 
     let labels = catalog.labels();
-    assert_eq!(labels.len(), 13);
-    assert_eq!(labels[12], custom.label);
+    assert_eq!(labels.len(), 16);
+    assert_eq!(labels[15], custom.label);
 }
 
 #[test]
@@ -186,6 +189,9 @@ fn strategy_catalog_from_profiles_injects_missing_builtin_profiles() {
     assert!(catalog.get_by_source_tag("orb").is_some());
     assert!(catalog.get_by_source_tag("reg").is_some());
     assert!(catalog.get_by_source_tag("ens").is_some());
+    assert!(catalog.get_by_source_tag("mac").is_some());
+    assert!(catalog.get_by_source_tag("roc").is_some());
+    assert!(catalog.get_by_source_tag("arn").is_some());
     assert!(catalog.labels().iter().any(|l| l == "RSA(RSI 14 30/70)"));
     assert!(catalog.labels().iter().any(|l| l == "DCT(Donchian 20/10)"));
     assert!(catalog.labels().iter().any(|l| l == "MRV(SMA 20 -2.00%)"));
@@ -195,6 +201,9 @@ fn strategy_catalog_from_profiles_injects_missing_builtin_profiles() {
     assert!(catalog.labels().iter().any(|l| l == "ORB(Opening 12/8)"));
     assert!(catalog.labels().iter().any(|l| l == "REG(Regime 10/30)"));
     assert!(catalog.labels().iter().any(|l| l == "ENS(Vote 10/30)"));
+    assert!(catalog.labels().iter().any(|l| l == "MAC(MACD 12/26)"));
+    assert!(catalog.labels().iter().any(|l| l == "ROC(ROC 10 0.20%)"));
+    assert!(catalog.labels().iter().any(|l| l == "ARN(Aroon 14 70)"));
 }
 
 #[test]
@@ -218,6 +227,9 @@ fn strategy_kind_labels_include_supported_candidates() {
             "STO".to_string(),
             "REG".to_string(),
             "ENS".to_string(),
+            "MAC".to_string(),
+            "ROC".to_string(),
+            "ARN".to_string(),
         ]
     );
     assert_eq!(
@@ -232,7 +244,14 @@ fn strategy_kind_labels_include_supported_candidates() {
     );
     assert_eq!(
         strategy_kind_labels_by_category("Trend"),
-        vec!["MA".to_string(), "EMA".to_string(), "DCT".to_string()]
+        vec![
+            "MA".to_string(),
+            "EMA".to_string(),
+            "DCT".to_string(),
+            "MAC".to_string(),
+            "ROC".to_string(),
+            "ARN".to_string()
+        ]
     );
     assert_eq!(
         strategy_kind_labels_by_category("MeanReversion"),
@@ -268,6 +287,15 @@ fn strategy_kind_labels_include_supported_candidates() {
     assert!(trend_options
         .iter()
         .any(|opt| opt.display_label == "DCT" && opt.strategy_label.as_deref() == Some("DCT")));
+    assert!(trend_options
+        .iter()
+        .any(|opt| opt.display_label == "MAC" && opt.strategy_label.as_deref() == Some("MAC")));
+    assert!(trend_options
+        .iter()
+        .any(|opt| opt.display_label == "ROC" && opt.strategy_label.as_deref() == Some("ROC")));
+    assert!(trend_options
+        .iter()
+        .any(|opt| opt.display_label == "ARN" && opt.strategy_label.as_deref() == Some("ARN")));
     assert!(trend_options
         .iter()
         .all(|opt| !opt.display_label.contains("Coming soon") || opt.strategy_label.is_none()));
@@ -307,6 +335,9 @@ fn strategy_kind_labels_include_supported_candidates() {
     assert_eq!(StrategyKind::from_label("sto"), Some(StrategyKind::Sto));
     assert_eq!(StrategyKind::from_label("reg"), Some(StrategyKind::Reg));
     assert_eq!(StrategyKind::from_label("ens"), Some(StrategyKind::Ens));
+    assert_eq!(StrategyKind::from_label("mac"), Some(StrategyKind::Mac));
+    assert_eq!(StrategyKind::from_label("roc"), Some(StrategyKind::Roc));
+    assert_eq!(StrategyKind::from_label("arn"), Some(StrategyKind::Arn));
 }
 
 #[test]

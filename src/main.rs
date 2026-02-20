@@ -20,15 +20,18 @@ use sandbox_quant::model::tick::Tick;
 use sandbox_quant::order_manager::{MarketKind, OrderHistoryStats, OrderManager};
 use sandbox_quant::order_store;
 use sandbox_quant::strategy::atr_expansion::AtrExpansionStrategy;
+use sandbox_quant::strategy::aroon_trend::AroonTrendStrategy;
 use sandbox_quant::strategy::bollinger_reversion::BollingerReversionStrategy;
 use sandbox_quant::strategy::channel_breakout::ChannelBreakoutStrategy;
 use sandbox_quant::strategy::donchian_trend::DonchianTrendStrategy;
 use sandbox_quant::strategy::ensemble_vote::EnsembleVoteStrategy;
 use sandbox_quant::strategy::ema_crossover::EmaCrossover;
+use sandbox_quant::strategy::macd_crossover::MacdCrossoverStrategy;
 use sandbox_quant::strategy::ma_crossover::MaCrossover;
 use sandbox_quant::strategy::ma_reversion::MaReversionStrategy;
 use sandbox_quant::strategy::opening_range_breakout::OpeningRangeBreakoutStrategy;
 use sandbox_quant::strategy::regime_switch::RegimeSwitchStrategy;
+use sandbox_quant::strategy::roc_momentum::RocMomentumStrategy;
 use sandbox_quant::strategy::rsa::RsaStrategy;
 use sandbox_quant::strategy::stochastic_reversion::StochasticReversionStrategy;
 use sandbox_quant::strategy::volatility_compression::VolatilityCompressionStrategy;
@@ -58,6 +61,9 @@ enum StrategyRuntime {
     Sto(StochasticReversionStrategy),
     Reg(RegimeSwitchStrategy),
     Ens(EnsembleVoteStrategy),
+    Mac(MacdCrossoverStrategy),
+    Roc(RocMomentumStrategy),
+    Arn(AroonTrendStrategy),
 }
 
 impl StrategyRuntime {
@@ -81,6 +87,9 @@ impl StrategyRuntime {
             StrategyKind::Ema => Self::Ema(EmaCrossover::new(fast, slow, min_ticks)),
             StrategyKind::Reg => Self::Reg(RegimeSwitchStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Ens => Self::Ens(EnsembleVoteStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Mac => Self::Mac(MacdCrossoverStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Roc => Self::Roc(RocMomentumStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Arn => Self::Arn(AroonTrendStrategy::new(fast, slow, min_ticks)),
             StrategyKind::Ma => Self::Ma(MaCrossover::new(fast, slow, min_ticks)),
         }
     }
@@ -100,6 +109,9 @@ impl StrategyRuntime {
             Self::Sto(s) => s.on_tick(tick),
             Self::Reg(s) => s.on_tick(tick),
             Self::Ens(s) => s.on_tick(tick),
+            Self::Mac(s) => s.on_tick(tick),
+            Self::Roc(s) => s.on_tick(tick),
+            Self::Arn(s) => s.on_tick(tick),
         }
     }
 
@@ -118,6 +130,9 @@ impl StrategyRuntime {
             Self::Sto(_) => None,
             Self::Reg(_) => None,
             Self::Ens(_) => None,
+            Self::Mac(_) => None,
+            Self::Roc(_) => None,
+            Self::Arn(_) => None,
         }
     }
 
@@ -136,6 +151,9 @@ impl StrategyRuntime {
             Self::Sto(_) => None,
             Self::Reg(_) => None,
             Self::Ens(_) => None,
+            Self::Mac(_) => None,
+            Self::Roc(_) => None,
+            Self::Arn(_) => None,
         }
     }
 }
