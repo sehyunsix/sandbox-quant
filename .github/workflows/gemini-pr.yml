@@ -1,0 +1,186 @@
+name: Gemini PR Workflow
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "Scoped task for Gemini (e.g. add ATR strategy tests)"
+        required: true
+        type: string
+      base_branch:
+        description: "Base branch to branch from"
+        required: false
+        default: "main"
+        type: string
+      draft:
+        description: "Create PR as draft"
+        required: false
+        default: true
+        type: boolean
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: gemini-pr-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare Trigger Context
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.eval.outputs.should_run }}
+      scope: ${{ steps.eval.outputs.scope }}
+      base_branch: ${{ steps.eval.outputs.base_branch }}
+      draft: ${{ steps.eval.outputs.draft }}
+      requester: ${{ steps.eval.outputs.requester }}
+      trigger: ${{ steps.eval.outputs.trigger }}
+    steps:
+      - name: Evaluate event and authorization
+        id: eval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ev = context.eventName;
+            core.setOutput('trigger', ev);
+            if (ev === 'workflow_dispatch') {
+              const inputs = context.payload.inputs || {};
+              core.setOutput('should_run', 'true');
+              core.setOutput('scope', inputs.scope || 'Implement requested change');
+              core.setOutput('base_branch', inputs.base_branch || 'main');
+              core.setOutput('draft', String(inputs.draft ?? 'true'));
+              core.setOutput('requester', context.actor);
+              return;
+            }
+
+            if (ev === 'schedule') {
+              core.setOutput('should_run', 'true');
+              core.setOutput('scope', 'Daily Gemini maintenance batch');
+              core.setOutput('base_branch', 'main');
+              core.setOutput('draft', 'true');
+              core.setOutput('requester', context.actor || 'github-actions[bot]');
+              return;
+            }
+
+            if (ev === 'issue_comment') {
+              const body = (context.payload.comment?.body || '').trim();
+              const assoc = context.payload.comment?.author_association || '';
+              const allowed = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+              const isIssue = !context.payload.issue?.pull_request;
+              if (!isIssue || !body.toLowerCase().startsWith('/gemini-pr') || !allowed.includes(assoc)) {
+                core.setOutput('should_run', 'false');
+                return;
+              }
+
+              const scopeMatch = body.match(/scope\s*=\s*(.+)$/i);
+              const scope = scopeMatch ? scopeMatch[1].trim() : 'Implement requested change from issue comment';
+              core.setOutput('should_run', 'true');
+              core.setOutput('scope', scope);
+              core.setOutput('base_branch', 'main');
+              core.setOutput('draft', 'true');
+              core.setOutput('requester', context.payload.comment?.user?.login || context.actor);
+              return;
+            }
+
+            core.setOutput('should_run', 'false');
+
+  gemini_pr:
+    name: Generate Changes and Open PR
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base_branch }}
+          fetch-depth: 0
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install clippy and rustfmt
+        run: rustup component add clippy rustfmt
+
+      - name: Prepare branch name
+        id: branch
+        run: |
+          ts="$(date +%Y%m%d-%H%M%S)"
+          safe_scope="$(echo "${{ needs.prepare.outputs.scope }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//' | cut -c1-32)"
+          if [ -z "$safe_scope" ]; then safe_scope="task"; fi
+          echo "name=gemini/${safe_scope}-${ts}" >> "$GITHUB_OUTPUT"
+
+      - name: Create work branch
+        run: |
+          git checkout -b "${{ steps.branch.outputs.name }}"
+
+      - name: Run Gemini to apply scoped changes
+        uses: google-github-actions/run-gemini-cli@v0
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          prompt: |
+            You are working in a Rust repository.
+            Task scope: ${{ needs.prepare.outputs.scope }}
+
+            Requirements:
+            - Keep changes strictly in scope.
+            - Prefer minimal diff.
+            - Add or update tests under tests/ when behavior changes.
+            - Do not merge or release.
+            - Keep repository buildable.
+
+      - name: Compile-time safety gates
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo check --all-targets
+          cargo clippy --all-targets -- -D warnings
+          cargo test -q
+
+      - name: Create Pull Request (Draft)
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ steps.branch.outputs.name }}
+          base: ${{ needs.prepare.outputs.base_branch }}
+          title: "chore(gemini): ${{ needs.prepare.outputs.scope }}"
+          draft: ${{ needs.prepare.outputs.draft == 'true' }}
+          commit-message: |
+            chore(gemini): ${{ needs.prepare.outputs.scope }}
+
+            AI-Generated: Gemini
+            Co-authored-by: Gemini <gemini-noreply@google.com>
+          body: |
+            ## Summary
+            - Scope: `${{ needs.prepare.outputs.scope }}`
+            - Trigger: `${{ needs.prepare.outputs.trigger }}`
+
+            ## Compile-time Safety Gates
+            - [x] `cargo fmt --check`
+            - [x] `cargo check --all-targets`
+            - [x] `cargo clippy --all-targets -- -D warnings`
+            - [x] `cargo test -q`
+
+            ## AI Attribution
+            - Generated-by: Gemini
+            - Workflow: automation-lane
+            - Prompt-Scope: `${{ needs.prepare.outputs.scope }}`
+            - Human-Reviewer: @${{ needs.prepare.outputs.requester }}
+
+            ## Reviewer Note
+            - Please read `GEMINI.md` before approval/merge.
+
+            ## Required Labels
+            - ai-generated
+            - needs-human-review
+            - workflow:gemini
+          labels: |
+            ai-generated
+            needs-human-review
+            workflow:gemini

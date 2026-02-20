@@ -111,6 +111,12 @@ Testing references:
 - `TESTING.md`
 - `tests/`
 
+## AI PR Policy
+
+- Gemini-assisted PR workflow: `.github/workflows/gemini-pr.yml`
+- Review and safety guide: `GEMINI.md`
+- AI-assisted PRs must pass compile/test gates and include attribution metadata before merge.
+
 ## Appendix: Run Capture
 
 Terminal screenshot from a real run:
