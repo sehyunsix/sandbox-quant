@@ -19,14 +19,102 @@ use sandbox_quant::model::signal::Signal;
 use sandbox_quant::model::tick::Tick;
 use sandbox_quant::order_manager::{MarketKind, OrderHistoryStats, OrderManager};
 use sandbox_quant::order_store;
+use sandbox_quant::strategy::atr_expansion::AtrExpansionStrategy;
+use sandbox_quant::strategy::bollinger_reversion::BollingerReversionStrategy;
+use sandbox_quant::strategy::channel_breakout::ChannelBreakoutStrategy;
+use sandbox_quant::strategy::donchian_trend::DonchianTrendStrategy;
+use sandbox_quant::strategy::ema_crossover::EmaCrossover;
 use sandbox_quant::strategy::ma_crossover::MaCrossover;
-use sandbox_quant::strategy_catalog::{StrategyCatalog, StrategyProfile};
+use sandbox_quant::strategy::ma_reversion::MaReversionStrategy;
+use sandbox_quant::strategy::rsa::RsaStrategy;
+use sandbox_quant::strategy::stochastic_reversion::StochasticReversionStrategy;
+use sandbox_quant::strategy_catalog::{
+    strategy_kind_category_for_label, strategy_type_options_by_category, StrategyCatalog,
+    StrategyKind, StrategyProfile,
+};
 use sandbox_quant::strategy_session;
 use sandbox_quant::ui;
 use sandbox_quant::ui::{AppState, GridTab};
 
 const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
+
+#[derive(Debug)]
+enum StrategyRuntime {
+    Ma(MaCrossover),
+    Ema(EmaCrossover),
+    Atr(AtrExpansionStrategy),
+    Chb(ChannelBreakoutStrategy),
+    Rsa(RsaStrategy),
+    Dct(DonchianTrendStrategy),
+    Mrv(MaReversionStrategy),
+    Bbr(BollingerReversionStrategy),
+    Sto(StochasticReversionStrategy),
+}
+
+impl StrategyRuntime {
+    fn from_profile(profile: &StrategyProfile) -> Self {
+        let (fast, slow, min_ticks) = profile.periods_tuple();
+        match profile.strategy_kind() {
+            StrategyKind::Rsa => {
+                let period = fast.max(2);
+                let upper = slow.clamp(51, 95) as f64;
+                let lower = 100.0 - upper;
+                Self::Rsa(RsaStrategy::new(period, lower, upper, min_ticks))
+            }
+            StrategyKind::Dct => Self::Dct(DonchianTrendStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Mrv => Self::Mrv(MaReversionStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Bbr => Self::Bbr(BollingerReversionStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Sto => Self::Sto(StochasticReversionStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Atr => Self::Atr(AtrExpansionStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Chb => Self::Chb(ChannelBreakoutStrategy::new(fast, slow, min_ticks)),
+            StrategyKind::Ema => Self::Ema(EmaCrossover::new(fast, slow, min_ticks)),
+            StrategyKind::Ma => Self::Ma(MaCrossover::new(fast, slow, min_ticks)),
+        }
+    }
+
+    fn on_tick(&mut self, tick: &Tick) -> Signal {
+        match self {
+            Self::Ma(s) => s.on_tick(tick),
+            Self::Ema(s) => s.on_tick(tick),
+            Self::Atr(s) => s.on_tick(tick),
+            Self::Chb(s) => s.on_tick(tick),
+            Self::Rsa(s) => s.on_tick(tick),
+            Self::Dct(s) => s.on_tick(tick),
+            Self::Mrv(s) => s.on_tick(tick),
+            Self::Bbr(s) => s.on_tick(tick),
+            Self::Sto(s) => s.on_tick(tick),
+        }
+    }
+
+    fn fast_sma_value(&self) -> Option<f64> {
+        match self {
+            Self::Ma(s) => s.fast_sma_value(),
+            Self::Ema(s) => s.fast_ema_value(),
+            Self::Atr(_) => None,
+            Self::Chb(_) => None,
+            Self::Rsa(_) => None,
+            Self::Dct(_) => None,
+            Self::Mrv(s) => s.mean_value(),
+            Self::Bbr(s) => s.mean_value(),
+            Self::Sto(_) => None,
+        }
+    }
+
+    fn slow_sma_value(&self) -> Option<f64> {
+        match self {
+            Self::Ma(s) => s.slow_sma_value(),
+            Self::Ema(s) => s.slow_ema_value(),
+            Self::Atr(_) => None,
+            Self::Chb(_) => None,
+            Self::Rsa(_) => None,
+            Self::Dct(_) => None,
+            Self::Mrv(_) => None,
+            Self::Bbr(_) => None,
+            Self::Sto(_) => None,
+        }
+    }
+}
 
 fn switch_timeframe(
     instrument: &str,
@@ -570,26 +658,136 @@ fn handle_strategy_editor_key(
     enabled_strategy_tags_tx: &watch::Sender<HashSet<String>>,
     ws_instruments_tx: &watch::Sender<Vec<String>>,
 ) {
+    let editor_kind = |idx: usize, items: &[String]| {
+        items
+            .get(idx)
+            .and_then(|name| StrategyKind::from_label(name))
+            .unwrap_or(StrategyKind::Ma)
+    };
+    let apply_editor_kind_defaults = |app_state: &mut AppState| {
+        let kind = editor_kind(
+            app_state.strategy_editor_kind_index,
+            &app_state.strategy_editor_kind_items,
+        );
+        let (fast, slow, cooldown) = kind.defaults();
+        app_state.strategy_editor_fast = fast;
+        app_state.strategy_editor_slow = slow;
+        app_state.strategy_editor_cooldown = app_state.strategy_editor_cooldown.max(cooldown);
+    };
+
     match key_code {
         KeyCode::Esc => {
+            if app_state.strategy_editor_kind_category_selector_open {
+                app_state.strategy_editor_kind_category_selector_open = false;
+                return;
+            }
+            if app_state.strategy_editor_kind_selector_open {
+                app_state.strategy_editor_kind_selector_open = false;
+                app_state.strategy_editor_kind_popup_items.clear();
+                app_state.strategy_editor_kind_popup_labels.clear();
+                return;
+            }
+            app_state.strategy_editor_kind_category_selector_open = false;
+            app_state.strategy_editor_kind_selector_open = false;
+            app_state.strategy_editor_kind_popup_items.clear();
+            app_state.strategy_editor_kind_popup_labels.clear();
             app_state.set_strategy_editor_open(false);
+        }
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K')
+            if app_state.strategy_editor_kind_category_selector_open =>
+        {
+            app_state.strategy_editor_kind_category_index = app_state
+                .strategy_editor_kind_category_index
+                .saturating_sub(1)
+                .min(app_state.strategy_editor_kind_category_items.len().saturating_sub(1));
+        }
+        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J')
+            if app_state.strategy_editor_kind_category_selector_open =>
+        {
+            app_state.strategy_editor_kind_category_index =
+                (app_state.strategy_editor_kind_category_index + 1)
+                    .min(app_state.strategy_editor_kind_category_items.len().saturating_sub(1));
+        }
+        KeyCode::Enter if app_state.strategy_editor_kind_category_selector_open => {
+            let selected_category = app_state
+                .strategy_editor_kind_category_items
+                .get(app_state.strategy_editor_kind_category_index)
+                .cloned()
+                .unwrap_or_else(|| "Trend".to_string());
+            let options = strategy_type_options_by_category(&selected_category);
+            app_state.strategy_editor_kind_popup_items =
+                options.iter().map(|item| item.display_label.clone()).collect();
+            app_state.strategy_editor_kind_popup_labels =
+                options.iter().map(|item| item.strategy_label.clone()).collect();
+            let current_label = app_state
+                .strategy_editor_kind_items
+                .get(app_state.strategy_editor_kind_index)
+                .cloned()
+                .unwrap_or_else(|| "MA".to_string());
+            app_state.strategy_editor_kind_selector_index = app_state
+                .strategy_editor_kind_popup_labels
+                .iter()
+                .position(|item| {
+                    item.as_ref()
+                        .map(|label| label.eq_ignore_ascii_case(&current_label))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(0);
+            app_state.strategy_editor_kind_category_selector_open = false;
+            app_state.strategy_editor_kind_selector_open = true;
+        }
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K')
+            if app_state.strategy_editor_kind_selector_open =>
+        {
+            app_state.strategy_editor_kind_selector_index = app_state
+                .strategy_editor_kind_selector_index
+                .saturating_sub(1)
+                .min(app_state.strategy_editor_kind_popup_items.len().saturating_sub(1));
+        }
+        KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J')
+            if app_state.strategy_editor_kind_selector_open =>
+        {
+            app_state.strategy_editor_kind_selector_index =
+                (app_state.strategy_editor_kind_selector_index + 1)
+                    .min(app_state.strategy_editor_kind_popup_items.len().saturating_sub(1));
+        }
+        KeyCode::Enter if app_state.strategy_editor_kind_selector_open => {
+            let popup_idx = app_state
+                .strategy_editor_kind_selector_index
+                .min(app_state.strategy_editor_kind_popup_items.len().saturating_sub(1));
+            if let Some(Some(selected_label)) =
+                app_state.strategy_editor_kind_popup_labels.get(popup_idx).cloned()
+            {
+                app_state.strategy_editor_kind_index = app_state
+                    .strategy_editor_kind_items
+                    .iter()
+                    .position(|item| item.eq_ignore_ascii_case(&selected_label))
+                    .unwrap_or(0);
+                apply_editor_kind_defaults(app_state);
+                app_state.strategy_editor_kind_selector_open = false;
+                app_state.strategy_editor_kind_popup_items.clear();
+                app_state.strategy_editor_kind_popup_labels.clear();
+            } else if let Some(item) = app_state.strategy_editor_kind_popup_items.get(popup_idx) {
+                app_state.push_log(format!("Strategy type not implemented yet: {}", item));
+            }
         }
         KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
             app_state.strategy_editor_field = app_state.strategy_editor_field.saturating_sub(1);
         }
         KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('J') => {
-            app_state.strategy_editor_field = (app_state.strategy_editor_field + 1).min(3);
+            app_state.strategy_editor_field = (app_state.strategy_editor_field + 1).min(4);
         }
         KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('H') => match app_state.strategy_editor_field {
-            0 => {
+            0 => {}
+            1 => {
                 app_state.strategy_editor_symbol_index =
                     app_state.strategy_editor_symbol_index.saturating_sub(1)
             }
-            1 => {
+            2 => {
                 app_state.strategy_editor_fast =
                     app_state.strategy_editor_fast.saturating_sub(1).max(2)
             }
-            2 => {
+            3 => {
                 app_state.strategy_editor_slow =
                     app_state.strategy_editor_slow.saturating_sub(1).max(3)
             }
@@ -599,16 +797,46 @@ fn handle_strategy_editor_key(
             }
         },
         KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('L') => match app_state.strategy_editor_field {
-            0 => {
+            0 => {}
+            1 => {
                 app_state.strategy_editor_symbol_index = (app_state.strategy_editor_symbol_index + 1)
                     .min(app_state.symbol_items.len().saturating_sub(1))
             }
-            1 => app_state.strategy_editor_fast += 1,
-            2 => app_state.strategy_editor_slow += 1,
+            2 => app_state.strategy_editor_fast += 1,
+            3 => app_state.strategy_editor_slow += 1,
             _ => app_state.strategy_editor_cooldown += 1,
         },
         KeyCode::Enter => {
+            if app_state.strategy_editor_field == 0 {
+                let current_label = app_state
+                    .strategy_editor_kind_items
+                    .get(app_state.strategy_editor_kind_index)
+                    .cloned()
+                    .unwrap_or_else(|| "MA".to_string());
+                app_state.strategy_editor_kind_category_index = strategy_kind_category_for_label(
+                    &current_label,
+                )
+                .and_then(|category| {
+                    app_state
+                        .strategy_editor_kind_category_items
+                        .iter()
+                        .position(|item| item.eq_ignore_ascii_case(&category))
+                })
+                .unwrap_or(0);
+                app_state.strategy_editor_kind_popup_items.clear();
+                app_state.strategy_editor_kind_popup_labels.clear();
+                app_state.strategy_editor_kind_category_selector_open = true;
+                app_state.strategy_editor_kind_selector_open = false;
+                app_state.strategy_editor_kind_selector_index = app_state
+                    .strategy_editor_kind_index
+                    .min(app_state.strategy_editor_kind_items.len().saturating_sub(1));
+                return;
+            }
             let edited_profile = strategy_catalog.get(app_state.strategy_editor_index).cloned();
+            let selected_kind = editor_kind(
+                app_state.strategy_editor_kind_index,
+                &app_state.strategy_editor_kind_items,
+            );
             let selected_symbol = app_state
                 .symbol_items
                 .get(app_state.strategy_editor_symbol_index)
@@ -616,6 +844,7 @@ fn handle_strategy_editor_key(
                 .unwrap_or_else(|| app_state.symbol.clone());
             let maybe_updated = strategy_catalog.fork_profile(
                 app_state.strategy_editor_index,
+                selected_kind,
                 &selected_symbol,
                 app_state.strategy_editor_fast,
                 app_state.strategy_editor_slow,
@@ -673,6 +902,10 @@ fn handle_strategy_editor_key(
                     ws_instruments_tx,
                 );
             }
+            app_state.strategy_editor_kind_category_selector_open = false;
+            app_state.strategy_editor_kind_selector_open = false;
+            app_state.strategy_editor_kind_popup_items.clear();
+            app_state.strategy_editor_kind_popup_labels.clear();
             app_state.set_strategy_editor_open(false);
         }
         _ => {}
@@ -699,34 +932,32 @@ fn handle_grid_strategy_action(
 ) -> bool {
     match cmd {
         GridCommand::NewStrategy => {
-            let base_index = app_state
+            let selected_index = app_state
                 .selected_grid_strategy_index()
                 .min(strategy_catalog.len().saturating_sub(1));
-            let created = strategy_catalog.add_custom_from_index(base_index);
-            refresh_strategy_lists(app_state, strategy_catalog, enabled_strategy_tags);
-            app_state
-                .set_selected_grid_strategy_index(strategy_catalog.index_of_label(&created.label).unwrap_or(0));
             app_state.set_strategy_editor_open(true);
-            app_state.strategy_editor_index = app_state.selected_grid_strategy_index();
+            app_state.strategy_editor_kind_category_selector_open = false;
+            app_state.strategy_editor_kind_selector_open = false;
+            app_state.strategy_editor_kind_popup_items.clear();
+            app_state.strategy_editor_kind_popup_labels.clear();
+            app_state.strategy_editor_index = selected_index;
             app_state.strategy_editor_field = 0;
-            app_state.strategy_editor_symbol_index = app_state
-                .symbol_items
-                .iter()
-                .position(|item| item == &created.symbol)
-                .unwrap_or(0);
-            app_state.strategy_editor_fast = created.fast_period;
-            app_state.strategy_editor_slow = created.slow_period;
-            app_state.strategy_editor_cooldown = created.min_ticks_between_signals;
-            app_state.push_log(format!("Grid strategy registered: {}", created.label));
-            publish_and_persist_strategy_state(
-                app_state,
-                strategy_catalog,
-                current_strategy_profile,
-                enabled_strategy_tags,
-                strategy_profiles_tx,
-                enabled_strategy_tags_tx,
-                ws_instruments_tx,
-            );
+            if let Some(base_profile) = strategy_catalog.get(selected_index) {
+                app_state.strategy_editor_kind_index = app_state
+                    .strategy_editor_kind_items
+                    .iter()
+                    .position(|item| item.eq_ignore_ascii_case(base_profile.strategy_kind().as_label()))
+                    .unwrap_or(0);
+                app_state.strategy_editor_symbol_index = app_state
+                    .symbol_items
+                    .iter()
+                    .position(|item| item == &base_profile.symbol)
+                    .unwrap_or(0);
+                app_state.strategy_editor_fast = base_profile.fast_period;
+                app_state.strategy_editor_slow = base_profile.slow_period;
+                app_state.strategy_editor_cooldown = base_profile.min_ticks_between_signals;
+            }
+            app_state.push_log("New strategy draft opened".to_string());
             true
         }
         GridCommand::EditStrategyConfig => {
@@ -738,8 +969,17 @@ fn handle_grid_strategy_action(
                 if let Some(idx) = strategy_catalog.index_of_label(&selected_label) {
                     if let Some(profile) = strategy_catalog.get(idx).cloned() {
                         app_state.set_strategy_editor_open(true);
+                        app_state.strategy_editor_kind_category_selector_open = false;
+                        app_state.strategy_editor_kind_selector_open = false;
+                        app_state.strategy_editor_kind_popup_items.clear();
+                        app_state.strategy_editor_kind_popup_labels.clear();
                         app_state.strategy_editor_index = idx;
                         app_state.strategy_editor_field = 0;
+                        app_state.strategy_editor_kind_index = app_state
+                            .strategy_editor_kind_items
+                            .iter()
+                            .position(|item| item.eq_ignore_ascii_case(profile.strategy_kind().as_label()))
+                            .unwrap_or(0);
                         app_state.strategy_editor_symbol_index = app_state
                             .symbol_items
                             .iter()
@@ -1290,12 +1530,9 @@ async fn main() -> Result<()> {
             .map(|profile| (profile.source_tag.clone(), profile.clone()))
             .collect();
         let mut enabled_strategy_tags = enabled_strategy_tags_rx.borrow().clone();
-        let mut strategies: HashMap<String, MaCrossover> = profiles_by_tag
+        let mut strategies: HashMap<String, StrategyRuntime> = profiles_by_tag
             .iter()
-            .map(|(source_tag, profile)| {
-                let (fast, slow, min_ticks) = profile.periods_tuple();
-                (source_tag.clone(), MaCrossover::new(fast, slow, min_ticks))
-            })
+            .map(|(source_tag, profile)| (source_tag.clone(), StrategyRuntime::from_profile(profile)))
             .collect();
         let mut order_managers: HashMap<String, OrderManager> = HashMap::new();
         let mut realized_pnl_by_symbol: HashMap<String, f64> = HashMap::new();
@@ -1400,8 +1637,8 @@ async fn main() -> Result<()> {
             let selected_state = strategies.get(&selected_profile.source_tag);
             let _ = strat_app_tx
                 .send(AppEvent::StrategyState {
-                    fast_sma: selected_state.and_then(MaCrossover::fast_sma_value),
-                    slow_sma: selected_state.and_then(MaCrossover::slow_sma_value),
+                    fast_sma: selected_state.and_then(StrategyRuntime::fast_sma_value),
+                    slow_sma: selected_state.and_then(StrategyRuntime::slow_sma_value),
                 })
                 .await;
         }
@@ -1451,8 +1688,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let strategy = strategies.entry(source_tag.clone()).or_insert_with(|| {
-                            let (fast, slow, min_ticks) = profile.periods_tuple();
-                            MaCrossover::new(fast, slow, min_ticks)
+                            StrategyRuntime::from_profile(profile)
                         });
                         let signal = strategy.on_tick(&tick);
 
@@ -1691,8 +1927,7 @@ async fn main() -> Result<()> {
                     strategies.retain(|source_tag, _| existing.contains(source_tag));
                     for (source_tag, profile) in &profiles_by_tag {
                         strategies.entry(source_tag.clone()).or_insert_with(|| {
-                            let (fast, slow, min_ticks) = profile.periods_tuple();
-                            MaCrossover::new(fast, slow, min_ticks)
+                            StrategyRuntime::from_profile(profile)
                         });
                     }
                 }

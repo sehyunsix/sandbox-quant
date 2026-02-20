@@ -19,6 +19,7 @@ use crate::model::signal::Signal;
 use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
 use crate::order_store;
 use crate::risk_module::RateBudgetSnapshot;
+use crate::strategy_catalog::{strategy_kind_categories, strategy_kind_labels};
 use crate::ui::network_metrics::{classify_health, count_since, percentile, rate_per_sec, ratio_pct, NetworkHealth};
 
 use ui_projection::UiProjection;
@@ -116,8 +117,17 @@ pub struct AppState {
     pub history_popup_open: bool,
     pub focus_popup_open: bool,
     pub strategy_editor_open: bool,
+    pub strategy_editor_kind_category_selector_open: bool,
+    pub strategy_editor_kind_selector_open: bool,
     pub strategy_editor_index: usize,
     pub strategy_editor_field: usize,
+    pub strategy_editor_kind_category_items: Vec<String>,
+    pub strategy_editor_kind_category_index: usize,
+    pub strategy_editor_kind_popup_items: Vec<String>,
+    pub strategy_editor_kind_popup_labels: Vec<Option<String>>,
+    pub strategy_editor_kind_items: Vec<String>,
+    pub strategy_editor_kind_selector_index: usize,
+    pub strategy_editor_kind_index: usize,
     pub strategy_editor_symbol_index: usize,
     pub strategy_editor_fast: usize,
     pub strategy_editor_slow: usize,
@@ -205,21 +215,32 @@ impl AppState {
                 "MA(Config)".to_string(),
                 "MA(Fast 5/20)".to_string(),
                 "MA(Slow 20/60)".to_string(),
+                "RSA(RSI 14 30/70)".to_string(),
             ],
             strategy_item_symbols: vec![
                 symbol.to_ascii_uppercase(),
                 symbol.to_ascii_uppercase(),
                 symbol.to_ascii_uppercase(),
+                symbol.to_ascii_uppercase(),
             ],
-            strategy_item_active: vec![false, false, false],
-            strategy_item_created_at_ms: vec![0, 0, 0],
-            strategy_item_total_running_ms: vec![0, 0, 0],
+            strategy_item_active: vec![false, false, false, false],
+            strategy_item_created_at_ms: vec![0, 0, 0, 0],
+            strategy_item_total_running_ms: vec![0, 0, 0, 0],
             account_popup_open: false,
             history_popup_open: false,
             focus_popup_open: false,
             strategy_editor_open: false,
+            strategy_editor_kind_category_selector_open: false,
+            strategy_editor_kind_selector_open: false,
             strategy_editor_index: 0,
             strategy_editor_field: 0,
+            strategy_editor_kind_category_items: strategy_kind_categories(),
+            strategy_editor_kind_category_index: 0,
+            strategy_editor_kind_popup_items: Vec::new(),
+            strategy_editor_kind_popup_labels: Vec::new(),
+            strategy_editor_kind_items: strategy_kind_labels(),
+            strategy_editor_kind_selector_index: 0,
+            strategy_editor_kind_index: 0,
             strategy_editor_symbol_index: 0,
             strategy_editor_fast: 5,
             strategy_editor_slow: 20,
@@ -2237,7 +2258,34 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
         .get(state.strategy_editor_index)
         .map(String::as_str)
         .unwrap_or("Unknown");
+    let strategy_kind = state
+        .strategy_editor_kind_items
+        .get(state.strategy_editor_kind_index)
+        .map(String::as_str)
+        .unwrap_or("MA");
+    let is_rsa = strategy_kind.eq_ignore_ascii_case("RSA");
+    let is_atr = strategy_kind.eq_ignore_ascii_case("ATR");
+    let is_chb = strategy_kind.eq_ignore_ascii_case("CHB");
+    let period_1_label = if is_rsa {
+        "RSI Period"
+    } else if is_atr {
+        "ATR Period"
+    } else if is_chb {
+        "Entry Window"
+    } else {
+        "Fast Period"
+    };
+    let period_2_label = if is_rsa {
+        "Upper RSI"
+    } else if is_atr {
+        "Threshold x100"
+    } else if is_chb {
+        "Exit Window"
+    } else {
+        "Slow Period"
+    };
     let rows = [
+        ("Strategy", strategy_kind.to_string()),
         (
             "Symbol",
             state
@@ -2246,8 +2294,8 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
                 .cloned()
                 .unwrap_or_else(|| state.symbol.clone()),
         ),
-        ("Fast Period", state.strategy_editor_fast.to_string()),
-        ("Slow Period", state.strategy_editor_slow.to_string()),
+        (period_1_label, state.strategy_editor_fast.to_string()),
+        (period_2_label, state.strategy_editor_slow.to_string()),
         ("Cooldown Tick", state.strategy_editor_cooldown.to_string()),
     ];
     let mut lines = vec![
@@ -2261,10 +2309,28 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
             ),
         ]),
         Line::from(Span::styled(
-            "Use [J/K] field, [H/L] value, [Enter] save+apply symbol, [Esc] cancel",
+            "Use [J/K] field, [H/L] value, [Enter] save, [Esc] cancel",
             Style::default().fg(Color::DarkGray),
         )),
     ];
+    if is_rsa {
+        let lower = 100usize.saturating_sub(state.strategy_editor_slow.clamp(51, 95));
+        lines.push(Line::from(Span::styled(
+            format!("RSA lower threshold auto-derived: {}", lower),
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if is_atr {
+        let threshold_x100 = state.strategy_editor_slow.clamp(110, 500);
+        lines.push(Line::from(Span::styled(
+            format!("ATR expansion threshold: {:.2}x", threshold_x100 as f64 / 100.0),
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if is_chb {
+        lines.push(Line::from(Span::styled(
+            "CHB breakout: buy on entry high break, sell on exit low break",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
     for (idx, (name, value)) in rows.iter().enumerate() {
         let marker = if idx == state.strategy_editor_field {
             "▶ "
@@ -2285,6 +2351,31 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
         ]));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+    if state.strategy_editor_kind_category_selector_open {
+        render_selector_popup(
+            frame,
+            " Select Strategy Category ",
+            &state.strategy_editor_kind_category_items,
+            state
+                .strategy_editor_kind_category_index
+                .min(state.strategy_editor_kind_category_items.len().saturating_sub(1)),
+            None,
+            None,
+            None,
+        );
+    } else if state.strategy_editor_kind_selector_open {
+        render_selector_popup(
+            frame,
+            " Select Strategy Type ",
+            &state.strategy_editor_kind_popup_items,
+            state
+                .strategy_editor_kind_selector_index
+                .min(state.strategy_editor_kind_popup_items.len().saturating_sub(1)),
+            None,
+            None,
+            None,
+        );
+    }
 }
 
 fn render_account_popup(frame: &mut Frame, balances: &HashMap<String, f64>) {
@@ -2559,6 +2650,11 @@ fn source_tag_for_strategy_item(item: &str) -> Option<String> {
         "MA(Config)" => return Some("cfg".to_string()),
         "MA(Fast 5/20)" => return Some("fst".to_string()),
         "MA(Slow 20/60)" => return Some("slw".to_string()),
+        "RSA(RSI 14 30/70)" => return Some("rsa".to_string()),
+        "DCT(Donchian 20/10)" => return Some("dct".to_string()),
+        "MRV(SMA 20 -2.00%)" => return Some("mrv".to_string()),
+        "BBR(BB 20 2.00x)" => return Some("bbr".to_string()),
+        "STO(Stoch 14 20/80)" => return Some("sto".to_string()),
         _ => {}
     }
     if let Some((_, tail)) = item.rsplit_once('[') {
