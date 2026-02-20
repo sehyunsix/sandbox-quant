@@ -1,3 +1,7 @@
+## v0.13.4 - 2026-02-20
+
+- docs: add strategy implementation status table (a0ac5b6)
+
 ## v0.13.3 - 2026-02-20
 
 - docs: add strategy documentation scaffold and index (1f998a4)
