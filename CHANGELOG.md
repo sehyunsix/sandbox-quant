@@ -1,3 +1,7 @@
+## v0.12.7 - 2026-02-20
+
+- fix(workflow): let create-pull-request manage branch lifecycle (3162094)
+
 ## v0.12.6 - 2026-02-20
 
 - chore(workflow): add gemini pr workflow and policy docs (a720ed7)
