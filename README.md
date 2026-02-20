@@ -56,19 +56,19 @@ Current strategy implementation status (code-based):
 
 | Strategy | Category | Status | Source | Test | Doc |
 |---|---|---|---|---|---|
-| MA Crossover | Trend | [x] Implemented | [src/strategy/ma_crossover.rs](src/strategy/ma_crossover.rs) | [tests/ma_crossover_tests.rs](tests/ma_crossover_tests.rs) | [docs/strategy/ma-crossover.md](docs/strategy/ma-crossover.md) |
-| EMA Crossover | Trend | [x] Implemented | [src/strategy/ema_crossover.rs](src/strategy/ema_crossover.rs) | [tests/ema_crossover_tests.rs](tests/ema_crossover_tests.rs) | [docs/strategy/ema-crossover.md](docs/strategy/ema-crossover.md) |
-| ATR Expansion | Volatility | [x] Implemented | [src/strategy/atr_expansion.rs](src/strategy/atr_expansion.rs) | [tests/atr_expansion_tests.rs](tests/atr_expansion_tests.rs) | [docs/strategy/atr-expansion.md](docs/strategy/atr-expansion.md) |
-| Channel Breakout | Breakout | [x] Implemented | [src/strategy/channel_breakout.rs](src/strategy/channel_breakout.rs) | [tests/channel_breakout_tests.rs](tests/channel_breakout_tests.rs) | [docs/strategy/channel-breakout.md](docs/strategy/channel-breakout.md) |
-| RSA | Hybrid | [x] Implemented | [src/strategy/rsa.rs](src/strategy/rsa.rs) | [tests/rsa_strategy_tests.rs](tests/rsa_strategy_tests.rs) | [docs/strategy/rsa.md](docs/strategy/rsa.md) |
-| Donchian Trend | Trend | [x] Implemented | [src/strategy/donchian_trend.rs](src/strategy/donchian_trend.rs) | [tests/donchian_trend_tests.rs](tests/donchian_trend_tests.rs) | [docs/strategy/donchian-trend.md](docs/strategy/donchian-trend.md) |
-| MA Reversion | MeanReversion | [x] Implemented | [src/strategy/ma_reversion.rs](src/strategy/ma_reversion.rs) | [tests/ma_reversion_tests.rs](tests/ma_reversion_tests.rs) | [docs/strategy/ma-reversion.md](docs/strategy/ma-reversion.md) |
-| Bollinger Reversion | MeanReversion | [x] Implemented | [src/strategy/bollinger_reversion.rs](src/strategy/bollinger_reversion.rs) | [tests/bollinger_reversion_tests.rs](tests/bollinger_reversion_tests.rs) | [docs/strategy/bollinger-reversion.md](docs/strategy/bollinger-reversion.md) |
-| Stochastic Reversion | MeanReversion | [x] Implemented | [src/strategy/stochastic_reversion.rs](src/strategy/stochastic_reversion.rs) | [tests/stochastic_reversion_tests.rs](tests/stochastic_reversion_tests.rs) | [docs/strategy/stochastic-reversion.md](docs/strategy/stochastic-reversion.md) |
-| Volatility Compression | Volatility | [ ] Planned | - | - | - |
-| Opening Range Breakout | Breakout | [ ] Planned | - | - | - |
-| Regime Switch | Hybrid | [ ] Planned | - | - | - |
-| Ensemble Vote | Hybrid | [ ] Planned | - | - | - |
+| MA Crossover | Trend | ✅ | [src/strategy/ma_crossover.rs](src/strategy/ma_crossover.rs) | [tests/ma_crossover_tests.rs](tests/ma_crossover_tests.rs) | [docs/strategy/ma-crossover.md](docs/strategy/ma-crossover.md) |
+| EMA Crossover | Trend | ✅ | [src/strategy/ema_crossover.rs](src/strategy/ema_crossover.rs) | [tests/ema_crossover_tests.rs](tests/ema_crossover_tests.rs) | [docs/strategy/ema-crossover.md](docs/strategy/ema-crossover.md) |
+| ATR Expansion | Volatility | ✅ | [src/strategy/atr_expansion.rs](src/strategy/atr_expansion.rs) | [tests/atr_expansion_tests.rs](tests/atr_expansion_tests.rs) | [docs/strategy/atr-expansion.md](docs/strategy/atr-expansion.md) |
+| Channel Breakout | Breakout | ✅ | [src/strategy/channel_breakout.rs](src/strategy/channel_breakout.rs) | [tests/channel_breakout_tests.rs](tests/channel_breakout_tests.rs) | [docs/strategy/channel-breakout.md](docs/strategy/channel-breakout.md) |
+| RSA | Hybrid | ✅ | [src/strategy/rsa.rs](src/strategy/rsa.rs) | [tests/rsa_strategy_tests.rs](tests/rsa_strategy_tests.rs) | [docs/strategy/rsa.md](docs/strategy/rsa.md) |
+| Donchian Trend | Trend | ✅ | [src/strategy/donchian_trend.rs](src/strategy/donchian_trend.rs) | [tests/donchian_trend_tests.rs](tests/donchian_trend_tests.rs) | [docs/strategy/donchian-trend.md](docs/strategy/donchian-trend.md) |
+| MA Reversion | MeanReversion | ✅ | [src/strategy/ma_reversion.rs](src/strategy/ma_reversion.rs) | [tests/ma_reversion_tests.rs](tests/ma_reversion_tests.rs) | [docs/strategy/ma-reversion.md](docs/strategy/ma-reversion.md) |
+| Bollinger Reversion | MeanReversion | ✅ | [src/strategy/bollinger_reversion.rs](src/strategy/bollinger_reversion.rs) | [tests/bollinger_reversion_tests.rs](tests/bollinger_reversion_tests.rs) | [docs/strategy/bollinger-reversion.md](docs/strategy/bollinger-reversion.md) |
+| Stochastic Reversion | MeanReversion | ✅ | [src/strategy/stochastic_reversion.rs](src/strategy/stochastic_reversion.rs) | [tests/stochastic_reversion_tests.rs](tests/stochastic_reversion_tests.rs) | [docs/strategy/stochastic-reversion.md](docs/strategy/stochastic-reversion.md) |
+| Volatility Compression | Volatility | ✅ | [src/strategy/volatility_compression.rs](src/strategy/volatility_compression.rs) | [tests/volatility_compression_tests.rs](tests/volatility_compression_tests.rs) | [docs/strategy/volatility-compression.md](docs/strategy/volatility-compression.md) |
+| Opening Range Breakout | Breakout | ✅ | [src/strategy/opening_range_breakout.rs](src/strategy/opening_range_breakout.rs) | [tests/opening_range_breakout_tests.rs](tests/opening_range_breakout_tests.rs) | [docs/strategy/opening-range-breakout.md](docs/strategy/opening-range-breakout.md) |
+| Regime Switch | Hybrid | ❌ | - | - | - |
+| Ensemble Vote | Hybrid | ❌ | - | - | - |
 
 ## UI Overview
 
