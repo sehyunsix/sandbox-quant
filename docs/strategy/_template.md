@@ -6,6 +6,11 @@
 ## Category
 - trend-following | mean-reversion | breakout | volatility | hybrid
 
+## Signal Math
+- Indicator definitions with formulas.
+- Entry/exit equations.
+- Cooldown gate.
+
 ## Signal Logic
 - Entry conditions
 - Exit conditions
