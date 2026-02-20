@@ -305,6 +305,28 @@ fn compute_trade_stats_by_source(
     symbol: &str,
 ) -> HashMap<String, OrderHistoryStats> {
     trades.sort_by_key(|t| (t.time, t.id));
+
+    // Futures: realized_pnl is exchange-provided per fill.
+    if symbol.ends_with("#FUT") {
+        let mut stats_by_source: HashMap<String, OrderHistoryStats> = HashMap::new();
+        for t in trades {
+            let source = order_source_by_id
+                .get(&t.order_id)
+                .cloned()
+                .unwrap_or_else(|| "UNKNOWN".to_string());
+            let stats = stats_by_source.entry(source).or_default();
+            if t.realized_pnl > 0.0 {
+                stats.win_count += 1;
+                stats.trade_count += 1;
+            } else if t.realized_pnl < 0.0 {
+                stats.lose_count += 1;
+                stats.trade_count += 1;
+            }
+            stats.realized_pnl += t.realized_pnl;
+        }
+        return stats_by_source;
+    }
+
     let (base_asset, quote_asset) = split_symbol_assets(symbol);
     let mut pos_by_source: HashMap<String, LongPos> = HashMap::new();
     let mut stats_by_source: HashMap<String, OrderHistoryStats> = HashMap::new();
@@ -379,8 +401,10 @@ impl OrderManager {
         let mut strategy_limits_by_tag = HashMap::new();
         let mut symbol_exposure_limit_by_key = HashMap::new();
         let default_strategy_cooldown_ms = risk_config.default_strategy_cooldown_ms;
-        let default_strategy_max_active_orders = risk_config.default_strategy_max_active_orders.max(1);
-        let default_symbol_max_exposure_usdt = risk_config.default_symbol_max_exposure_usdt.max(0.0);
+        let default_strategy_max_active_orders =
+            risk_config.default_strategy_max_active_orders.max(1);
+        let default_symbol_max_exposure_usdt =
+            risk_config.default_symbol_max_exposure_usdt.max(0.0);
         for profile in &risk_config.strategy_limits {
             let source_tag = profile.source_tag.trim().to_ascii_lowercase();
             if source_tag.is_empty() {
@@ -389,9 +413,7 @@ impl OrderManager {
             strategy_limits_by_tag.insert(
                 source_tag,
                 StrategyExecutionLimit {
-                    cooldown_ms: profile
-                        .cooldown_ms
-                        .unwrap_or(default_strategy_cooldown_ms),
+                    cooldown_ms: profile.cooldown_ms.unwrap_or(default_strategy_cooldown_ms),
                     max_active_orders: profile
                         .max_active_orders
                         .unwrap_or(default_strategy_max_active_orders)
@@ -436,9 +458,7 @@ impl OrderManager {
                 EndpointRateLimits {
                     orders_per_minute: risk_config.endpoint_rate_limits.orders_per_minute,
                     account_per_minute: risk_config.endpoint_rate_limits.account_per_minute,
-                    market_data_per_minute: risk_config
-                        .endpoint_rate_limits
-                        .market_data_per_minute,
+                    market_data_per_minute: risk_config.endpoint_rate_limits.market_data_per_minute,
                 },
             ),
             default_strategy_cooldown_ms,
@@ -589,13 +609,18 @@ impl OrderManager {
         )
     }
 
-    fn evaluate_symbol_exposure_limit(&self, side: OrderSide, qty: f64) -> Option<(String, String)> {
+    fn evaluate_symbol_exposure_limit(
+        &self,
+        side: OrderSide,
+        qty: f64,
+    ) -> Option<(String, String)> {
         let max_exposure = self.max_symbol_exposure_usdt();
         if max_exposure <= f64::EPSILON {
             return None;
         }
         let (current_notional, projected_notional) = self.projected_notional_after_fill(side, qty);
-        if projected_notional > max_exposure && projected_notional > current_notional + f64::EPSILON {
+        if projected_notional > max_exposure && projected_notional > current_notional + f64::EPSILON
+        {
             return Some((
                 RejectionReasonCode::RiskSymbolExposureLimitExceeded
                     .as_str()
@@ -707,10 +732,38 @@ impl OrderManager {
                 tracing::warn!(error = %e, "Failed to persist futures order snapshot to sqlite");
             }
 
+            let mut order_source_by_id = HashMap::new();
+            for o in &orders {
+                order_source_by_id.insert(
+                    o.order_id,
+                    source_label_from_client_order_id(&o.client_order_id),
+                );
+            }
+            let mut trades_for_stats = trades.clone();
+            match order_store::load_persisted_trades(&storage_key) {
+                Ok(saved) if !saved.is_empty() => {
+                    trades_for_stats = saved.iter().map(|r| r.trade.clone()).collect();
+                    for row in saved {
+                        order_source_by_id.entry(row.trade.order_id).or_insert(row.source);
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to load persisted futures trades; using API trades"
+                    );
+                }
+            }
+
             let mut history = Vec::new();
             let mut fills = Vec::new();
             for t in &trades {
                 let side = if t.is_buyer { "BUY" } else { "SELL" };
+                let source = order_source_by_id
+                    .get(&t.order_id)
+                    .cloned()
+                    .unwrap_or_else(|| "UNKNOWN".to_string());
                 fills.push(OrderHistoryFill {
                     timestamp_ms: t.time,
                     side: if t.is_buyer {
@@ -726,7 +779,7 @@ impl OrderManager {
                     side,
                     t.qty,
                     t.price,
-                    &format!("order#{}#T{} [FUT]", t.order_id, t.id),
+                    &format!("order#{}#T{} [{}]", t.order_id, t.id, source),
                 ));
             }
             for o in &orders {
@@ -760,13 +813,26 @@ impl OrderManager {
             let estimated_total_pnl_usdt = Some(stats.realized_pnl);
             let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
             let latest_trade_event = trades.iter().map(|t| t.time).max();
-            let strategy_stats = match order_store::load_strategy_symbol_stats(&storage_key) {
-                Ok(persisted) => from_persisted_stats_map(persisted),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to load persisted strategy stats (futures)");
-                    HashMap::new()
+            let mut strategy_stats =
+                compute_trade_stats_by_source(trades_for_stats, &order_source_by_id, &storage_key);
+            let persisted_stats = to_persistable_stats_map(&strategy_stats);
+            if let Err(e) = order_store::persist_strategy_symbol_stats(&storage_key, &persisted_stats)
+            {
+                tracing::warn!(error = %e, "Failed to persist strategy stats (futures)");
+            }
+            if strategy_stats.is_empty() {
+                match order_store::load_strategy_symbol_stats(&storage_key) {
+                    Ok(persisted) => {
+                        strategy_stats = from_persisted_stats_map(persisted);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to load persisted strategy stats (futures)"
+                        );
+                    }
                 }
-            };
+            }
             return Ok(OrderHistorySnapshot {
                 rows: history,
                 stats,
@@ -879,7 +945,10 @@ impl OrderManager {
 
         let mut order_source_by_id = HashMap::new();
         for o in &orders {
-            order_source_by_id.insert(o.order_id, source_label_from_client_order_id(&o.client_order_id));
+            order_source_by_id.insert(
+                o.order_id,
+                source_label_from_client_order_id(&o.client_order_id),
+            );
         }
         for (order_id, source) in persisted_source_by_order_id {
             order_source_by_id.entry(order_id).or_insert(source);
@@ -1286,7 +1355,10 @@ impl OrderManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_qty_for_history, split_symbol_assets, OrderManager};
+    use super::{
+        compute_trade_stats_by_source, display_qty_for_history, split_symbol_assets, OrderManager,
+    };
+    use crate::binance::types::BinanceMyTrade;
     use crate::binance::rest::BinanceRestClient;
     use crate::config::{EndpointRateLimitConfig, RiskConfig, SymbolExposureLimitConfig};
     use crate::model::order::{Order, OrderSide, OrderStatus, OrderType};
@@ -1454,7 +1526,10 @@ mod tests {
         let rejected = mgr
             .evaluate_symbol_exposure_limit(OrderSide::Buy, 2.0)
             .expect("must be rejected");
-        assert_eq!(rejected.0, "risk.symbol_exposure_limit_exceeded".to_string());
+        assert_eq!(
+            rejected.0,
+            "risk.symbol_exposure_limit_exceeded".to_string()
+        );
     }
 
     #[test]
@@ -1467,5 +1542,47 @@ mod tests {
         // Sell reduces exposure to 100; should be allowed.
         let rejected = mgr.evaluate_symbol_exposure_limit(OrderSide::Sell, 1.0);
         assert!(rejected.is_none());
+    }
+
+    #[test]
+    fn futures_trade_stats_by_source_use_realized_pnl() {
+        let trades = vec![
+            BinanceMyTrade {
+                symbol: "XRPUSDT".to_string(),
+                id: 1,
+                order_id: 1001,
+                price: 1.0,
+                qty: 100.0,
+                commission: 0.0,
+                commission_asset: "USDT".to_string(),
+                time: 1,
+                is_buyer: false,
+                is_maker: false,
+                realized_pnl: 5.0,
+            },
+            BinanceMyTrade {
+                symbol: "XRPUSDT".to_string(),
+                id: 2,
+                order_id: 1002,
+                price: 1.0,
+                qty: 100.0,
+                commission: 0.0,
+                commission_asset: "USDT".to_string(),
+                time: 2,
+                is_buyer: false,
+                is_maker: false,
+                realized_pnl: -2.5,
+            },
+        ];
+        let mut source_by_order = std::collections::HashMap::new();
+        source_by_order.insert(1001, "c20".to_string());
+        source_by_order.insert(1002, "c20".to_string());
+
+        let stats = compute_trade_stats_by_source(trades, &source_by_order, "XRPUSDT#FUT");
+        let c20 = stats.get("c20").expect("source tag must exist");
+        assert_eq!(c20.trade_count, 2);
+        assert_eq!(c20.win_count, 1);
+        assert_eq!(c20.lose_count, 1);
+        assert!((c20.realized_pnl - 2.5).abs() < f64::EPSILON);
     }
 }
