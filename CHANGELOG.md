@@ -1,3 +1,7 @@
+## v0.13.3 - 2026-02-20
+
+- docs: add strategy documentation scaffold and index (1f998a4)
+
 ## v0.13.2 - 2026-02-20
 
 - ci: switch gemini workflow to docs-only RFC/issue lane (9c0d315)
