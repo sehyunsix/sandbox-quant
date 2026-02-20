@@ -1,3 +1,14 @@
+## v0.12.5 - 2026-02-20
+
+- refactor(main): route grid key block via handle_grid_key (b98edde)
+- refactor(main): extract grid strategy action handler (c1291e8)
+- refactor(main): extract grid selection navigation helpers (5fcb592)
+- refactor(main): extract strategy editor command handler (3905193)
+- refactor(main): extract popup command handlers from input loop (42702dd)
+- refactor(main): add PopupCommand parser for popup key handling (dc54753)
+- refactor(main): route grid key handling through GridCommand parser (f8fb709)
+- refactor(main): introduce testable UiCommand mapping for base key handling (d11d488)
+
 ## v0.12.4 - 2026-02-19
 
 - refactor(main): centralize strategy state sync side-effects (98b8460)
