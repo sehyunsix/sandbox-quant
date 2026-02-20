@@ -1,3 +1,7 @@
+## v0.13.1 - 2026-02-20
+
+- ci: tighten strategy scope gate and relax clippy gate (50d88dc)
+
 ## v0.13.0 - 2026-02-20
 
 - feat(workflow): enforce strategy_creation mode with structural gates (c4e2a05)
