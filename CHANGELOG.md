@@ -1,3 +1,7 @@
+## v0.13.5 - 2026-02-20
+
+- docs: linkify strategy status table paths in README (7d1b38a)
+
 ## v0.13.4 - 2026-02-20
 
 - docs: add strategy implementation status table (a0ac5b6)
