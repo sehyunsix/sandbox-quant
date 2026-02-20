@@ -1,3 +1,7 @@
+## v0.13.6 - 2026-02-20
+
+- fix: compute futures strategy stats from realized pnl fills (9fa87e1)
+
 ## v0.13.5 - 2026-02-20
 
 - docs: linkify strategy status table paths in README (7d1b38a)
