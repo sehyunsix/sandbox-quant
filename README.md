@@ -58,6 +58,9 @@ Current strategy implementation status (code-based):
 |---|---|---|---|---|---|
 | MA Crossover | Trend | ✅ | [src/strategy/ma_crossover.rs](src/strategy/ma_crossover.rs) | [tests/ma_crossover_tests.rs](tests/ma_crossover_tests.rs) | [docs/strategy/ma-crossover.md](docs/strategy/ma-crossover.md) |
 | EMA Crossover | Trend | ✅ | [src/strategy/ema_crossover.rs](src/strategy/ema_crossover.rs) | [tests/ema_crossover_tests.rs](tests/ema_crossover_tests.rs) | [docs/strategy/ema-crossover.md](docs/strategy/ema-crossover.md) |
+| MACD Crossover | Trend | ✅ | [src/strategy/macd_crossover.rs](src/strategy/macd_crossover.rs) | [tests/macd_crossover_tests.rs](tests/macd_crossover_tests.rs) | [docs/strategy/macd-crossover.md](docs/strategy/macd-crossover.md) |
+| ROC Momentum | Trend | ✅ | [src/strategy/roc_momentum.rs](src/strategy/roc_momentum.rs) | [tests/roc_momentum_tests.rs](tests/roc_momentum_tests.rs) | [docs/strategy/roc-momentum.md](docs/strategy/roc-momentum.md) |
+| Aroon Trend | Trend | ✅ | [src/strategy/aroon_trend.rs](src/strategy/aroon_trend.rs) | [tests/aroon_trend_tests.rs](tests/aroon_trend_tests.rs) | [docs/strategy/aroon-trend.md](docs/strategy/aroon-trend.md) |
 | ATR Expansion | Volatility | ✅ | [src/strategy/atr_expansion.rs](src/strategy/atr_expansion.rs) | [tests/atr_expansion_tests.rs](tests/atr_expansion_tests.rs) | [docs/strategy/atr-expansion.md](docs/strategy/atr-expansion.md) |
 | Channel Breakout | Breakout | ✅ | [src/strategy/channel_breakout.rs](src/strategy/channel_breakout.rs) | [tests/channel_breakout_tests.rs](tests/channel_breakout_tests.rs) | [docs/strategy/channel-breakout.md](docs/strategy/channel-breakout.md) |
 | RSA | Hybrid | ✅ | [src/strategy/rsa.rs](src/strategy/rsa.rs) | [tests/rsa_strategy_tests.rs](tests/rsa_strategy_tests.rs) | [docs/strategy/rsa.md](docs/strategy/rsa.md) |

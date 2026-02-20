@@ -15,6 +15,9 @@ pub enum StrategyKind {
     Sto,
     Reg,
     Ens,
+    Mac,
+    Roc,
+    Arn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +36,7 @@ pub struct StrategyTypeOption {
     pub strategy_label: Option<String>,
 }
 
-const STRATEGY_KIND_SPECS: [StrategyKindSpec; 13] = [
+const STRATEGY_KIND_SPECS: [StrategyKindSpec; 16] = [
     StrategyKindSpec {
         kind: StrategyKind::Ma,
         label: "MA",
@@ -136,6 +139,30 @@ const STRATEGY_KIND_SPECS: [StrategyKindSpec; 13] = [
         category: "Hybrid",
         default_fast: 10,
         default_slow: 30,
+        default_cooldown: 1,
+    },
+    StrategyKindSpec {
+        kind: StrategyKind::Mac,
+        label: "MAC",
+        category: "Trend",
+        default_fast: 12,
+        default_slow: 26,
+        default_cooldown: 1,
+    },
+    StrategyKindSpec {
+        kind: StrategyKind::Roc,
+        label: "ROC",
+        category: "Trend",
+        default_fast: 10,
+        default_slow: 20,
+        default_cooldown: 1,
+    },
+    StrategyKindSpec {
+        kind: StrategyKind::Arn,
+        label: "ARN",
+        category: "Trend",
+        default_fast: 14,
+        default_slow: 70,
         default_cooldown: 1,
     },
 ];
@@ -264,6 +291,9 @@ impl StrategyProfile {
 
     pub fn strategy_kind(&self) -> StrategyKind {
         match self.strategy_type.trim().to_ascii_lowercase().as_str() {
+            "arn" => return StrategyKind::Arn,
+            "roc" => return StrategyKind::Roc,
+            "mac" => return StrategyKind::Mac,
             "ens" => return StrategyKind::Ens,
             "reg" => return StrategyKind::Reg,
             "orb" => return StrategyKind::Orb,
@@ -279,7 +309,19 @@ impl StrategyProfile {
             "ma" => return StrategyKind::Ma,
             _ => {}
         }
-        if self.source_tag.eq_ignore_ascii_case("ens")
+        if self.source_tag.eq_ignore_ascii_case("arn")
+            || self.label.to_ascii_uppercase().starts_with("ARN(")
+        {
+            StrategyKind::Arn
+        } else if self.source_tag.eq_ignore_ascii_case("roc")
+            || self.label.to_ascii_uppercase().starts_with("ROC(")
+        {
+            StrategyKind::Roc
+        } else if self.source_tag.eq_ignore_ascii_case("mac")
+            || self.label.to_ascii_uppercase().starts_with("MAC(")
+        {
+            StrategyKind::Mac
+        } else if self.source_tag.eq_ignore_ascii_case("ens")
             || self.label.to_ascii_uppercase().starts_with("ENS(")
         {
             StrategyKind::Ens
@@ -499,6 +541,42 @@ impl StrategyCatalog {
                 last_started_at_ms: None,
                 fast_period: 10,
                 slow_period: 30,
+                min_ticks_between_signals,
+            },
+            StrategyProfile {
+                label: "MAC(MACD 12/26)".to_string(),
+                source_tag: "mac".to_string(),
+                strategy_type: "mac".to_string(),
+                symbol: default_symbol.trim().to_ascii_uppercase(),
+                created_at_ms: now_ms(),
+                cumulative_running_ms: 0,
+                last_started_at_ms: None,
+                fast_period: 12,
+                slow_period: 26,
+                min_ticks_between_signals,
+            },
+            StrategyProfile {
+                label: "ROC(ROC 10 0.20%)".to_string(),
+                source_tag: "roc".to_string(),
+                strategy_type: "roc".to_string(),
+                symbol: default_symbol.trim().to_ascii_uppercase(),
+                created_at_ms: now_ms(),
+                cumulative_running_ms: 0,
+                last_started_at_ms: None,
+                fast_period: 10,
+                slow_period: 20,
+                min_ticks_between_signals,
+            },
+            StrategyProfile {
+                label: "ARN(Aroon 14 70)".to_string(),
+                source_tag: "arn".to_string(),
+                strategy_type: "arn".to_string(),
+                symbol: default_symbol.trim().to_ascii_uppercase(),
+                created_at_ms: now_ms(),
+                cumulative_running_ms: 0,
+                last_started_at_ms: None,
+                fast_period: 14,
+                slow_period: 70,
                 min_ticks_between_signals,
             },
         ]
@@ -826,6 +904,26 @@ impl StrategyCatalog {
             StrategyKind::Ens => {
                 let slow = slow_period.max(fast + 1);
                 (format!("ENS(Custom {}/{}) [{}]", fast, slow, tag), slow)
+            }
+            StrategyKind::Mac => {
+                let slow = slow_period.max(fast + 1);
+                (format!("MAC(Custom {}/{}) [{}]", fast, slow, tag), slow)
+            }
+            StrategyKind::Roc => {
+                let threshold_bps = slow_period.clamp(5, 1_000);
+                (
+                    format!(
+                        "ROC(Custom {} {:.2}%) [{}]",
+                        fast,
+                        threshold_bps as f64 / 100.0,
+                        tag
+                    ),
+                    threshold_bps,
+                )
+            }
+            StrategyKind::Arn => {
+                let threshold = slow_period.clamp(50, 90);
+                (format!("ARN(Custom {} {}) [{}]", fast, threshold, tag), threshold)
             }
         };
         let profile = StrategyProfile {
