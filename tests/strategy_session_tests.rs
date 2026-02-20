@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use sandbox_quant::strategy_catalog::StrategyCatalog;
+use sandbox_quant::strategy_catalog::{StrategyCatalog, StrategyKind};
 use sandbox_quant::strategy_session::{
     load_strategy_session_from_path, persist_strategy_session_to_path,
 };
@@ -24,7 +24,7 @@ fn strategy_session_round_trip_persists_catalog_and_selected_profile() {
         .index_of_label(&custom.label)
         .expect("custom strategy index should exist");
     let forked = catalog
-        .fork_profile(custom_index, "ETHUSDT", 8, 29, 3)
+        .fork_profile(custom_index, StrategyKind::Ma, "ETHUSDT", 8, 29, 3)
         .expect("custom strategy should be forkable");
     assert!(catalog.mark_running(&forked.source_tag, 10_000));
     assert!(catalog.mark_stopped(&forked.source_tag, 16_500));
