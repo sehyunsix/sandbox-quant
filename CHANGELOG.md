@@ -1,3 +1,7 @@
+## v0.14.0 - 2026-02-20
+
+- feat(strategy): add remaining hybrid strategies and catalog wiring (d658de5)
+
 ## v0.13.6 - 2026-02-20
 
 - fix: compute futures strategy stats from realized pnl fills (9fa87e1)
