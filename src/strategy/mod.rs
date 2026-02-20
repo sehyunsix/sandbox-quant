@@ -1,1 +1,9 @@
+pub mod atr_expansion;
+pub mod bollinger_reversion;
+pub mod channel_breakout;
+pub mod donchian_trend;
+pub mod ema_crossover;
 pub mod ma_crossover;
+pub mod ma_reversion;
+pub mod rsa;
+pub mod stochastic_reversion;

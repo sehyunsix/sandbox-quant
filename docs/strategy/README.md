@@ -13,6 +13,10 @@ This directory documents each strategy implementation under `src/strategy/`.
 - `atr-expansion.md`
 - `channel-breakout.md`
 - `rsa.md`
+- `donchian-trend.md`
+- `ma-reversion.md`
+- `bollinger-reversion.md`
+- `stochastic-reversion.md`
 
 ## Authoring Rule
 - Use `docs/strategy/_template.md` when adding a new strategy.
