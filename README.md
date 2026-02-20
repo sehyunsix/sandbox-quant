@@ -86,6 +86,7 @@ Common knobs:
 
 - API Docs (`docs.rs`): https://docs.rs/sandbox-quant
 - Crate Page (`crates.io`): https://crates.io/crates/sandbox-quant
+- Strategy Docs Index: `docs/strategy/README.md`
 - Markdown Book (`docs-site`):
 
 ```bash
@@ -115,7 +116,7 @@ Testing references:
 
 - Gemini-assisted PR workflow: `.github/workflows/gemini-pr.yml`
 - Review and safety guide: `GEMINI.md`
-- AI-assisted PRs must pass compile/test gates and include attribution metadata before merge.
+- Gemini automation lane is limited to RFC/issue proposal docs (no runtime strategy code generation).
 
 ## Appendix: Run Capture
 
