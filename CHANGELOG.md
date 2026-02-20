@@ -1,3 +1,7 @@
+## v0.15.0 - 2026-02-20
+
+- feat(strategy): add MACD ROC Aroon strategies (97ff700)
+
 ## v0.14.0 - 2026-02-20
 
 - feat(strategy): add remaining hybrid strategies and catalog wiring (d658de5)
