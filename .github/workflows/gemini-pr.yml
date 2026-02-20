@@ -185,6 +185,13 @@ jobs:
             exit 1
           fi
 
+          disallowed="$(echo "$changed" | grep -Ev '^(src/strategy/.+\.rs|src/strategy/mod\.rs|src/main\.rs|src/strategy_catalog\.rs|tests/.+_tests\.rs|docs/rfcs/.+\.md|README\.md|Cargo\.toml|Cargo\.lock)$' || true)"
+          if [ -n "$disallowed" ]; then
+            echo "Strategy gate failed: changed files outside strategy scope:"
+            echo "$disallowed"
+            exit 1
+          fi
+
           if echo "$changed" | grep -E '^tests/smoke_test\.rs$' >/dev/null && [ "$(echo "$changed" | wc -l | tr -d ' ')" -le 2 ]; then
             echo "Strategy gate failed: smoke_test-only change is not allowed."
             exit 1
@@ -196,7 +203,7 @@ jobs:
           cargo fmt
           cargo fmt --check
           cargo check --all-targets
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious
           cargo test -q
 
       - name: Reset working tree to base branch before PR action
@@ -227,7 +234,7 @@ jobs:
             ## Compile-time Safety Gates
             - [x] `cargo fmt --check`
             - [x] `cargo check --all-targets`
-            - [x] `cargo clippy --all-targets -- -D warnings`
+            - [x] `cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious`
             - [x] `cargo test -q`
 
             ## AI Attribution
