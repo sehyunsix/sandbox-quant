@@ -117,10 +117,6 @@ jobs:
           if [ -z "$safe_scope" ]; then safe_scope="task"; fi
           echo "name=gemini/${safe_scope}-${ts}" >> "$GITHUB_OUTPUT"
 
-      - name: Create work branch
-        run: |
-          git checkout -b "${{ steps.branch.outputs.name }}"
-
       - name: Run Gemini to apply scoped changes
         uses: google-github-actions/run-gemini-cli@v0
         with:
