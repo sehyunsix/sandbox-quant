@@ -13,8 +13,11 @@ pub struct PortfolioSummary {
 #[derive(Debug, Clone, Default)]
 pub struct AssetEntry {
     pub symbol: String,
+    pub is_futures: bool,
+    pub side: Option<String>,
     pub last_price: Option<f64>,
     pub position_qty: f64,
+    pub entry_price: Option<f64>,
     pub realized_pnl_usdt: f64,
     pub unrealized_pnl_usdt: f64,
 }
@@ -112,6 +115,10 @@ impl UiProjection {
                     .unwrap_or(0.0);
                 AssetEntry {
                     symbol: symbol.clone(),
+                    is_futures: pnl
+                        .map(|p| p.is_futures)
+                        .unwrap_or_else(|| symbol.ends_with(" (FUT)")),
+                    side: pnl.and_then(|p| p.side).map(|s| s.to_string()),
                     last_price: if symbol == state.symbol {
                         state.last_price()
                     } else {
@@ -122,6 +129,13 @@ impl UiProjection {
                             state.position.qty
                         } else {
                             inferred_qty
+                        }
+                    }),
+                    entry_price: pnl.and_then(|p| {
+                        if p.entry_price > f64::EPSILON {
+                            Some(p.entry_price)
+                        } else {
+                            None
                         }
                     }),
                     realized_pnl_usdt: pnl.map(|p| p.realized_pnl_usdt).unwrap_or_else(|| {

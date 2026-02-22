@@ -237,7 +237,10 @@ fn build_asset_pnl_snapshot(
             (
                 symbol.clone(),
                 AssetPnlEntry {
+                    is_futures: mgr.market_kind() == MarketKind::Futures,
+                    side: mgr.position().side,
                     position_qty: mgr.position().qty,
+                    entry_price: mgr.position().entry_price,
                     realized_pnl_usdt: realized_pnl_by_symbol.get(symbol).copied().unwrap_or(0.0),
                     unrealized_pnl_usdt: mgr.position().unrealized_pnl,
                 },

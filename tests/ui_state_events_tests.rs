@@ -188,7 +188,10 @@ fn app_state_applies_asset_pnl_update_event() {
     by_symbol.insert(
         "ETHUSDT".to_string(),
         AssetPnlEntry {
+            is_futures: false,
+            side: None,
             position_qty: 0.4,
+            entry_price: 0.0,
             realized_pnl_usdt: 3.0,
             unrealized_pnl_usdt: 0.9,
         },

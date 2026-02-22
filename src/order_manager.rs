@@ -299,6 +299,34 @@ fn compute_trade_state(
     (stats, pos)
 }
 
+fn compute_futures_open_state(mut trades: Vec<BinanceMyTrade>) -> LongPos {
+    trades.sort_by_key(|t| (t.time, t.id));
+    let mut pos = LongPos::default();
+    for t in trades {
+        let qty = t.qty.max(0.0);
+        if qty <= f64::EPSILON {
+            continue;
+        }
+        if t.is_buyer {
+            pos.qty += qty;
+            pos.cost_quote += qty * t.price;
+            continue;
+        }
+        if pos.qty <= f64::EPSILON {
+            continue;
+        }
+        let close_qty = qty.min(pos.qty);
+        let avg_cost = pos.cost_quote / pos.qty.max(f64::EPSILON);
+        pos.qty -= close_qty;
+        pos.cost_quote -= avg_cost * close_qty;
+        if pos.qty <= f64::EPSILON {
+            pos.qty = 0.0;
+            pos.cost_quote = 0.0;
+        }
+    }
+    pos
+}
+
 fn compute_trade_stats_by_source(
     mut trades: Vec<BinanceMyTrade>,
     order_source_by_id: &HashMap<u64, String>,
@@ -476,6 +504,10 @@ impl OrderManager {
     /// exchange reconciliation snapshot.
     pub fn position(&self) -> &Position {
         &self.position
+    }
+
+    pub fn market_kind(&self) -> MarketKind {
+        self.market
     }
 
     /// Return latest cached free balances.
@@ -810,7 +842,30 @@ impl OrderManager {
                 }
                 stats.realized_pnl += t.realized_pnl;
             }
-            let estimated_total_pnl_usdt = Some(stats.realized_pnl);
+            let open_pos = compute_futures_open_state(trades_for_stats.clone());
+            let open_entry_price = if open_pos.qty > f64::EPSILON {
+                open_pos.cost_quote / open_pos.qty
+            } else {
+                0.0
+            };
+            self.position.side = if open_pos.qty > f64::EPSILON {
+                Some(OrderSide::Buy)
+            } else {
+                None
+            };
+            self.position.qty = open_pos.qty;
+            self.position.entry_price = open_entry_price;
+            self.position.realized_pnl = stats.realized_pnl;
+            if self.last_price > 0.0 {
+                self.position.update_unrealized_pnl(self.last_price);
+            } else {
+                self.position.unrealized_pnl = 0.0;
+            }
+            let estimated_total_pnl_usdt = if self.last_price > 0.0 && open_pos.qty > f64::EPSILON {
+                Some(stats.realized_pnl + (self.last_price - open_entry_price) * open_pos.qty)
+            } else {
+                Some(stats.realized_pnl)
+            };
             let latest_order_event = orders.iter().map(|o| o.update_time.max(o.time)).max();
             let latest_trade_event = trades.iter().map(|t| t.time).max();
             let mut strategy_stats =
@@ -838,8 +893,8 @@ impl OrderManager {
                 stats,
                 strategy_stats,
                 fills,
-                open_qty: 0.0,
-                open_entry_price: 0.0,
+                open_qty: open_pos.qty,
+                open_entry_price,
                 estimated_total_pnl_usdt,
                 trade_data_complete: true,
                 fetched_at_ms,
@@ -923,6 +978,23 @@ impl OrderManager {
         }
 
         let (stats, open_pos) = compute_trade_state(trades.clone(), &self.symbol);
+        self.position.side = if open_pos.qty > f64::EPSILON {
+            Some(OrderSide::Buy)
+        } else {
+            None
+        };
+        self.position.qty = open_pos.qty;
+        self.position.entry_price = if open_pos.qty > f64::EPSILON {
+            open_pos.cost_quote / open_pos.qty
+        } else {
+            0.0
+        };
+        self.position.realized_pnl = stats.realized_pnl;
+        if self.last_price > 0.0 {
+            self.position.update_unrealized_pnl(self.last_price);
+        } else {
+            self.position.unrealized_pnl = 0.0;
+        }
         let estimated_total_pnl_usdt = if self.last_price > 0.0 {
             Some(stats.realized_pnl + (open_pos.qty * self.last_price - open_pos.cost_quote))
         } else {

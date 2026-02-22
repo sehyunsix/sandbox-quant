@@ -1360,39 +1360,61 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
     };
 
     if view.selected_grid_tab == GridTab::Assets {
-        let chunks = Layout::default()
+        let spot_assets: Vec<&AssetEntry> = state
+            .assets_view()
+            .iter()
+            .filter(|a| !a.is_futures)
+            .collect();
+        let fut_assets: Vec<&AssetEntry> = state
+            .assets_view()
+            .iter()
+            .filter(|a| a.is_futures)
+            .collect();
+        let spot_total_rlz: f64 = spot_assets.iter().map(|a| a.realized_pnl_usdt).sum();
+        let spot_total_unrlz: f64 = spot_assets.iter().map(|a| a.unrealized_pnl_usdt).sum();
+        let fut_total_rlz: f64 = fut_assets.iter().map(|a| a.realized_pnl_usdt).sum();
+        let fut_total_unrlz: f64 = fut_assets.iter().map(|a| a.unrealized_pnl_usdt).sum();
+        let total_rlz = spot_total_rlz + fut_total_rlz;
+        let total_unrlz = spot_total_unrlz + fut_total_unrlz;
+        let total_pnl = total_rlz + total_unrlz;
+        let panel_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(3), Constraint::Length(1)])
+            .constraints([
+                Constraint::Percentage(46),
+                Constraint::Percentage(46),
+                Constraint::Length(3),
+                Constraint::Length(1),
+            ])
             .split(body_area);
-        let asset_header = Row::new(vec![
-            Cell::from("Symbol"),
+
+        let spot_header = Row::new(vec![
+            Cell::from("Asset"),
             Cell::from("Qty"),
             Cell::from("Price"),
             Cell::from("RlzPnL"),
             Cell::from("UnrPnL"),
         ])
         .style(Style::default().fg(Color::DarkGray));
-        let mut asset_rows: Vec<Row> = state
-            .assets_view()
+        let mut spot_rows: Vec<Row> = spot_assets
             .iter()
             .map(|a| {
-                let price = a
-                    .last_price
-                    .map(|v| format!("{:.2}", v))
-                    .unwrap_or_else(|| "---".to_string());
                 Row::new(vec![
                     Cell::from(a.symbol.clone()),
                     Cell::from(format!("{:.5}", a.position_qty)),
-                    Cell::from(price),
+                    Cell::from(
+                        a.last_price
+                            .map(|v| format!("{:.2}", v))
+                            .unwrap_or_else(|| "---".to_string()),
+                    ),
                     Cell::from(format!("{:+.4}", a.realized_pnl_usdt)),
                     Cell::from(format!("{:+.4}", a.unrealized_pnl_usdt)),
                 ])
             })
             .collect();
-        if asset_rows.is_empty() {
-            asset_rows.push(
+        if spot_rows.is_empty() {
+            spot_rows.push(
                 Row::new(vec![
-                    Cell::from("(no assets)"),
+                    Cell::from("(no spot assets)"),
                     Cell::from("-"),
                     Cell::from("-"),
                     Cell::from("-"),
@@ -1403,7 +1425,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
         }
         frame.render_widget(
             Table::new(
-                asset_rows,
+                spot_rows,
                 [
                     Constraint::Length(16),
                     Constraint::Length(12),
@@ -1412,17 +1434,117 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     Constraint::Length(10),
                 ],
             )
-            .header(asset_header)
+            .header(spot_header)
             .column_spacing(1)
             .block(
                 Block::default()
-                    .title(format!(" Assets | Total {} ", state.assets_view().len()))
+                    .title(format!(
+                        " Spot Assets | Total {} | PnL {:+.4} (R {:+.4} / U {:+.4}) ",
+                        spot_assets.len(),
+                        spot_total_rlz + spot_total_unrlz,
+                        spot_total_rlz,
+                        spot_total_unrlz
+                    ))
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::DarkGray)),
             ),
-            chunks[0],
+            panel_chunks[0],
         );
-        frame.render_widget(Paragraph::new("[1/2/3] tab  [G/Esc] close"), chunks[1]);
+
+        let fut_header = Row::new(vec![
+            Cell::from("Symbol"),
+            Cell::from("Side"),
+            Cell::from("PosQty"),
+            Cell::from("Entry"),
+            Cell::from("RlzPnL"),
+            Cell::from("UnrPnL"),
+        ])
+        .style(Style::default().fg(Color::DarkGray));
+        let mut fut_rows: Vec<Row> = fut_assets
+            .iter()
+            .map(|a| {
+                Row::new(vec![
+                    Cell::from(a.symbol.clone()),
+                    Cell::from(a.side.clone().unwrap_or_else(|| "-".to_string())),
+                    Cell::from(format!("{:.5}", a.position_qty)),
+                    Cell::from(
+                        a.entry_price
+                            .map(|v| format!("{:.2}", v))
+                            .unwrap_or_else(|| "---".to_string()),
+                    ),
+                    Cell::from(format!("{:+.4}", a.realized_pnl_usdt)),
+                    Cell::from(format!("{:+.4}", a.unrealized_pnl_usdt)),
+                ])
+            })
+            .collect();
+        if fut_rows.is_empty() {
+            fut_rows.push(
+                Row::new(vec![
+                    Cell::from("(no futures positions)"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                ])
+                .style(Style::default().fg(Color::DarkGray)),
+            );
+        }
+        frame.render_widget(
+            Table::new(
+                fut_rows,
+                [
+                    Constraint::Length(18),
+                    Constraint::Length(8),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                ],
+            )
+            .header(fut_header)
+            .column_spacing(1)
+            .block(
+                Block::default()
+                    .title(format!(
+                        " Futures Positions | Total {} | PnL {:+.4} (R {:+.4} / U {:+.4}) ",
+                        fut_assets.len(),
+                        fut_total_rlz + fut_total_unrlz,
+                        fut_total_rlz,
+                        fut_total_unrlz
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            panel_chunks[1],
+        );
+        let total_color = if total_pnl > 0.0 {
+            Color::Green
+        } else if total_pnl < 0.0 {
+            Color::Red
+        } else {
+            Color::DarkGray
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" Total PnL: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:+.4}", total_pnl),
+                    Style::default().fg(total_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("   Realized: {:+.4}   Unrealized: {:+.4}", total_rlz, total_unrlz),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            panel_chunks[2],
+        );
+        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), panel_chunks[3]);
         return;
     }
 
