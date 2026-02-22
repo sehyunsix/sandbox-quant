@@ -2662,6 +2662,11 @@ fn source_tag_for_strategy_item(item: &str) -> Option<String> {
         "STO(Stoch 14 20/80)" => return Some("sto".to_string()),
         "VLC(Compression 20 1.20%)" => return Some("vlc".to_string()),
         "ORB(Opening 12/8)" => return Some("orb".to_string()),
+        "REG(Regime 10/30)" => return Some("reg".to_string()),
+        "ENS(Vote 10/30)" => return Some("ens".to_string()),
+        "MAC(MACD 12/26)" => return Some("mac".to_string()),
+        "ROC(ROC 10 0.20%)" => return Some("roc".to_string()),
+        "ARN(Aroon 14 70)" => return Some("arn".to_string()),
         _ => {}
     }
     if let Some((_, tail)) = item.rsplit_once('[') {
