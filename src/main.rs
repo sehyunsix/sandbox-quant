@@ -301,6 +301,24 @@ fn enabled_instruments(
     instruments
 }
 
+fn strategy_instruments_from_profiles(
+    profiles_by_tag: &HashMap<String, StrategyProfile>,
+    selected_symbol: &str,
+) -> Vec<String> {
+    let mut instruments: Vec<String> = profiles_by_tag
+        .values()
+        .map(|profile| normalize_instrument_label(&profile.symbol))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let selected = normalize_instrument_label(selected_symbol);
+    if !instruments.iter().any(|item| item == &selected) {
+        instruments.push(selected);
+    }
+    instruments.sort();
+    instruments
+}
+
 fn persist_strategy_session_state(
     app_state: &mut AppState,
     strategy_catalog: &StrategyCatalog,
@@ -1620,64 +1638,70 @@ async fn main() -> Result<()> {
             });
         };
 
-        if !order_managers.contains_key(&selected_symbol) {
-            let (api_symbol, market) = parse_instrument_label(&selected_symbol);
-            order_managers.insert(
-                selected_symbol.clone(),
-                OrderManager::new(
-                    strat_rest.clone(),
-                    &api_symbol,
-                    market,
-                    strat_config.strategy.order_amount_usdt,
-                    &strat_config.risk,
-                ),
-            );
-        }
-        if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
-            match mgr.refresh_balances().await {
-                Ok(balances) => {
-                    let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
-                }
-                Err(e) => {
-                    let _ = strat_app_tx
-                        .send(app_log(
-                            LogLevel::Warn,
-                            LogDomain::Portfolio,
-                            "balance.fetch.fail",
-                            format!("Balance fetch failed: {}", e),
-                        ))
-                        .await;
-                }
+        let bootstrap_instruments =
+            strategy_instruments_from_profiles(&profiles_by_tag, &selected_symbol);
+        for instrument in bootstrap_instruments {
+            if !order_managers.contains_key(&instrument) {
+                let (api_symbol, market) = parse_instrument_label(&instrument);
+                order_managers.insert(
+                    instrument.clone(),
+                    OrderManager::new(
+                        strat_rest.clone(),
+                        &api_symbol,
+                        market,
+                        strat_config.strategy.order_amount_usdt,
+                        &strat_config.risk,
+                    ),
+                );
             }
-            match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                Ok(history) => {
-                    strategy_stats_by_instrument
-                        .insert(selected_symbol.clone(), history.strategy_stats.clone());
-                    realized_pnl_by_symbol.insert(selected_symbol.clone(), history.stats.realized_pnl);
-                    let _ = strat_app_tx
-                        .send(AppEvent::OrderHistoryUpdate(history))
-                        .await;
-                    let _ = strat_app_tx
-                        .send(AppEvent::StrategyStatsUpdate {
-                            strategy_stats: build_scoped_strategy_stats(
-                                &strategy_stats_by_instrument,
-                            ),
-                        })
-                        .await;
+            if let Some(mgr) = order_managers.get_mut(&instrument) {
+                if instrument == selected_symbol {
+                    match mgr.refresh_balances().await {
+                        Ok(balances) => {
+                            let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                        }
+                        Err(e) => {
+                            let _ = strat_app_tx
+                                .send(app_log(
+                                    LogLevel::Warn,
+                                    LogDomain::Portfolio,
+                                    "balance.fetch.fail",
+                                    format!("Balance fetch failed: {}", e),
+                                ))
+                                .await;
+                        }
+                    }
                 }
-                Err(e) => {
-                    let _ = strat_app_tx
-                        .send(app_log(
-                            LogLevel::Warn,
-                            LogDomain::Order,
-                            "history.fetch.fail",
-                            format!("Order history fetch failed: {}", e),
-                        ))
-                        .await;
+                match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                    Ok(history) => {
+                        strategy_stats_by_instrument
+                            .insert(instrument.clone(), history.strategy_stats.clone());
+                        realized_pnl_by_symbol.insert(instrument.clone(), history.stats.realized_pnl);
+                        if instrument == selected_symbol {
+                            let _ = strat_app_tx
+                                .send(AppEvent::OrderHistoryUpdate(history))
+                                .await;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = strat_app_tx
+                            .send(app_log(
+                                LogLevel::Warn,
+                                LogDomain::Order,
+                                "history.fetch.fail",
+                                format!("Order history fetch failed ({}): {}", instrument, e),
+                            ))
+                            .await;
+                    }
                 }
+                emit_rate_snapshot(&strat_app_tx, mgr);
             }
-            emit_rate_snapshot(&strat_app_tx, mgr);
         }
+        let _ = strat_app_tx
+            .send(AppEvent::StrategyStatsUpdate {
+                strategy_stats: build_scoped_strategy_stats(&strategy_stats_by_instrument),
+            })
+            .await;
         let _ = strat_app_tx
             .send(AppEvent::AssetPnlUpdate {
                 by_symbol: build_asset_pnl_snapshot(&order_managers, &realized_pnl_by_symbol),
@@ -2015,6 +2039,52 @@ async fn main() -> Result<()> {
                             StrategyRuntime::from_profile(profile)
                         });
                     }
+                    let bootstrap_instruments =
+                        strategy_instruments_from_profiles(&profiles_by_tag, &selected_symbol);
+                    for instrument in bootstrap_instruments {
+                        if !order_managers.contains_key(&instrument) {
+                            let (api_symbol, market) = parse_instrument_label(&instrument);
+                            order_managers.insert(
+                                instrument.clone(),
+                                OrderManager::new(
+                                    strat_rest.clone(),
+                                    &api_symbol,
+                                    market,
+                                    strat_config.strategy.order_amount_usdt,
+                                    &strat_config.risk,
+                                ),
+                            );
+                        }
+                        if let Some(mgr) = order_managers.get_mut(&instrument) {
+                            if let Ok(history) = mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                strategy_stats_by_instrument
+                                    .insert(instrument.clone(), history.strategy_stats.clone());
+                                realized_pnl_by_symbol
+                                    .insert(instrument.clone(), history.stats.realized_pnl);
+                                if instrument == selected_symbol {
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::OrderHistoryUpdate(history))
+                                        .await;
+                                }
+                            }
+                            emit_rate_snapshot(&strat_app_tx, mgr);
+                        }
+                    }
+                    let _ = strat_app_tx
+                        .send(AppEvent::StrategyStatsUpdate {
+                            strategy_stats: build_scoped_strategy_stats(
+                                &strategy_stats_by_instrument,
+                            ),
+                        })
+                        .await;
+                    let _ = strat_app_tx
+                        .send(AppEvent::AssetPnlUpdate {
+                            by_symbol: build_asset_pnl_snapshot(
+                                &order_managers,
+                                &realized_pnl_by_symbol,
+                            ),
+                        })
+                        .await;
                 }
                 _ = enabled_strategy_tags_rx.changed() => {
                     enabled_strategy_tags = enabled_strategy_tags_rx.borrow().clone();
