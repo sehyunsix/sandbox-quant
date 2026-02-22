@@ -1,3 +1,9 @@
+## v0.16.0 - 2026-02-22
+
+- feat(ui): split asset table by spot/futures and add total pnl (382d745)
+- fix(ui): map new strategy labels to source tags in strategy table (9b166eb)
+- fix(strategy-stats): preload history for all strategy symbols on startup (f2d0c88)
+
 ## v0.15.0 - 2026-02-20
 
 - feat(strategy): add MACD ROC Aroon strategies (97ff700)
