@@ -92,7 +92,10 @@ fn ui_projection_uses_asset_pnl_snapshot_for_asset_rows() {
     legacy.asset_pnl_by_symbol.insert(
         "ETHUSDT".to_string(),
         AssetPnlEntry {
+            is_futures: false,
+            side: None,
             position_qty: 0.5,
+            entry_price: 0.0,
             realized_pnl_usdt: 4.2,
             unrealized_pnl_usdt: 1.1,
         },

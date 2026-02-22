@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::model::candle::Candle;
+use crate::model::order::OrderSide;
 use crate::model::signal::Signal;
 use crate::model::tick::Tick;
 use crate::order_manager::{OrderHistorySnapshot, OrderHistoryStats, OrderUpdate};
@@ -56,7 +57,10 @@ pub enum AppEvent {
 
 #[derive(Debug, Clone, Default)]
 pub struct AssetPnlEntry {
+    pub is_futures: bool,
+    pub side: Option<OrderSide>,
     pub position_qty: f64,
+    pub entry_price: f64,
     pub realized_pnl_usdt: f64,
     pub unrealized_pnl_usdt: f64,
 }
