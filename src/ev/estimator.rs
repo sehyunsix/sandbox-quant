@@ -105,9 +105,14 @@ impl<R: TradeStatsReader> EvEstimator<R> {
         let ev = p_win * avg_win - (1.0 - p_win) * avg_loss - self.cfg.fee_slippage_penalty_usdt;
         let ev_conservative = ev - self.cfg.gamma_tail_penalty * p_tail_loss * q05_loss;
 
-        let expected_holding_ms = local
-            .median_holding_ms()
-            .max(self.cfg.timeout_ms_default.min(1));
+        let expected_holding_ms = {
+            let median = local.median_holding_ms();
+            if median == 0 {
+                self.cfg.timeout_ms_default.max(1)
+            } else {
+                median
+            }
+        };
 
         let confidence = confidence_from_n_eff(n_eff);
 
@@ -175,4 +180,3 @@ fn confidence_from_n_eff(n_eff: f64) -> ConfidenceLevel {
         ConfidenceLevel::Low
     }
 }
-
