@@ -1363,10 +1363,8 @@ impl OrderManager {
 
     /// Attempt to place a protective stop for the currently open position.
     ///
-    /// Current broker adapter does not yet expose stop-order placement in a
-    /// unified way, so this method currently returns `Ok(None)` after logging.
-    /// It exists to stabilize runtime integration points for later exchange/API
-    /// support.
+    /// Futures: submits `STOP_MARKET` reduce-only order.
+    /// Spot: currently returns `Ok(None)` (spot stop order path is not yet wired).
     pub async fn place_protective_stop_for_open_position(
         &mut self,
         source_tag: &str,
@@ -1375,14 +1373,52 @@ impl OrderManager {
         if self.position.is_flat() {
             return Ok(None);
         }
-        tracing::warn!(
-            symbol = %self.symbol,
-            market = %normalize_market_label(self.market),
-            source_tag = %source_tag,
-            stop_price,
-            "Protective stop placement requested but broker adapter stop-order API is not yet implemented"
+        let stop_side = match self.position.side {
+            Some(OrderSide::Buy) => OrderSide::Sell,
+            Some(OrderSide::Sell) => OrderSide::Buy,
+            None => return Ok(None),
+        };
+        let qty = self.position.qty.max(0.0);
+        if qty <= f64::EPSILON {
+            return Ok(None);
+        }
+
+        if self.market != MarketKind::Futures {
+            tracing::warn!(
+                symbol = %self.symbol,
+                market = %normalize_market_label(self.market),
+                source_tag = %source_tag,
+                stop_price,
+                "Spot protective stop placement is not implemented yet; skipping"
+            );
+            return Ok(None);
+        }
+
+        let client_order_id = format!(
+            "sq-{}-stp-{}",
+            source_tag.to_ascii_lowercase(),
+            &uuid::Uuid::new_v4().to_string()[..8]
         );
-        Ok(None)
+        let res = self
+            .rest_client
+            .place_futures_stop_market_order(
+                &self.symbol,
+                stop_side,
+                qty,
+                stop_price,
+                &client_order_id,
+            )
+            .await?;
+        tracing::info!(
+            symbol = %self.symbol,
+            stop_order_id = res.order_id,
+            stop_side = %stop_side,
+            stop_price,
+            qty,
+            source_tag = %source_tag,
+            "Protective stop order submitted"
+        );
+        Ok(Some(res.order_id.to_string()))
     }
 
     /// Ensure a protective stop exists for open position.
