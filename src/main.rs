@@ -1716,6 +1716,8 @@ async fn main() -> Result<()> {
         );
         let ev_enabled = strat_config.ev.enabled;
         let ev_shadow_mode = strat_config.ev.mode.eq_ignore_ascii_case("shadow");
+        let ev_soft_mode = strat_config.ev.mode.eq_ignore_ascii_case("soft");
+        let ev_hard_mode = strat_config.ev.mode.eq_ignore_ascii_case("hard");
         let mut pending_entry_expectancy: HashMap<String, EntryExpectancySnapshot> = HashMap::new();
         let mut lifecycle_engine = PositionLifecycleEngine::default();
         let mut lifecycle_triggered_once: HashSet<String> = HashSet::new();
@@ -1995,21 +1997,40 @@ async fn main() -> Result<()> {
                     if let Some(mgr) = order_managers.get_mut(&instrument) {
                         let source_tag_lc = source_tag.to_ascii_lowercase();
                         let is_buy_entry_attempt = matches!(signal, Signal::Buy) && mgr.position().is_flat();
+                        let mut block_by_ev_gate = false;
                         if ev_enabled && is_buy_entry_attempt {
                             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
                             match ev_estimator.estimate_entry_expectancy(&source_tag_lc, &instrument, now_ms) {
                                 Ok(snapshot) => {
                                     let ev = snapshot.expected_return_usdt;
                                     let p_win = snapshot.probability.p_win;
+                                    if ev_hard_mode && ev <= strat_config.ev.entry_gate_min_ev_usdt {
+                                        block_by_ev_gate = true;
+                                    }
                                     pending_entry_expectancy.insert(instrument.clone(), snapshot);
                                     let _ = strat_app_tx
                                         .send(app_log(
-                                            LogLevel::Info,
+                                            if block_by_ev_gate {
+                                                LogLevel::Warn
+                                            } else {
+                                                LogLevel::Info
+                                            },
                                             LogDomain::Strategy,
-                                                    "ev.entry.snapshot",
+                                            if block_by_ev_gate {
+                                                "ev.entry.gate.block"
+                                            } else if ev_soft_mode && ev <= strat_config.ev.entry_gate_min_ev_usdt {
+                                                "ev.entry.gate.soft_warn"
+                                            } else {
+                                                "ev.entry.snapshot"
+                                            },
                                             format!(
-                                                "EV snapshot: {} src={} ev={:+.4} p_win={:.3}",
-                                                instrument, source_tag_lc, ev, p_win
+                                                "EV snapshot: {} src={} mode={} ev={:+.4} p_win={:.3} gate_min={:+.4}",
+                                                instrument,
+                                                source_tag_lc,
+                                                strat_config.ev.mode,
+                                                ev,
+                                                p_win,
+                                                strat_config.ev.entry_gate_min_ev_usdt
                                             ),
                                         ))
                                         .await;
@@ -2021,13 +2042,16 @@ async fn main() -> Result<()> {
                                             LogDomain::Strategy,
                                             "ev.entry.snapshot.fail",
                                             format!(
-                                                "EV snapshot failed (shadow) [{}|{}]: {}",
+                                                "EV snapshot failed [{}|{}]: {}",
                                                 instrument, source_tag_lc, e
                                             ),
                                         ))
                                         .await;
                                 }
                             }
+                        }
+                        if block_by_ev_gate {
+                            continue;
                         }
 
                         match mgr.submit_order(signal, &source_tag_lc).await {
