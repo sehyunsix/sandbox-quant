@@ -1,3 +1,7 @@
+## v0.23.0 - 2026-02-24
+
+- feat: feed EV estimator from persisted order-store trades (0c949a6)
+
 ## v0.22.0 - 2026-02-24
 
 - feat: use order-manager exit helpers in runtime lifecycle flow (2ee5a68)
