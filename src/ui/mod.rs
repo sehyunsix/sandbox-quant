@@ -11,7 +11,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord, WsConnectionStatus};
+use crate::event::{
+    AppEvent, AssetPnlEntry, EvSnapshotEntry, ExitPolicyEntry, LogDomain, LogLevel, LogRecord,
+    WsConnectionStatus,
+};
 use crate::model::candle::{Candle, CandleBuilder};
 use crate::model::order::{Fill, OrderSide};
 use crate::model::position::Position;
@@ -95,6 +98,8 @@ pub struct AppState {
     pub history_realized_pnl: f64,
     pub asset_pnl_by_symbol: HashMap<String, AssetPnlEntry>,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
+    pub ev_snapshot_by_scope: HashMap<String, EvSnapshotEntry>,
+    pub exit_policy_by_scope: HashMap<String, ExitPolicyEntry>,
     pub history_fills: Vec<OrderHistoryFill>,
     pub last_price_update_ms: Option<u64>,
     pub last_price_event_ms: Option<u64>,
@@ -198,6 +203,8 @@ impl AppState {
             history_realized_pnl: 0.0,
             asset_pnl_by_symbol: HashMap::new(),
             strategy_stats: HashMap::new(),
+            ev_snapshot_by_scope: HashMap::new(),
+            exit_policy_by_scope: HashMap::new(),
             history_fills: Vec::new(),
             last_price_update_ms: None,
             last_price_event_ms: None,
@@ -999,6 +1006,44 @@ impl AppState {
                 rebuild_projection = true;
                 self.strategy_stats = strategy_stats;
             }
+            AppEvent::EvSnapshotUpdate {
+                symbol,
+                source_tag,
+                ev,
+                p_win,
+                gate_mode,
+                gate_blocked,
+            } => {
+                let key = strategy_stats_scope_key(&symbol, &source_tag);
+                self.ev_snapshot_by_scope.insert(
+                    key,
+                    EvSnapshotEntry {
+                        ev,
+                        p_win,
+                        gate_mode,
+                        gate_blocked,
+                        updated_at_ms: chrono::Utc::now().timestamp_millis() as u64,
+                    },
+                );
+            }
+            AppEvent::ExitPolicyUpdate {
+                symbol,
+                source_tag,
+                stop_price,
+                expected_holding_ms,
+                protective_stop_ok,
+            } => {
+                let key = strategy_stats_scope_key(&symbol, &source_tag);
+                self.exit_policy_by_scope.insert(
+                    key,
+                    ExitPolicyEntry {
+                        stop_price,
+                        expected_holding_ms,
+                        protective_stop_ok,
+                        updated_at_ms: chrono::Utc::now().timestamp_millis() as u64,
+                    },
+                );
+            }
             AppEvent::AssetPnlUpdate { by_symbol } => {
                 rebuild_projection = true;
                 self.asset_pnl_by_symbol = by_symbol;
@@ -1108,6 +1153,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.position,
             current_price,
             &state.last_applied_fee,
+            ev_snapshot_for_item(&state.ev_snapshot_by_scope, &state.strategy_label, &state.symbol),
+            exit_policy_for_item(&state.exit_policy_by_scope, &state.strategy_label, &state.symbol),
         ),
         right_panels[0],
     );
@@ -1272,6 +1319,8 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
             &state.position,
             state.last_price(),
             &state.last_applied_fee,
+            ev_snapshot_for_item(&state.ev_snapshot_by_scope, focus_strategy, focus_symbol),
+            exit_policy_for_item(&state.exit_policy_by_scope, focus_strategy, focus_symbol),
         ),
         focus_right[0],
     );
@@ -2762,6 +2811,24 @@ fn strategy_stats_for_item<'a>(
             .get(&tag)
             .or_else(|| stats_map.get(&tag.to_ascii_uppercase()))
     })
+}
+
+fn ev_snapshot_for_item<'a>(
+    ev_map: &'a HashMap<String, EvSnapshotEntry>,
+    item: &str,
+    symbol: &str,
+) -> Option<&'a EvSnapshotEntry> {
+    let source_tag = source_tag_for_strategy_item(item)?;
+    ev_map.get(&strategy_stats_scope_key(symbol, &source_tag))
+}
+
+fn exit_policy_for_item<'a>(
+    policy_map: &'a HashMap<String, ExitPolicyEntry>,
+    item: &str,
+    symbol: &str,
+) -> Option<&'a ExitPolicyEntry> {
+    let source_tag = source_tag_for_strategy_item(item)?;
+    policy_map.get(&strategy_stats_scope_key(symbol, &source_tag))
 }
 
 fn strategy_stats_scope_key(symbol: &str, source_tag: &str) -> String {

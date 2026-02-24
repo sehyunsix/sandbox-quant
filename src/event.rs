@@ -40,6 +40,21 @@ pub enum AppEvent {
     StrategyStatsUpdate {
         strategy_stats: HashMap<String, OrderHistoryStats>,
     },
+    EvSnapshotUpdate {
+        symbol: String,
+        source_tag: String,
+        ev: f64,
+        p_win: f64,
+        gate_mode: String,
+        gate_blocked: bool,
+    },
+    ExitPolicyUpdate {
+        symbol: String,
+        source_tag: String,
+        stop_price: Option<f64>,
+        expected_holding_ms: Option<u64>,
+        protective_stop_ok: Option<bool>,
+    },
     AssetPnlUpdate {
         by_symbol: HashMap<String, AssetPnlEntry>,
     },
@@ -53,6 +68,23 @@ pub enum AppEvent {
     LogRecord(LogRecord),
     LogMessage(String),
     Error(String),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EvSnapshotEntry {
+    pub ev: f64,
+    pub p_win: f64,
+    pub gate_mode: String,
+    pub gate_blocked: bool,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExitPolicyEntry {
+    pub stop_price: Option<f64>,
+    pub expected_holding_ms: Option<u64>,
+    pub protective_stop_ok: Option<bool>,
+    pub updated_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Default)]
