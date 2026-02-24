@@ -1,3 +1,7 @@
+## v0.18.0 - 2026-02-24
+
+- feat: wire EV/lifecycle shadow tracking into runtime loop (d4c25b1)
+
 ## v0.17.0 - 2026-02-24
 
 - feat: scaffold EV estimator and position lifecycle modules (12a5fbb)
