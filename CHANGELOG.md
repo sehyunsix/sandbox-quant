@@ -1,3 +1,7 @@
+## v0.29.0 - 2026-02-24
+
+- feat(ui): add grid history tab and EV fallback for strategy rows (92950fe)
+
 ## v0.28.0 - 2026-02-24
 
 - feat: add EV/Gate/Stop columns to grid strategy tables (ff5ee59)
