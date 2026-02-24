@@ -1,3 +1,7 @@
+## v0.20.0 - 2026-02-24
+
+- feat: execute lifecycle exits via internal runtime queue (162bf6c)
+
 ## v0.19.0 - 2026-02-24
 
 - feat: make EV/exit runtime wiring configurable (b58c202)
