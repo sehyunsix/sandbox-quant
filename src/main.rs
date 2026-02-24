@@ -49,7 +49,6 @@ use sandbox_quant::ui::{AppState, GridTab};
 
 const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
-const EV_LOOKBACK_TRADES: usize = 200;
 
 #[derive(Clone, Default)]
 struct EmptyTradeStatsReader;
@@ -1641,8 +1640,27 @@ async fn main() -> Result<()> {
         let mut realized_pnl_by_symbol: HashMap<String, f64> = HashMap::new();
         let mut strategy_stats_by_instrument: HashMap<String, HashMap<String, OrderHistoryStats>> =
             HashMap::new();
-        let ev_estimator =
-            EvEstimator::new(EvEstimatorConfig::default(), EmptyTradeStatsReader, EV_LOOKBACK_TRADES);
+        let ev_cfg = EvEstimatorConfig {
+            prior_a: strat_config.ev.prior_a,
+            prior_b: strat_config.ev.prior_b,
+            tail_prior_a: strat_config.ev.tail_prior_a,
+            tail_prior_b: strat_config.ev.tail_prior_b,
+            recency_lambda: strat_config.ev.recency_lambda,
+            shrink_k: strat_config.ev.shrink_k,
+            loss_threshold_usdt: strat_config.ev.loss_threshold_usdt,
+            timeout_ms_default: strat_config.exit.max_holding_ms,
+            gamma_tail_penalty: strat_config.ev.gamma_tail_penalty,
+            fee_slippage_penalty_usdt: strat_config.ev.fee_slippage_penalty_usdt,
+            prob_model_version: "beta-binomial-v1".to_string(),
+            ev_model_version: "ev-conservative-v1".to_string(),
+        };
+        let ev_estimator = EvEstimator::new(
+            ev_cfg,
+            EmptyTradeStatsReader,
+            strat_config.ev.lookback_trades.max(1),
+        );
+        let ev_enabled = strat_config.ev.enabled;
+        let ev_shadow_mode = strat_config.ev.mode.eq_ignore_ascii_case("shadow");
         let mut pending_entry_expectancy: HashMap<String, EntryExpectancySnapshot> = HashMap::new();
         let mut lifecycle_engine = PositionLifecycleEngine::default();
         let mut lifecycle_triggered_once: HashSet<String> = HashSet::new();
@@ -1789,21 +1807,25 @@ async fn main() -> Result<()> {
 
                     if let Some(mgr) = order_managers.get_mut(&tick_symbol) {
                         mgr.update_unrealized_pnl(tick.price);
-                        if let Some(trigger) = lifecycle_engine.on_tick(&tick_symbol, tick.price, now_ms) {
-                            if !lifecycle_triggered_once.contains(&tick_symbol) {
-                                lifecycle_triggered_once.insert(tick_symbol.clone());
-                                let reason_code = ExitOrchestrator::decide(trigger);
-                                let _ = strat_app_tx
-                                    .send(app_log(
-                                        LogLevel::Info,
-                                        LogDomain::Risk,
-                                        "lifecycle.exit.trigger.shadow",
-                                        format!(
-                                            "Lifecycle exit trigger (shadow): {} ({})",
-                                            tick_symbol, reason_code
-                                        ),
-                                    ))
-                                    .await;
+                        if ev_enabled && ev_shadow_mode {
+                            if let Some(trigger) =
+                                lifecycle_engine.on_tick(&tick_symbol, tick.price, now_ms)
+                            {
+                                if !lifecycle_triggered_once.contains(&tick_symbol) {
+                                    lifecycle_triggered_once.insert(tick_symbol.clone());
+                                    let reason_code = ExitOrchestrator::decide(trigger);
+                                    let _ = strat_app_tx
+                                        .send(app_log(
+                                            LogLevel::Info,
+                                            LogDomain::Risk,
+                                            "lifecycle.exit.trigger.shadow",
+                                            format!(
+                                                "Lifecycle exit trigger (shadow): {} ({})",
+                                                tick_symbol, reason_code
+                                            ),
+                                        ))
+                                        .await;
+                                }
                             }
                         }
                         if tick_symbol == selected_symbol {
@@ -1898,7 +1920,7 @@ async fn main() -> Result<()> {
                     if let Some(mgr) = order_managers.get_mut(&instrument) {
                         let source_tag_lc = source_tag.to_ascii_lowercase();
                         let is_buy_entry_attempt = matches!(signal, Signal::Buy) && mgr.position().is_flat();
-                        if is_buy_entry_attempt {
+                        if ev_enabled && ev_shadow_mode && is_buy_entry_attempt {
                             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
                             match ev_estimator.estimate_entry_expectancy(&source_tag_lc, &instrument, now_ms) {
                                 Ok(snapshot) => {
@@ -1974,7 +1996,9 @@ async fn main() -> Result<()> {
                                 }
                                 if let OrderUpdate::Filled { side, fills, avg_price, .. } = update {
                                     let filled_qty: f64 = fills.iter().map(|f| f.qty).sum();
-                                    if matches!(side, sandbox_quant::model::order::OrderSide::Buy)
+                                    if ev_enabled
+                                        && ev_shadow_mode
+                                        && matches!(side, sandbox_quant::model::order::OrderSide::Buy)
                                         && is_buy_entry_attempt
                                         && filled_qty > f64::EPSILON
                                     {
@@ -2014,7 +2038,9 @@ async fn main() -> Result<()> {
                                         }
                                     }
 
-                                    if matches!(side, sandbox_quant::model::order::OrderSide::Sell)
+                                    if ev_enabled
+                                        && ev_shadow_mode
+                                        && matches!(side, sandbox_quant::model::order::OrderSide::Sell)
                                         && mgr.position().is_flat()
                                     {
                                         lifecycle_triggered_once.remove(&instrument);

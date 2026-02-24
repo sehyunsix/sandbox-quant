@@ -69,12 +69,16 @@ level = "debug"
         config.risk.symbol_exposure_limits[0].market.as_deref(),
         Some("spot")
     );
-    assert!(
-        (config.risk.symbol_exposure_limits[0].max_exposure_usdt - 300.0).abs() < f64::EPSILON
-    );
+    assert!((config.risk.symbol_exposure_limits[0].max_exposure_usdt - 300.0).abs() < f64::EPSILON);
     assert_eq!(config.risk.endpoint_rate_limits.orders_per_minute, 240);
     assert_eq!(config.risk.endpoint_rate_limits.account_per_minute, 180);
     assert_eq!(config.risk.endpoint_rate_limits.market_data_per_minute, 360);
+    assert!(config.ev.enabled);
+    assert_eq!(config.ev.mode, "shadow");
+    assert_eq!(config.ev.lookback_trades, 200);
+    assert_eq!(config.exit.max_holding_ms, 1_800_000);
+    assert!((config.exit.stop_loss_pct - 0.015).abs() < f64::EPSILON);
+    assert!(config.exit.enforce_protective_stop);
     assert_eq!(config.ui.price_history_len, 120);
 }
 
