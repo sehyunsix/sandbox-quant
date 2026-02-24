@@ -1,3 +1,7 @@
+## v0.19.0 - 2026-02-24
+
+- feat: make EV/exit runtime wiring configurable (b58c202)
+
 ## v0.18.0 - 2026-02-24
 
 - feat: wire EV/lifecycle shadow tracking into runtime loop (d4c25b1)
