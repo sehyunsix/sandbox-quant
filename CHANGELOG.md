@@ -1,3 +1,7 @@
+## v0.21.0 - 2026-02-24
+
+- feat: add order manager protective-stop and emergency-close APIs (252bed9)
+
 ## v0.20.0 - 2026-02-24
 
 - feat: execute lifecycle exits via internal runtime queue (162bf6c)
