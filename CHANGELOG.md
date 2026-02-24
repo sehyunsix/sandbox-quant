@@ -1,3 +1,7 @@
+## v0.26.0 - 2026-02-24
+
+- feat: submit futures protective STOP_MARKET orders (451a9df)
+
 ## v0.25.0 - 2026-02-24
 
 - feat: add EV/exit metadata columns to order history schema (3682bfc)
