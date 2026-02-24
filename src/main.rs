@@ -1665,6 +1665,7 @@ async fn main() -> Result<()> {
         let mut lifecycle_engine = PositionLifecycleEngine::default();
         let mut lifecycle_triggered_once: HashSet<String> = HashSet::new();
         let (risk_eval_tx, mut risk_eval_rx) = mpsc::channel::<(Signal, String, String)>(64);
+        let (internal_exit_tx, mut internal_exit_rx) = mpsc::channel::<(String, String)>(64);
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
         let mut last_asset_pnl_emit_ms: u64 = 0;
@@ -1807,24 +1808,43 @@ async fn main() -> Result<()> {
 
                     if let Some(mgr) = order_managers.get_mut(&tick_symbol) {
                         mgr.update_unrealized_pnl(tick.price);
-                        if ev_enabled && ev_shadow_mode {
+                        if ev_enabled {
                             if let Some(trigger) =
                                 lifecycle_engine.on_tick(&tick_symbol, tick.price, now_ms)
                             {
                                 if !lifecycle_triggered_once.contains(&tick_symbol) {
                                     lifecycle_triggered_once.insert(tick_symbol.clone());
-                                    let reason_code = ExitOrchestrator::decide(trigger);
-                                    let _ = strat_app_tx
-                                        .send(app_log(
-                                            LogLevel::Info,
-                                            LogDomain::Risk,
-                                            "lifecycle.exit.trigger.shadow",
-                                            format!(
-                                                "Lifecycle exit trigger (shadow): {} ({})",
-                                                tick_symbol, reason_code
-                                            ),
-                                        ))
-                                        .await;
+                                    let reason_code = ExitOrchestrator::decide(trigger).to_string();
+                                    if ev_shadow_mode {
+                                        let _ = strat_app_tx
+                                            .send(app_log(
+                                                LogLevel::Info,
+                                                LogDomain::Risk,
+                                                "lifecycle.exit.trigger.shadow",
+                                                format!(
+                                                    "Lifecycle exit trigger (shadow): {} ({})",
+                                                    tick_symbol, reason_code
+                                                ),
+                                            ))
+                                            .await;
+                                    } else if let Err(e) = internal_exit_tx
+                                        .send((tick_symbol.clone(), reason_code.clone()))
+                                        .await
+                                    {
+                                        tracing::error!(error = %e, "Failed to enqueue internal exit");
+                                    } else {
+                                        let _ = strat_app_tx
+                                            .send(app_log(
+                                                LogLevel::Info,
+                                                LogDomain::Risk,
+                                                "lifecycle.exit.trigger",
+                                                format!(
+                                                    "Lifecycle exit trigger queued: {} ({})",
+                                                    tick_symbol, reason_code
+                                                ),
+                                            ))
+                                            .await;
+                                    }
                                 }
                             }
                         }
@@ -1920,7 +1940,7 @@ async fn main() -> Result<()> {
                     if let Some(mgr) = order_managers.get_mut(&instrument) {
                         let source_tag_lc = source_tag.to_ascii_lowercase();
                         let is_buy_entry_attempt = matches!(signal, Signal::Buy) && mgr.position().is_flat();
-                        if ev_enabled && ev_shadow_mode && is_buy_entry_attempt {
+                        if ev_enabled && is_buy_entry_attempt {
                             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
                             match ev_estimator.estimate_entry_expectancy(&source_tag_lc, &instrument, now_ms) {
                                 Ok(snapshot) => {
@@ -1931,9 +1951,9 @@ async fn main() -> Result<()> {
                                         .send(app_log(
                                             LogLevel::Info,
                                             LogDomain::Strategy,
-                                            "ev.entry.snapshot.shadow",
+                                                    "ev.entry.snapshot",
                                             format!(
-                                                "EV snapshot (shadow): {} src={} ev={:+.4} p_win={:.3}",
+                                                "EV snapshot: {} src={} ev={:+.4} p_win={:.3}",
                                                 instrument, source_tag_lc, ev, p_win
                                             ),
                                         ))
@@ -1997,7 +2017,6 @@ async fn main() -> Result<()> {
                                 if let OrderUpdate::Filled { side, fills, avg_price, .. } = update {
                                     let filled_qty: f64 = fills.iter().map(|f| f.qty).sum();
                                     if ev_enabled
-                                        && ev_shadow_mode
                                         && matches!(side, sandbox_quant::model::order::OrderSide::Buy)
                                         && is_buy_entry_attempt
                                         && filled_qty > f64::EPSILON
@@ -2028,9 +2047,9 @@ async fn main() -> Result<()> {
                                                 .send(app_log(
                                                     LogLevel::Info,
                                                     LogDomain::Risk,
-                                                    "lifecycle.entry.shadow",
+                                                    "lifecycle.entry",
                                                     format!(
-                                                        "Lifecycle entry tracked (shadow): {} pos={} hold_ms={}",
+                                                        "Lifecycle entry tracked: {} pos={} hold_ms={}",
                                                         instrument, position_id, expectancy.expected_holding_ms
                                                     ),
                                                 ))
@@ -2039,7 +2058,6 @@ async fn main() -> Result<()> {
                                     }
 
                                     if ev_enabled
-                                        && ev_shadow_mode
                                         && matches!(side, sandbox_quant::model::order::OrderSide::Sell)
                                         && mgr.position().is_flat()
                                     {
@@ -2049,9 +2067,9 @@ async fn main() -> Result<()> {
                                                 .send(app_log(
                                                     LogLevel::Info,
                                                     LogDomain::Risk,
-                                                    "lifecycle.close.shadow",
+                                                    "lifecycle.close",
                                                     format!(
-                                                        "Lifecycle close tracked (shadow): {} pos={} mfe={:+.4} mae={:+.4}",
+                                                        "Lifecycle close tracked: {} pos={} mfe={:+.4} mae={:+.4}",
                                                         instrument, state.position_id, state.mfe_usdt, state.mae_usdt
                                                     ),
                                                 ))
@@ -2059,6 +2077,111 @@ async fn main() -> Result<()> {
                                         }
                                     }
 
+                                    if let Ok(balances) = mgr.refresh_balances().await {
+                                        if instrument == selected_symbol {
+                                            let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                                        }
+                                    }
+                                }
+                                emit_asset_snapshot = true;
+                                emit_rate_snapshot(&strat_app_tx, mgr);
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                let _ = strat_app_tx.send(AppEvent::Error(e.to_string())).await;
+                            }
+                        }
+                    }
+                    if emit_asset_snapshot {
+                        let _ = strat_app_tx
+                            .send(AppEvent::AssetPnlUpdate {
+                                by_symbol: build_asset_pnl_snapshot(
+                                    &order_managers,
+                                    &realized_pnl_by_symbol,
+                                ),
+                            })
+                            .await;
+                    }
+                }
+                Some((instrument, reason_code)) = internal_exit_rx.recv() => {
+                    let source_tag_lc = "sys".to_string();
+                    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    let _ = strat_app_tx
+                        .send(AppEvent::StrategySignal {
+                            signal: Signal::Sell,
+                            symbol: instrument.clone(),
+                            source_tag: source_tag_lc.clone(),
+                            price: None,
+                            timestamp_ms: now_ms,
+                        })
+                        .await;
+                    if !order_managers.contains_key(&instrument) {
+                        let (api_symbol, market) = parse_instrument_label(&instrument);
+                        order_managers.insert(
+                            instrument.clone(),
+                            OrderManager::new(
+                                strat_rest.clone(),
+                                &api_symbol,
+                                market,
+                                strat_config.strategy.order_amount_usdt,
+                                &strat_config.risk,
+                            ),
+                        );
+                    }
+                    let mut emit_asset_snapshot = false;
+                    if let Some(mgr) = order_managers.get_mut(&instrument) {
+                        match mgr.submit_order(Signal::Sell, &source_tag_lc).await {
+                            Ok(Some(ref update)) => {
+                                if instrument == selected_symbol {
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::OrderUpdate(update.clone()))
+                                        .await;
+                                }
+                                match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
+                                    Ok(history) => {
+                                        strategy_stats_by_instrument
+                                            .insert(instrument.clone(), history.strategy_stats.clone());
+                                        realized_pnl_by_symbol
+                                            .insert(instrument.clone(), history.stats.realized_pnl);
+                                        if instrument == selected_symbol {
+                                            let _ = strat_app_tx
+                                                .send(AppEvent::OrderHistoryUpdate(history))
+                                                .await;
+                                        }
+                                        let _ = strat_app_tx
+                                            .send(AppEvent::StrategyStatsUpdate {
+                                                strategy_stats: build_scoped_strategy_stats(
+                                                    &strategy_stats_by_instrument,
+                                                ),
+                                            })
+                                            .await;
+                                    }
+                                    Err(e) => {
+                                        let _ = strat_app_tx
+                                            .send(app_log(
+                                                LogLevel::Warn,
+                                                LogDomain::Order,
+                                                "history.refresh.fail",
+                                                format!("Order history refresh failed: {}", e),
+                                            ))
+                                            .await;
+                                    }
+                                }
+                                if let OrderUpdate::Filled { .. } = update {
+                                    lifecycle_triggered_once.remove(&instrument);
+                                    if let Some(state) = lifecycle_engine.on_position_closed(&instrument) {
+                                        let _ = strat_app_tx
+                                            .send(app_log(
+                                                LogLevel::Info,
+                                                LogDomain::Risk,
+                                                "lifecycle.close.internal",
+                                                format!(
+                                                    "Lifecycle internal close: {} pos={} reason={} mfe={:+.4} mae={:+.4}",
+                                                    instrument, state.position_id, reason_code, state.mfe_usdt, state.mae_usdt
+                                                ),
+                                            ))
+                                            .await;
+                                    }
                                     if let Ok(balances) = mgr.refresh_balances().await {
                                         if instrument == selected_symbol {
                                             let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
