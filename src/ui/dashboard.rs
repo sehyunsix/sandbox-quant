@@ -110,7 +110,7 @@ impl Widget for PositionPanel<'_> {
                 Span::styled(self.last_applied_fee, Style::default().fg(Color::LightBlue)),
             ]),
             Line::from(vec![
-                Span::styled("EV:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled("EV@entry: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     self.ev_snapshot
                         .map(|e| format!("{:+.4}", e.ev))
@@ -125,7 +125,7 @@ impl Widget for PositionPanel<'_> {
                         }
                     })),
                 ),
-                Span::styled("  pW:", Style::default().fg(Color::DarkGray)),
+                Span::styled("  pW@entry:", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     self.ev_snapshot
                         .map(|e| format!("{:.2}", e.p_win))
