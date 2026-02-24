@@ -337,6 +337,121 @@ pub fn load_persisted_trades(symbol: &str) -> Result<Vec<PersistedTrade>> {
     Ok(trades)
 }
 
+pub fn load_recent_persisted_trades_filtered(
+    symbol: Option<&str>,
+    source: Option<&str>,
+    limit: usize,
+) -> Result<Vec<PersistedTrade>> {
+    std::fs::create_dir_all("data")?;
+    let conn = Connection::open("data/order_history.sqlite")?;
+    ensure_trade_schema(&conn)?;
+
+    let limit = limit.max(1) as i64;
+    let (sql, bind_symbol, bind_source) = match (symbol, source) {
+        (Some(_), Some(_)) => (
+            r#"
+            SELECT symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, realized_pnl, source
+            FROM order_history_trades
+            WHERE symbol = ?1 AND LOWER(source) = LOWER(?2)
+            ORDER BY event_time_ms DESC, trade_id DESC
+            LIMIT ?3
+            "#,
+            true,
+            true,
+        ),
+        (Some(_), None) => (
+            r#"
+            SELECT symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, realized_pnl, source
+            FROM order_history_trades
+            WHERE symbol = ?1
+            ORDER BY event_time_ms DESC, trade_id DESC
+            LIMIT ?2
+            "#,
+            true,
+            false,
+        ),
+        (None, Some(_)) => (
+            r#"
+            SELECT symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, realized_pnl, source
+            FROM order_history_trades
+            WHERE LOWER(source) = LOWER(?1)
+            ORDER BY event_time_ms DESC, trade_id DESC
+            LIMIT ?2
+            "#,
+            false,
+            true,
+        ),
+        (None, None) => (
+            r#"
+            SELECT symbol, trade_id, order_id, side, qty, price, commission, commission_asset, event_time_ms, realized_pnl, source
+            FROM order_history_trades
+            ORDER BY event_time_ms DESC, trade_id DESC
+            LIMIT ?1
+            "#,
+            false,
+            false,
+        ),
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let mut out = Vec::new();
+    match (bind_symbol, bind_source) {
+        (true, true) => {
+            let rows = stmt.query_map(
+                params![symbol.unwrap_or_default(), source.unwrap_or_default(), limit],
+                map_persisted_trade_row,
+            )?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        (true, false) => {
+            let rows = stmt.query_map(
+                params![symbol.unwrap_or_default(), limit],
+                map_persisted_trade_row,
+            )?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        (false, true) => {
+            let rows = stmt.query_map(
+                params![source.unwrap_or_default(), limit],
+                map_persisted_trade_row,
+            )?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        (false, false) => {
+            let rows = stmt.query_map(params![limit], map_persisted_trade_row)?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn map_persisted_trade_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PersistedTrade> {
+    Ok(PersistedTrade {
+        trade: BinanceMyTrade {
+            symbol: row.get::<_, String>(0)?,
+            id: row.get::<_, i64>(1)? as u64,
+            order_id: row.get::<_, i64>(2)? as u64,
+            price: row.get(5)?,
+            qty: row.get(4)?,
+            commission: row.get(6)?,
+            commission_asset: row.get(7)?,
+            time: row.get::<_, i64>(8)? as u64,
+            realized_pnl: row.get(9)?,
+            is_buyer: row.get::<_, String>(3)?.eq_ignore_ascii_case("BUY"),
+            is_maker: false,
+        },
+        source: row.get(10)?,
+    })
+}
+
 pub fn load_last_trade_id(symbol: &str) -> Result<Option<u64>> {
     std::fs::create_dir_all("data")?;
     let conn = Connection::open("data/order_history.sqlite")?;

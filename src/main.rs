@@ -10,7 +10,8 @@ use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
 use sandbox_quant::ev::{
-    EntryExpectancySnapshot, EvEstimator, EvEstimatorConfig, TradeStatsReader, TradeStatsWindow,
+    EntryExpectancySnapshot, EvEstimator, EvEstimatorConfig, TradeStatsReader, TradeStatsSample,
+    TradeStatsWindow,
 };
 use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
 use sandbox_quant::input::{
@@ -51,21 +52,66 @@ const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
 
 #[derive(Clone, Default)]
-struct EmptyTradeStatsReader;
+struct OrderStoreTradeStatsReader;
 
-impl TradeStatsReader for EmptyTradeStatsReader {
+impl TradeStatsReader for OrderStoreTradeStatsReader {
     fn load_local_stats(
         &self,
-        _source_tag: &str,
-        _instrument: &str,
-        _lookback: usize,
+        source_tag: &str,
+        instrument: &str,
+        lookback: usize,
     ) -> Result<TradeStatsWindow> {
-        Ok(TradeStatsWindow::default())
+        let symbol = storage_symbol_for_instrument(instrument);
+        let rows = order_store::load_recent_persisted_trades_filtered(
+            Some(&symbol),
+            None,
+            lookback.saturating_mul(6).max(20),
+        )?;
+        Ok(build_trade_stats_window(rows, Some(source_tag), lookback))
     }
 
-    fn load_global_stats(&self, _source_tag: &str, _lookback: usize) -> Result<TradeStatsWindow> {
-        Ok(TradeStatsWindow::default())
+    fn load_global_stats(&self, source_tag: &str, lookback: usize) -> Result<TradeStatsWindow> {
+        let rows = order_store::load_recent_persisted_trades_filtered(
+            None,
+            None,
+            lookback.saturating_mul(10).max(50),
+        )?;
+        Ok(build_trade_stats_window(rows, Some(source_tag), lookback))
     }
+}
+
+fn build_trade_stats_window(
+    rows: Vec<order_store::PersistedTrade>,
+    source_tag_filter: Option<&str>,
+    limit: usize,
+) -> TradeStatsWindow {
+    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+    let filter = source_tag_filter
+        .map(|s| canonical_strategy_tag(s))
+        .unwrap_or_default();
+    let mut samples: Vec<TradeStatsSample> = rows
+        .into_iter()
+        .filter(|row| {
+            if filter.is_empty() {
+                return true;
+            }
+            canonical_strategy_tag(&row.source) == filter
+        })
+        .filter(|row| row.trade.realized_pnl.abs() > f64::EPSILON)
+        .map(|row| {
+            let age_ms = now_ms.saturating_sub(row.trade.time);
+            TradeStatsSample {
+                age_days: age_ms as f64 / 86_400_000.0,
+                pnl_usdt: row.trade.realized_pnl,
+                // Holding time is not persisted yet; keep a conservative placeholder.
+                holding_ms: 60_000,
+            }
+        })
+        .collect();
+    if samples.len() > limit {
+        samples.truncate(limit);
+    }
+    TradeStatsWindow { samples }
 }
 
 #[derive(Debug)]
@@ -244,6 +290,15 @@ fn normalize_instrument_label(label: &str) -> String {
     let (symbol, market) = parse_instrument_label(label);
     if market == MarketKind::Futures {
         format!("{} (FUT)", symbol)
+    } else {
+        symbol
+    }
+}
+
+fn storage_symbol_for_instrument(label: &str) -> String {
+    let (symbol, market) = parse_instrument_label(label);
+    if market == MarketKind::Futures {
+        format!("{}#FUT", symbol)
     } else {
         symbol
     }
@@ -1656,7 +1711,7 @@ async fn main() -> Result<()> {
         };
         let ev_estimator = EvEstimator::new(
             ev_cfg,
-            EmptyTradeStatsReader,
+            OrderStoreTradeStatsReader,
             strat_config.ev.lookback_trades.max(1),
         );
         let ev_enabled = strat_config.ev.enabled;
