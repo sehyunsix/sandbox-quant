@@ -1,3 +1,7 @@
+## v0.22.0 - 2026-02-24
+
+- feat: use order-manager exit helpers in runtime lifecycle flow (2ee5a68)
+
 ## v0.21.0 - 2026-02-24
 
 - feat: add order manager protective-stop and emergency-close APIs (252bed9)
