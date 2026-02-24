@@ -1,3 +1,7 @@
+## v0.24.0 - 2026-02-24
+
+- feat: apply EV soft/hard gate policy in entry path (732f04e)
+
 ## v0.23.0 - 2026-02-24
 
 - feat: feed EV estimator from persisted order-store trades (0c949a6)
