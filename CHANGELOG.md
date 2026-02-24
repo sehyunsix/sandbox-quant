@@ -1,3 +1,7 @@
+## v0.25.0 - 2026-02-24
+
+- feat: add EV/exit metadata columns to order history schema (3682bfc)
+
 ## v0.24.0 - 2026-02-24
 
 - feat: apply EV soft/hard gate policy in entry path (732f04e)
