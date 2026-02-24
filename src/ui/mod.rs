@@ -2181,6 +2181,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             Cell::from("L"),
             Cell::from("T"),
             Cell::from("PnL"),
+            Cell::from("EV"),
+            Cell::from("Gate"),
+            Cell::from("Stop"),
         ])
         .style(Style::default().fg(Color::DarkGray));
         let mut rows: Vec<Row> = visible_indices
@@ -2203,6 +2206,8 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     .map(format_running_time)
                     .unwrap_or_else(|| "-".to_string());
                 let stats = strategy_stats_for_item(&state.strategy_stats, &item, row_symbol);
+                let ev_snapshot = ev_snapshot_for_item(&state.ev_snapshot_by_scope, &item, row_symbol);
+                let exit_policy = exit_policy_for_item(&state.exit_policy_by_scope, &item, row_symbol);
                 let source_tag = source_tag_for_strategy_item(&item);
                 let last_evt = source_tag
                     .as_ref()
@@ -2256,6 +2261,22 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                         "+0.0000".to_string(),
                     )
                 };
+                let ev_txt = ev_snapshot
+                    .map(|v| format!("{:+.3}", v.ev))
+                    .unwrap_or_else(|| "-".to_string());
+                let gate_txt = ev_snapshot
+                    .map(|v| {
+                        if v.gate_blocked {
+                            "BLOCK".to_string()
+                        } else {
+                            v.gate_mode.to_ascii_uppercase()
+                        }
+                    })
+                    .unwrap_or_else(|| "-".to_string());
+                let stop_txt = exit_policy
+                    .and_then(|p| p.stop_price)
+                    .map(|v| format!("{:.2}", v))
+                    .unwrap_or_else(|| "-".to_string());
                 let marker = if *idx == view.selected_strategy_index {
                     "▶"
                 } else {
@@ -2273,6 +2294,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     Cell::from(l),
                     Cell::from(t),
                     Cell::from(pnl),
+                    Cell::from(ev_txt),
+                    Cell::from(gate_txt),
+                    Cell::from(stop_txt),
                 ]);
                 if *idx == view.selected_strategy_index {
                     row = row.style(
@@ -2291,6 +2315,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     Cell::from(" "),
                     Cell::from("-"),
                     Cell::from("(empty)"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
                     Cell::from("-"),
                     Cell::from("-"),
                     Cell::from("-"),
@@ -2318,6 +2345,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 Constraint::Length(3),
                 Constraint::Length(4),
                 Constraint::Length(11),
+                Constraint::Length(8),
+                Constraint::Length(7),
+                Constraint::Length(10),
             ],
         )
         .header(header)
