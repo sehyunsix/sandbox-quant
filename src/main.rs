@@ -2137,21 +2137,28 @@ async fn main() -> Result<()> {
                                         if strat_config.exit.enforce_protective_stop {
                                             let stop_price =
                                                 *avg_price * (1.0 - strat_config.exit.stop_loss_pct.max(0.0));
-                                            match mgr.ensure_protective_stop(&source_tag_lc, stop_price).await {
-                                                Ok(true) => {
+                                            match mgr
+                                                .place_protective_stop_for_open_position(&source_tag_lc, stop_price)
+                                                .await
+                                            {
+                                                Ok(Some(stop_order_id)) => {
+                                                    lifecycle_engine.set_stop_loss_order_id(
+                                                        &instrument,
+                                                        Some(stop_order_id.clone()),
+                                                    );
                                                     let _ = strat_app_tx
                                                         .send(app_log(
                                                             LogLevel::Info,
                                                             LogDomain::Risk,
                                                             "protective_stop.ensure",
                                                             format!(
-                                                                "Protective stop ensured: {} src={} stop={:.4}",
-                                                                instrument, source_tag_lc, stop_price
+                                                                "Protective stop ensured: {} src={} stop={:.4} order={}",
+                                                                instrument, source_tag_lc, stop_price, stop_order_id
                                                             ),
                                                         ))
                                                         .await;
                                                 }
-                                                Ok(false) => {
+                                                Ok(None) => {
                                                     let _ = strat_app_tx
                                                         .send(app_log(
                                                             LogLevel::Warn,
@@ -2163,6 +2170,14 @@ async fn main() -> Result<()> {
                                                             ),
                                                         ))
                                                         .await;
+                                                    if !ev_shadow_mode {
+                                                        let _ = internal_exit_tx
+                                                            .send((
+                                                                instrument.clone(),
+                                                                "exit.stop_loss_protection".to_string(),
+                                                            ))
+                                                            .await;
+                                                    }
                                                 }
                                                 Err(e) => {
                                                     let _ = strat_app_tx
@@ -2176,6 +2191,14 @@ async fn main() -> Result<()> {
                                                             ),
                                                         ))
                                                         .await;
+                                                    if !ev_shadow_mode {
+                                                        let _ = internal_exit_tx
+                                                            .send((
+                                                                instrument.clone(),
+                                                                "exit.stop_loss_protection".to_string(),
+                                                            ))
+                                                            .await;
+                                                    }
                                                 }
                                             }
                                         }
