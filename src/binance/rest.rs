@@ -342,6 +342,92 @@ impl BinanceRestClient {
         })
     }
 
+    pub async fn place_futures_stop_market_order(
+        &self,
+        symbol: &str,
+        side: OrderSide,
+        quantity: f64,
+        stop_price: f64,
+        client_order_id: &str,
+    ) -> Result<BinanceOrderResponse> {
+        self.check_rate_limit();
+
+        let query = format!(
+            "symbol={}&side={}&type=STOP_MARKET&quantity={:.5}&stopPrice={:.5}&reduceOnly=true&newClientOrderId={}&newOrderRespType=RESULT",
+            symbol,
+            side.as_binance_str(),
+            quantity,
+            stop_price,
+            client_order_id,
+        );
+        let signed = self.sign_futures(&query);
+        let url = format!("{}/fapi/v1/order?{}", self.futures_base_url, signed);
+
+        tracing::info!(
+            symbol,
+            side = %side,
+            quantity,
+            stop_price,
+            client_order_id,
+            "Placing futures stop-market order"
+        );
+
+        let resp = self
+            .http
+            .post(&url)
+            .header("X-MBX-APIKEY", &self.futures_api_key)
+            .send()
+            .await
+            .context("place_futures_stop_market_order HTTP failed")?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Ok(err) = serde_json::from_str::<super::types::BinanceApiErrorResponse>(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Futures stop order request failed: {}",
+                body
+            ));
+        }
+
+        let fut: BinanceFuturesOrderResponse = resp.json().await?;
+        let avg = if fut.avg_price > 0.0 {
+            fut.avg_price
+        } else if fut.price > 0.0 {
+            fut.price
+        } else {
+            0.0
+        };
+        let fills = if fut.executed_qty > 0.0 && avg > 0.0 {
+            vec![super::types::BinanceFill {
+                price: avg,
+                qty: fut.executed_qty,
+                commission: 0.0,
+                commission_asset: "USDT".to_string(),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        Ok(BinanceOrderResponse {
+            symbol: fut.symbol,
+            order_id: fut.order_id,
+            client_order_id: fut.client_order_id,
+            price: if fut.price > 0.0 { fut.price } else { avg },
+            orig_qty: fut.orig_qty,
+            executed_qty: fut.executed_qty,
+            status: fut.status,
+            r#type: fut.r#type,
+            side: fut.side,
+            fills,
+        })
+    }
+
     pub async fn get_spot_symbol_order_rules(&self, symbol: &str) -> Result<SymbolOrderRules> {
         let url = format!("{}/api/v3/exchangeInfo?symbol={}", self.base_url, symbol);
         let payload: serde_json::Value = self
