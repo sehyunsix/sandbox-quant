@@ -31,6 +31,19 @@ fn ensure_trade_schema(conn: &Connection) -> Result<()> {
         "ALTER TABLE order_history_trades ADD COLUMN commission REAL NOT NULL DEFAULT 0.0",
         "ALTER TABLE order_history_trades ADD COLUMN commission_asset TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE order_history_trades ADD COLUMN realized_pnl REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE order_history_trades ADD COLUMN position_id TEXT",
+        "ALTER TABLE order_history_trades ADD COLUMN exit_reason_code TEXT",
+        "ALTER TABLE order_history_trades ADD COLUMN holding_ms INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE order_history_trades ADD COLUMN mfe_usdt REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE order_history_trades ADD COLUMN mae_usdt REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE order_history_trades ADD COLUMN expected_return_usdt_at_entry REAL",
+        "ALTER TABLE order_history_trades ADD COLUMN p_win_estimate REAL",
+        "ALTER TABLE order_history_trades ADD COLUMN p_tail_loss_estimate REAL",
+        "ALTER TABLE order_history_trades ADD COLUMN p_timeout_exit_estimate REAL",
+        "ALTER TABLE order_history_trades ADD COLUMN prob_model_version TEXT",
+        "ALTER TABLE order_history_trades ADD COLUMN ev_model_version TEXT",
+        "ALTER TABLE order_history_trades ADD COLUMN confidence_level TEXT",
+        "ALTER TABLE order_history_trades ADD COLUMN n_eff REAL",
     ] {
         if let Err(e) = conn.execute(ddl, []) {
             let msg = e.to_string();
@@ -39,6 +52,14 @@ fn ensure_trade_schema(conn: &Connection) -> Result<()> {
             }
         }
     }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_order_history_trades_position_id ON order_history_trades(position_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_order_history_trades_exit_reason ON order_history_trades(exit_reason_code)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -173,9 +194,23 @@ pub fn persist_order_snapshot(
             event_time_ms INTEGER NOT NULL,
             realized_pnl REAL NOT NULL DEFAULT 0.0,
             source TEXT NOT NULL,
+            position_id TEXT,
+            exit_reason_code TEXT,
+            holding_ms INTEGER NOT NULL DEFAULT 0,
+            mfe_usdt REAL NOT NULL DEFAULT 0.0,
+            mae_usdt REAL NOT NULL DEFAULT 0.0,
+            expected_return_usdt_at_entry REAL,
+            p_win_estimate REAL,
+            p_tail_loss_estimate REAL,
+            p_timeout_exit_estimate REAL,
+            prob_model_version TEXT,
+            ev_model_version TEXT,
+            confidence_level TEXT,
+            n_eff REAL,
             updated_at_ms INTEGER NOT NULL,
             PRIMARY KEY(symbol, trade_id)
         );
+
         "#,
     )?;
     ensure_trade_schema(&conn)?;
