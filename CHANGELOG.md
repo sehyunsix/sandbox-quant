@@ -1,3 +1,7 @@
+## v0.26.1 - 2026-02-24
+
+- docs(rfc): propose UI integration for EV and exit price visibility (946315b)
+
 ## v0.26.0 - 2026-02-24
 
 - feat: submit futures protective STOP_MARKET orders (451a9df)
