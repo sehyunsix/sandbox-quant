@@ -96,6 +96,10 @@ fn parse_grid_command_maps_navigation_and_actions() {
     );
     assert_eq!(
         parse_grid_command(&KeyCode::Char('5')),
+        Some(GridCommand::TabHistory)
+    );
+    assert_eq!(
+        parse_grid_command(&KeyCode::Char('6')),
         Some(GridCommand::TabSystemLog)
     );
     assert_eq!(

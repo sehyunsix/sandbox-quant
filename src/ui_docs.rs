@@ -330,6 +330,11 @@ fn apply_key_action(state: &mut AppState, key: &str) -> Result<()> {
         }
         "5" => {
             if state.grid_open {
+                state.grid_tab = GridTab::History;
+            }
+        }
+        "6" => {
+            if state.grid_open {
                 state.grid_tab = GridTab::SystemLog;
             }
         }

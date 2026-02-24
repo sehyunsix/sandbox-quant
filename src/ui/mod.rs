@@ -39,6 +39,7 @@ pub enum GridTab {
     Strategies,
     Risk,
     Network,
+    History,
     SystemLog,
 }
 
@@ -1383,7 +1384,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             Span::raw(" "),
             tab_span(GridTab::Network, "4", "Network"),
             Span::raw(" "),
-            tab_span(GridTab::SystemLog, "5", "SystemLog"),
+            tab_span(GridTab::History, "5", "History"),
+            Span::raw(" "),
+            tab_span(GridTab::SystemLog, "6", "SystemLog"),
         ])),
         tab_area,
     );
@@ -1593,7 +1596,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             panel_chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), panel_chunks[3]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), panel_chunks[3]);
         return;
     }
 
@@ -1711,7 +1714,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[3]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), chunks[3]);
         return;
     }
 
@@ -1913,7 +1916,45 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[3]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), chunks[3]);
+        return;
+    }
+
+    if view.selected_grid_tab == GridTab::History {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(6), Constraint::Length(1)])
+            .split(body_area);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Bucket: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    match state.history_bucket {
+                        order_store::HistoryBucket::Day => "Day",
+                        order_store::HistoryBucket::Hour => "Hour",
+                        order_store::HistoryBucket::Month => "Month",
+                    },
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "  (popup hotkeys: D/H/M)",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])),
+            chunks[0],
+        );
+
+        let visible = build_history_lines(&state.history_rows, chunks[1].height.saturating_sub(2) as usize);
+        frame.render_widget(
+            Paragraph::new(visible).block(
+                Block::default()
+                    .title(" History ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[1],
+        );
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), chunks[2]);
         return;
     }
 
@@ -1949,7 +1990,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 ),
             chunks[0],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5] tab  [G/Esc] close"), chunks[1]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), chunks[1]);
         return;
     }
 
@@ -2655,6 +2696,11 @@ fn render_history_popup(frame: &mut Frame, rows: &[String], bucket: order_store:
     frame.render_widget(block, popup);
 
     let max_rows = inner.height.saturating_sub(1) as usize;
+    let visible = build_history_lines(rows, max_rows);
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
+fn build_history_lines(rows: &[String], max_rows: usize) -> Vec<Line<'_>> {
     let mut visible: Vec<Line> = Vec::new();
     for (idx, row) in rows.iter().take(max_rows).enumerate() {
         let color = if idx == 0 {
@@ -2665,7 +2711,7 @@ fn render_history_popup(frame: &mut Frame, rows: &[String], bucket: order_store:
             Color::DarkGray
         };
         visible.push(Line::from(Span::styled(
-            row.clone(),
+            row.as_str(),
             Style::default().fg(color),
         )));
     }
@@ -2675,7 +2721,7 @@ fn render_history_popup(frame: &mut Frame, rows: &[String], bucket: order_store:
             Style::default().fg(Color::DarkGray),
         )));
     }
-    frame.render_widget(Paragraph::new(visible), inner);
+    visible
 }
 
 fn render_selector_popup(
@@ -2848,8 +2894,12 @@ fn ev_snapshot_for_item<'a>(
     item: &str,
     symbol: &str,
 ) -> Option<&'a EvSnapshotEntry> {
-    let source_tag = source_tag_for_strategy_item(item)?;
-    ev_map.get(&strategy_stats_scope_key(symbol, &source_tag))
+    if let Some(source_tag) = source_tag_for_strategy_item(item) {
+        if let Some(found) = ev_map.get(&strategy_stats_scope_key(symbol, &source_tag)) {
+            return Some(found);
+        }
+    }
+    latest_ev_snapshot_for_symbol(ev_map, symbol)
 }
 
 fn exit_policy_for_item<'a>(
@@ -2857,8 +2907,36 @@ fn exit_policy_for_item<'a>(
     item: &str,
     symbol: &str,
 ) -> Option<&'a ExitPolicyEntry> {
-    let source_tag = source_tag_for_strategy_item(item)?;
-    policy_map.get(&strategy_stats_scope_key(symbol, &source_tag))
+    if let Some(source_tag) = source_tag_for_strategy_item(item) {
+        if let Some(found) = policy_map.get(&strategy_stats_scope_key(symbol, &source_tag)) {
+            return Some(found);
+        }
+    }
+    latest_exit_policy_for_symbol(policy_map, symbol)
+}
+
+fn latest_ev_snapshot_for_symbol<'a>(
+    ev_map: &'a HashMap<String, EvSnapshotEntry>,
+    symbol: &str,
+) -> Option<&'a EvSnapshotEntry> {
+    let prefix = format!("{}::", symbol.trim().to_ascii_uppercase());
+    ev_map
+        .iter()
+        .filter(|(k, _)| k.starts_with(&prefix))
+        .max_by_key(|(_, v)| v.updated_at_ms)
+        .map(|(_, v)| v)
+}
+
+fn latest_exit_policy_for_symbol<'a>(
+    policy_map: &'a HashMap<String, ExitPolicyEntry>,
+    symbol: &str,
+) -> Option<&'a ExitPolicyEntry> {
+    let prefix = format!("{}::", symbol.trim().to_ascii_uppercase());
+    policy_map
+        .iter()
+        .filter(|(k, _)| k.starts_with(&prefix))
+        .max_by_key(|(_, v)| v.updated_at_ms)
+        .map(|(_, v)| v)
 }
 
 fn strategy_stats_scope_key(symbol: &str, source_tag: &str) -> String {

@@ -1341,6 +1341,7 @@ fn handle_grid_key(
             GridCommand::TabStrategies => app_state.set_grid_tab(GridTab::Strategies),
             GridCommand::TabRisk => app_state.set_grid_tab(GridTab::Risk),
             GridCommand::TabNetwork => app_state.set_grid_tab(GridTab::Network),
+            GridCommand::TabHistory => app_state.set_grid_tab(GridTab::History),
             GridCommand::TabSystemLog => app_state.set_grid_tab(GridTab::SystemLog),
             GridCommand::CloseGrid => app_state.set_grid_open(false),
             GridCommand::ToggleOnOffPanel => {
