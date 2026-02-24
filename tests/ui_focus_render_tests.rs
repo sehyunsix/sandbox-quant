@@ -1,6 +1,7 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
+use sandbox_quant::event::EvSnapshotEntry;
 use sandbox_quant::order_manager::OrderHistoryStats;
 use sandbox_quant::ui::ui_projection::UiProjection;
 use sandbox_quant::ui::{self, AppState, GridTab};
@@ -177,6 +178,35 @@ fn render_grid_popup_with_total_and_split_panels() {
     assert!(text.contains("OFF Total"));
     assert!(text.contains("MA(Config)"));
     assert!(text.contains("MA(Fast 5/20)"));
+}
+
+#[test]
+/// Verifies EV score visibility in strategy grid:
+/// when EV snapshot exists for a strategy scope, both EV and score columns should render values.
+fn render_grid_popup_shows_ev_and_score_values() {
+    let backend = TestBackend::new(160, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.grid_open = true;
+    state.ev_snapshot_by_scope.insert(
+        "BTCUSDT::cfg".to_string(),
+        EvSnapshotEntry {
+            ev: 1.234,
+            p_win: 0.73,
+            gate_mode: "shadow".to_string(),
+            gate_blocked: false,
+            updated_at_ms: 1,
+        },
+    );
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Score"));
+    assert!(text.contains("+1.234"));
+    assert!(text.contains("0.73"));
 }
 
 #[test]

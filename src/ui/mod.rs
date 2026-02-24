@@ -2223,6 +2223,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             Cell::from("T"),
             Cell::from("PnL"),
             Cell::from("EV"),
+            Cell::from("Score"),
             Cell::from("Gate"),
             Cell::from("Stop"),
         ])
@@ -2305,6 +2306,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 let ev_txt = ev_snapshot
                     .map(|v| format!("{:+.3}", v.ev))
                     .unwrap_or_else(|| "-".to_string());
+                let score_txt = ev_snapshot
+                    .map(|v| format!("{:.2}", v.p_win))
+                    .unwrap_or_else(|| "-".to_string());
                 let gate_txt = ev_snapshot
                     .map(|v| {
                         if v.gate_blocked {
@@ -2336,6 +2340,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     Cell::from(t),
                     Cell::from(pnl),
                     Cell::from(ev_txt),
+                    Cell::from(score_txt),
                     Cell::from(gate_txt),
                     Cell::from(stop_txt),
                 ]);
@@ -2367,6 +2372,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     Cell::from("-"),
                     Cell::from("-"),
                     Cell::from("-"),
+                    Cell::from("-"),
                 ])
                 .style(Style::default().fg(Color::DarkGray)),
             );
@@ -2387,6 +2393,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 Constraint::Length(4),
                 Constraint::Length(11),
                 Constraint::Length(8),
+                Constraint::Length(6),
                 Constraint::Length(7),
                 Constraint::Length(10),
             ],
