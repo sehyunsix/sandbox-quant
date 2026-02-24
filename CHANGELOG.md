@@ -1,3 +1,7 @@
+## v0.17.0 - 2026-02-24
+
+- feat: scaffold EV estimator and position lifecycle modules (12a5fbb)
+
 ## v0.16.1 - 2026-02-24
 
 - docs(rfc): define EV, exit orchestration, and probability estimation plan (f70ec91)
