@@ -222,3 +222,43 @@ fn app_state_accepts_log_record_event() {
     assert!(last.contains("ws.connect.fail"));
     assert!(last.contains("BTCUSDT"));
 }
+
+#[test]
+/// Verifies EV/exit policy event propagation:
+/// main runtime EV and stop-policy events should be stored by strategy scope key.
+fn app_state_applies_ev_and_exit_policy_events() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    s.apply(AppEvent::EvSnapshotUpdate {
+        symbol: "BTCUSDT".to_string(),
+        source_tag: "cfg".to_string(),
+        ev: 1.23,
+        p_win: 0.57,
+        gate_mode: "soft".to_string(),
+        gate_blocked: false,
+    });
+    s.apply(AppEvent::ExitPolicyUpdate {
+        symbol: "BTCUSDT".to_string(),
+        source_tag: "cfg".to_string(),
+        stop_price: Some(43000.0),
+        expected_holding_ms: Some(600_000),
+        protective_stop_ok: Some(true),
+    });
+
+    let key = "BTCUSDT::cfg";
+    let ev = s
+        .ev_snapshot_by_scope
+        .get(key)
+        .expect("expected scoped ev snapshot");
+    assert!((ev.ev - 1.23).abs() < f64::EPSILON);
+    assert!((ev.p_win - 0.57).abs() < f64::EPSILON);
+    assert_eq!(ev.gate_mode, "soft");
+    assert!(!ev.gate_blocked);
+
+    let exit = s
+        .exit_policy_by_scope
+        .get(key)
+        .expect("expected scoped exit policy");
+    assert_eq!(exit.stop_price, Some(43000.0));
+    assert_eq!(exit.expected_holding_ms, Some(600_000));
+    assert_eq!(exit.protective_stop_ok, Some(true));
+}

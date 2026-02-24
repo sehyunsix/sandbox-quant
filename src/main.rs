@@ -2007,6 +2007,16 @@ async fn main() -> Result<()> {
                                     if ev_hard_mode && ev <= strat_config.ev.entry_gate_min_ev_usdt {
                                         block_by_ev_gate = true;
                                     }
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::EvSnapshotUpdate {
+                                            symbol: instrument.clone(),
+                                            source_tag: source_tag_lc.clone(),
+                                            ev,
+                                            p_win,
+                                            gate_mode: strat_config.ev.mode.clone(),
+                                            gate_blocked: block_by_ev_gate,
+                                        })
+                                        .await;
                                     pending_entry_expectancy.insert(instrument.clone(), snapshot);
                                     let _ = strat_app_tx
                                         .send(app_log(
@@ -2121,6 +2131,17 @@ async fn main() -> Result<()> {
                                                 &expectancy,
                                                 fallback_now,
                                             );
+                                            let _ = strat_app_tx
+                                                .send(AppEvent::ExitPolicyUpdate {
+                                                    symbol: instrument.clone(),
+                                                    source_tag: source_tag_lc.clone(),
+                                                    stop_price: None,
+                                                    expected_holding_ms: Some(
+                                                        expectancy.expected_holding_ms,
+                                                    ),
+                                                    protective_stop_ok: None,
+                                                })
+                                                .await;
                                             lifecycle_triggered_once.remove(&instrument);
                                             let _ = strat_app_tx
                                                 .send(app_log(
@@ -2147,6 +2168,15 @@ async fn main() -> Result<()> {
                                                         Some(stop_order_id.clone()),
                                                     );
                                                     let _ = strat_app_tx
+                                                        .send(AppEvent::ExitPolicyUpdate {
+                                                            symbol: instrument.clone(),
+                                                            source_tag: source_tag_lc.clone(),
+                                                            stop_price: Some(stop_price),
+                                                            expected_holding_ms: None,
+                                                            protective_stop_ok: Some(true),
+                                                        })
+                                                        .await;
+                                                    let _ = strat_app_tx
                                                         .send(app_log(
                                                             LogLevel::Info,
                                                             LogDomain::Risk,
@@ -2159,6 +2189,15 @@ async fn main() -> Result<()> {
                                                         .await;
                                                 }
                                                 Ok(None) => {
+                                                    let _ = strat_app_tx
+                                                        .send(AppEvent::ExitPolicyUpdate {
+                                                            symbol: instrument.clone(),
+                                                            source_tag: source_tag_lc.clone(),
+                                                            stop_price: Some(stop_price),
+                                                            expected_holding_ms: None,
+                                                            protective_stop_ok: Some(false),
+                                                        })
+                                                        .await;
                                                     let _ = strat_app_tx
                                                         .send(app_log(
                                                             LogLevel::Warn,
@@ -2180,6 +2219,15 @@ async fn main() -> Result<()> {
                                                     }
                                                 }
                                                 Err(e) => {
+                                                    let _ = strat_app_tx
+                                                        .send(AppEvent::ExitPolicyUpdate {
+                                                            symbol: instrument.clone(),
+                                                            source_tag: source_tag_lc.clone(),
+                                                            stop_price: Some(stop_price),
+                                                            expected_holding_ms: None,
+                                                            protective_stop_ok: Some(false),
+                                                        })
+                                                        .await;
                                                     let _ = strat_app_tx
                                                         .send(app_log(
                                                             LogLevel::Warn,
