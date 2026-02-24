@@ -2055,6 +2055,51 @@ async fn main() -> Result<()> {
                                                 ))
                                                 .await;
                                         }
+                                        if strat_config.exit.enforce_protective_stop {
+                                            let stop_price =
+                                                *avg_price * (1.0 - strat_config.exit.stop_loss_pct.max(0.0));
+                                            match mgr.ensure_protective_stop(&source_tag_lc, stop_price).await {
+                                                Ok(true) => {
+                                                    let _ = strat_app_tx
+                                                        .send(app_log(
+                                                            LogLevel::Info,
+                                                            LogDomain::Risk,
+                                                            "protective_stop.ensure",
+                                                            format!(
+                                                                "Protective stop ensured: {} src={} stop={:.4}",
+                                                                instrument, source_tag_lc, stop_price
+                                                            ),
+                                                        ))
+                                                        .await;
+                                                }
+                                                Ok(false) => {
+                                                    let _ = strat_app_tx
+                                                        .send(app_log(
+                                                            LogLevel::Warn,
+                                                            LogDomain::Risk,
+                                                            "protective_stop.missing",
+                                                            format!(
+                                                                "Protective stop unavailable: {} src={} stop={:.4}",
+                                                                instrument, source_tag_lc, stop_price
+                                                            ),
+                                                        ))
+                                                        .await;
+                                                }
+                                                Err(e) => {
+                                                    let _ = strat_app_tx
+                                                        .send(app_log(
+                                                            LogLevel::Warn,
+                                                            LogDomain::Risk,
+                                                            "protective_stop.ensure.fail",
+                                                            format!(
+                                                                "Protective stop ensure failed ({}|{}): {}",
+                                                                instrument, source_tag_lc, e
+                                                            ),
+                                                        ))
+                                                        .await;
+                                                }
+                                            }
+                                        }
                                     }
 
                                     if ev_enabled
@@ -2130,7 +2175,10 @@ async fn main() -> Result<()> {
                     }
                     let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&instrument) {
-                        match mgr.submit_order(Signal::Sell, &source_tag_lc).await {
+                        match mgr
+                            .emergency_close_position(&source_tag_lc, &reason_code)
+                            .await
+                        {
                             Ok(Some(ref update)) => {
                                 if instrument == selected_symbol {
                                     let _ = strat_app_tx
