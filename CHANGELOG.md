@@ -1,3 +1,7 @@
+## v0.27.0 - 2026-02-24
+
+- feat: surface EV and exit policy summary in position panel (937cdee)
+
 ## v0.26.1 - 2026-02-24
 
 - docs(rfc): propose UI integration for EV and exit price visibility (946315b)
