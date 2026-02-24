@@ -1,3 +1,7 @@
+## v0.16.1 - 2026-02-24
+
+- docs(rfc): define EV, exit orchestration, and probability estimation plan (f70ec91)
+
 ## v0.16.0 - 2026-02-22
 
 - feat(ui): split asset table by spot/futures and add total pnl (382d745)
