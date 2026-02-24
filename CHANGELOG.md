@@ -1,3 +1,7 @@
+## v0.28.0 - 2026-02-24
+
+- feat: add EV/Gate/Stop columns to grid strategy tables (ff5ee59)
+
 ## v0.27.0 - 2026-02-24
 
 - feat: surface EV and exit policy summary in position panel (937cdee)
