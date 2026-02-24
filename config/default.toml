@@ -41,6 +41,26 @@ orders_per_minute = 240
 account_per_minute = 180
 market_data_per_minute = 360
 
+[ev]
+enabled = true
+mode = "shadow"
+lookback_trades = 200
+prior_a = 6.0
+prior_b = 6.0
+tail_prior_a = 3.0
+tail_prior_b = 7.0
+recency_lambda = 0.08
+shrink_k = 40.0
+loss_threshold_usdt = 15.0
+gamma_tail_penalty = 0.8
+fee_slippage_penalty_usdt = 0.0
+entry_gate_min_ev_usdt = 0.0
+
+[exit]
+max_holding_ms = 1800000
+stop_loss_pct = 0.015
+enforce_protective_stop = true
+
 [ui]
 refresh_rate_ms = 100
 price_history_len = 120

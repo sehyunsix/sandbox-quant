@@ -8,6 +8,10 @@ pub struct Config {
     pub strategy: StrategyConfig,
     #[serde(default)]
     pub risk: RiskConfig,
+    #[serde(default)]
+    pub ev: EvConfig,
+    #[serde(default)]
+    pub exit: ExitConfig,
     pub ui: UiConfig,
     pub logging: LoggingConfig,
 }
@@ -87,6 +91,76 @@ pub struct EndpointRateLimitConfig {
     pub market_data_per_minute: u32,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvConfig {
+    #[serde(default = "default_ev_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_ev_mode")]
+    pub mode: String,
+    #[serde(default = "default_ev_lookback_trades")]
+    pub lookback_trades: usize,
+    #[serde(default = "default_ev_prior_a")]
+    pub prior_a: f64,
+    #[serde(default = "default_ev_prior_b")]
+    pub prior_b: f64,
+    #[serde(default = "default_ev_tail_prior_a")]
+    pub tail_prior_a: f64,
+    #[serde(default = "default_ev_tail_prior_b")]
+    pub tail_prior_b: f64,
+    #[serde(default = "default_ev_recency_lambda")]
+    pub recency_lambda: f64,
+    #[serde(default = "default_ev_shrink_k")]
+    pub shrink_k: f64,
+    #[serde(default = "default_ev_loss_threshold_usdt")]
+    pub loss_threshold_usdt: f64,
+    #[serde(default = "default_ev_gamma_tail_penalty")]
+    pub gamma_tail_penalty: f64,
+    #[serde(default = "default_ev_fee_slippage_penalty_usdt")]
+    pub fee_slippage_penalty_usdt: f64,
+    #[serde(default = "default_ev_entry_gate_min_ev_usdt")]
+    pub entry_gate_min_ev_usdt: f64,
+}
+
+impl Default for EvConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_ev_enabled(),
+            mode: default_ev_mode(),
+            lookback_trades: default_ev_lookback_trades(),
+            prior_a: default_ev_prior_a(),
+            prior_b: default_ev_prior_b(),
+            tail_prior_a: default_ev_tail_prior_a(),
+            tail_prior_b: default_ev_tail_prior_b(),
+            recency_lambda: default_ev_recency_lambda(),
+            shrink_k: default_ev_shrink_k(),
+            loss_threshold_usdt: default_ev_loss_threshold_usdt(),
+            gamma_tail_penalty: default_ev_gamma_tail_penalty(),
+            fee_slippage_penalty_usdt: default_ev_fee_slippage_penalty_usdt(),
+            entry_gate_min_ev_usdt: default_ev_entry_gate_min_ev_usdt(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExitConfig {
+    #[serde(default = "default_exit_max_holding_ms")]
+    pub max_holding_ms: u64,
+    #[serde(default = "default_exit_stop_loss_pct")]
+    pub stop_loss_pct: f64,
+    #[serde(default = "default_exit_enforce_protective_stop")]
+    pub enforce_protective_stop: bool,
+}
+
+impl Default for ExitConfig {
+    fn default() -> Self {
+        Self {
+            max_holding_ms: default_exit_max_holding_ms(),
+            stop_loss_pct: default_exit_stop_loss_pct(),
+            enforce_protective_stop: default_exit_enforce_protective_stop(),
+        }
+    }
+}
+
 impl Default for EndpointRateLimitConfig {
     fn default() -> Self {
         Self {
@@ -156,6 +230,70 @@ fn default_endpoint_account_limit_per_minute() -> u32 {
 
 fn default_endpoint_market_data_limit_per_minute() -> u32 {
     360
+}
+
+fn default_ev_enabled() -> bool {
+    true
+}
+
+fn default_ev_mode() -> String {
+    "shadow".to_string()
+}
+
+fn default_ev_lookback_trades() -> usize {
+    200
+}
+
+fn default_ev_prior_a() -> f64 {
+    6.0
+}
+
+fn default_ev_prior_b() -> f64 {
+    6.0
+}
+
+fn default_ev_tail_prior_a() -> f64 {
+    3.0
+}
+
+fn default_ev_tail_prior_b() -> f64 {
+    7.0
+}
+
+fn default_ev_recency_lambda() -> f64 {
+    0.08
+}
+
+fn default_ev_shrink_k() -> f64 {
+    40.0
+}
+
+fn default_ev_loss_threshold_usdt() -> f64 {
+    15.0
+}
+
+fn default_ev_gamma_tail_penalty() -> f64 {
+    0.8
+}
+
+fn default_ev_fee_slippage_penalty_usdt() -> f64 {
+    0.0
+}
+
+fn default_ev_entry_gate_min_ev_usdt() -> f64 {
+    0.0
+}
+
+fn default_exit_max_holding_ms() -> u64 {
+    1_800_000
+}
+
+fn default_exit_stop_loss_pct() -> f64 {
+    0.015
+}
+
+fn default_exit_enforce_protective_stop() -> bool {
+    true
 }
 
 /// Parse a Binance kline interval string (e.g. "1s", "1m", "1h", "1d", "1w", "1M") into milliseconds.
