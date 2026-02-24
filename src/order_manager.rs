@@ -1361,6 +1361,70 @@ impl OrderManager {
         }
     }
 
+    /// Attempt to place a protective stop for the currently open position.
+    ///
+    /// Current broker adapter does not yet expose stop-order placement in a
+    /// unified way, so this method currently returns `Ok(None)` after logging.
+    /// It exists to stabilize runtime integration points for later exchange/API
+    /// support.
+    pub async fn place_protective_stop_for_open_position(
+        &mut self,
+        source_tag: &str,
+        stop_price: f64,
+    ) -> Result<Option<String>> {
+        if self.position.is_flat() {
+            return Ok(None);
+        }
+        tracing::warn!(
+            symbol = %self.symbol,
+            market = %normalize_market_label(self.market),
+            source_tag = %source_tag,
+            stop_price,
+            "Protective stop placement requested but broker adapter stop-order API is not yet implemented"
+        );
+        Ok(None)
+    }
+
+    /// Ensure a protective stop exists for open position.
+    ///
+    /// Returns:
+    /// - `Ok(true)` when flat (no protection needed) or placement succeeded
+    /// - `Ok(false)` when protection was needed but could not be placed
+    pub async fn ensure_protective_stop(
+        &mut self,
+        source_tag: &str,
+        fallback_stop_price: f64,
+    ) -> Result<bool> {
+        if self.position.is_flat() {
+            return Ok(true);
+        }
+        Ok(self
+            .place_protective_stop_for_open_position(source_tag, fallback_stop_price)
+            .await?
+            .is_some())
+    }
+
+    /// Emergency close helper for runtime/system-triggered liquidation paths.
+    ///
+    /// If position is already flat, returns `Ok(None)` without broker call.
+    pub async fn emergency_close_position(
+        &mut self,
+        source_tag: &str,
+        reason_code: &str,
+    ) -> Result<Option<OrderUpdate>> {
+        if self.position.is_flat() {
+            return Ok(None);
+        }
+        tracing::warn!(
+            symbol = %self.symbol,
+            market = %normalize_market_label(self.market),
+            source_tag = %source_tag,
+            reason_code = %reason_code,
+            "Emergency close triggered"
+        );
+        self.submit_order(Signal::Sell, source_tag).await
+    }
+
     fn process_order_response(
         &mut self,
         intent_id: &str,
