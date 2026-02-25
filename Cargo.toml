@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-quant"
-version = "0.29.2"
+version = "0.29.3"
 edition = "2021"
 description = "Terminal-based multi-strategy crypto trading sandbox with centralized risk controls"
 repository = "https://github.com/sehyunsix/sandbox-quant"

@@ -1,3 +1,7 @@
+## v0.29.3 - 2026-02-25
+
+- docs(rfc): add Y-based spot/futures EV model spec (00398e0)
+
 ## v0.29.2 - 2026-02-25
 
 - docs(rfc): add external references for EV time-variance decision (b057c1d)
