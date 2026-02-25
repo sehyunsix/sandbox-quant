@@ -1,3 +1,7 @@
+## v0.30.1 - 2026-02-25
+
+- fix(ui): show live ev and entry ev in positions panel (2aaba1a)
+
 ## v0.30.0 - 2026-02-25
 
 - feat(ev): condition y-model by strategy signal side (beb4ad0)
