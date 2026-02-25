@@ -232,7 +232,17 @@ fn app_state_applies_ev_and_exit_policy_events() {
         symbol: "BTCUSDT".to_string(),
         source_tag: "cfg".to_string(),
         ev: 1.23,
+        entry_ev: Some(0.91),
         p_win: 0.57,
+        gate_mode: "soft".to_string(),
+        gate_blocked: false,
+    });
+    s.apply(AppEvent::EvSnapshotUpdate {
+        symbol: "BTCUSDT".to_string(),
+        source_tag: "cfg".to_string(),
+        ev: 1.11,
+        entry_ev: None,
+        p_win: 0.55,
         gate_mode: "soft".to_string(),
         gate_blocked: false,
     });
@@ -249,8 +259,9 @@ fn app_state_applies_ev_and_exit_policy_events() {
         .ev_snapshot_by_scope
         .get(key)
         .expect("expected scoped ev snapshot");
-    assert!((ev.ev - 1.23).abs() < f64::EPSILON);
-    assert!((ev.p_win - 0.57).abs() < f64::EPSILON);
+    assert!((ev.ev - 1.11).abs() < f64::EPSILON);
+    assert_eq!(ev.entry_ev, Some(0.91));
+    assert!((ev.p_win - 0.55).abs() < f64::EPSILON);
     assert_eq!(ev.gate_mode, "soft");
     assert!(!ev.gate_blocked);
 

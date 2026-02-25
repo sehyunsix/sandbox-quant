@@ -44,6 +44,7 @@ pub enum AppEvent {
         symbol: String,
         source_tag: String,
         ev: f64,
+        entry_ev: Option<f64>,
         p_win: f64,
         gate_mode: String,
         gate_blocked: bool,
@@ -92,6 +93,7 @@ pub enum AppEvent {
 #[derive(Debug, Clone, Default)]
 pub struct EvSnapshotEntry {
     pub ev: f64,
+    pub entry_ev: Option<f64>,
     pub p_win: f64,
     pub gate_mode: String,
     pub gate_blocked: bool,

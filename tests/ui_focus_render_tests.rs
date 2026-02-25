@@ -121,10 +121,10 @@ fn render_grid_popup_positions_tab() {
     assert!(text.contains("Close"));
     assert!(text.contains("Stop"));
     assert!(text.contains("StopType"));
-    assert!(text.contains("EV"));
+    assert!(text.contains("LiveEV"));
+    assert!(text.contains("EntryEV"));
     assert!(text.contains("Score"));
     assert!(text.contains("Gate"));
-    assert!(text.contains("UnrPnL"));
 }
 
 #[test]
@@ -153,6 +153,7 @@ fn render_grid_popup_positions_tab_shows_ev_values() {
         symbol: "BTCUSDT".to_string(),
         source_tag: "c01".to_string(),
         ev: 1.234,
+        entry_ev: Some(0.777),
         p_win: 0.77,
         gate_mode: "soft".to_string(),
         gate_blocked: false,
@@ -164,6 +165,7 @@ fn render_grid_popup_positions_tab_shows_ev_values() {
 
     let text = buffer_text(&terminal);
     assert!(text.contains("+1.234"));
+    assert!(text.contains("+0.777"));
     assert!(text.contains("0.77"));
     assert!(text.contains("SOFT"));
 }
@@ -194,6 +196,7 @@ fn render_grid_popup_positions_tab_shows_sys_ev_values() {
         symbol: "BTCUSDT (FUT)".to_string(),
         source_tag: "sys".to_string(),
         ev: 0.5,
+        entry_ev: None,
         p_win: 0.55,
         gate_mode: "shadow".to_string(),
         gate_blocked: false,
