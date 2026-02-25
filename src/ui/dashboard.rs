@@ -110,7 +110,7 @@ impl Widget for PositionPanel<'_> {
                 Span::styled(self.last_applied_fee, Style::default().fg(Color::LightBlue)),
             ]),
             Line::from(vec![
-                Span::styled("EV:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled("EV@entry: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     self.ev_snapshot
                         .map(|e| format!("{:+.4}", e.ev))
@@ -125,7 +125,7 @@ impl Widget for PositionPanel<'_> {
                         }
                     })),
                 ),
-                Span::styled("  pW:", Style::default().fg(Color::DarkGray)),
+                Span::styled("  pW@entry:", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     self.ev_snapshot
                         .map(|e| format!("{:.2}", e.p_win))
@@ -619,6 +619,8 @@ impl Widget for KeybindBar {
             Span::styled("[B]", Style::default().fg(Color::Green)),
             Span::styled("/[S] ", Style::default().fg(Color::DarkGray)),
             Span::styled("buy/sell ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Z] ", Style::default().fg(Color::Red)),
+            Span::styled("close-all ", Style::default().fg(Color::DarkGray)),
             Span::styled("[G]", Style::default().fg(Color::Magenta)),
             Span::styled(" grid ", Style::default().fg(Color::DarkGray)),
             Span::styled("| ", Style::default().fg(Color::DarkGray)),
