@@ -1,3 +1,7 @@
+## v0.29.2 - 2026-02-25
+
+- docs(rfc): add external references for EV time-variance decision (b057c1d)
+
 ## v0.29.1 - 2026-02-25
 
 - Improve close-all UX, EV exit handling, and position filter toggle (700fe61)
