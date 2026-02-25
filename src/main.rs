@@ -1932,7 +1932,6 @@ async fn main() -> Result<()> {
                             symbol: instrument.clone(),
                             source_tag: "sys".to_string(),
                             ev: snapshot.expected_return_usdt,
-                            entry_ev: lifecycle_engine.entry_ev_locked(&instrument),
                             p_win: snapshot.probability.p_win,
                             gate_mode: strat_config.ev.mode.clone(),
                             gate_blocked: false,
@@ -2124,6 +2123,7 @@ async fn main() -> Result<()> {
                             StrategyRuntime::from_profile(profile)
                         });
                         let signal = strategy.on_tick(&tick);
+                        y_model.observe_signal_price(&tick_symbol, source_tag, &signal, tick.price);
 
                         if selected_profile.source_tag == *source_tag {
                             let _ = strat_app_tx
@@ -2159,7 +2159,13 @@ async fn main() -> Result<()> {
                                 } else {
                                     strat_config.ev.y_sigma_spot
                                 };
-                                let y = y_model.estimate(&queue_instrument, strat_config.ev.y_mu, fallback_sigma);
+                                let y = y_model.estimate_for_signal(
+                                    &queue_instrument,
+                                    &source_tag_lc,
+                                    &Signal::Buy,
+                                    strat_config.ev.y_mu,
+                                    fallback_sigma,
+                                );
                                 if let Some(snapshot) = y_snapshot_for_entry(
                                     &ev_cfg,
                                     market,
@@ -2180,7 +2186,6 @@ async fn main() -> Result<()> {
                                             symbol: queue_instrument.clone(),
                                             source_tag: source_tag_lc.clone(),
                                             ev,
-                                            entry_ev: None,
                                             p_win,
                                             gate_mode: strat_config.ev.mode.clone(),
                                             gate_blocked,
@@ -2387,8 +2392,10 @@ async fn main() -> Result<()> {
                                             } else {
                                                 strat_config.ev.y_sigma_spot
                                             };
-                                            let y = y_model.estimate(
+                                            let y = y_model.estimate_for_signal(
                                                 &instrument,
+                                                &source_tag_lc,
+                                                &Signal::Buy,
                                                 strat_config.ev.y_mu,
                                                 fallback_sigma,
                                             );
@@ -2413,7 +2420,13 @@ async fn main() -> Result<()> {
                                 } else {
                                     strat_config.ev.y_sigma_spot
                                 };
-                                let y = y_model.estimate(&instrument, strat_config.ev.y_mu, fallback_sigma);
+                                let y = y_model.estimate_for_signal(
+                                    &instrument,
+                                    &source_tag_lc,
+                                    &signal,
+                                    strat_config.ev.y_mu,
+                                    fallback_sigma,
+                                );
                                 y_snapshot_for_open_position(
                                     &ev_cfg,
                                     market,
@@ -2442,7 +2455,6 @@ async fn main() -> Result<()> {
                                         symbol: instrument.clone(),
                                         source_tag: source_tag_lc.clone(),
                                         ev,
-                                        entry_ev: lifecycle_engine.entry_ev_locked(&instrument),
                                         p_win,
                                         gate_mode: strat_config.ev.mode.clone(),
                                         gate_blocked: block_by_ev_gate,
@@ -2554,8 +2566,10 @@ async fn main() -> Result<()> {
                                                 } else {
                                                     strat_config.ev.y_sigma_spot
                                                 };
-                                                let y = y_model.estimate(
+                                                let y = y_model.estimate_for_signal(
                                                     &instrument,
+                                                    &source_tag_lc,
+                                                    &Signal::Buy,
                                                     strat_config.ev.y_mu,
                                                     fallback_sigma,
                                                 );
@@ -2595,7 +2609,6 @@ async fn main() -> Result<()> {
                                                     symbol: instrument.clone(),
                                                     source_tag: source_tag_lc.clone(),
                                                     ev: expectancy.expected_return_usdt,
-                                                    entry_ev: Some(expectancy.expected_return_usdt),
                                                     p_win: expectancy.probability.p_win,
                                                     gate_mode: strat_config.ev.mode.clone(),
                                                     gate_blocked: false,
@@ -2978,7 +2991,6 @@ async fn main() -> Result<()> {
                                     symbol: instrument.clone(),
                                     source_tag: "sys".to_string(),
                                     ev: snapshot.expected_return_usdt,
-                                    entry_ev: lifecycle_engine.entry_ev_locked(instrument),
                                     p_win: snapshot.probability.p_win,
                                     gate_mode: strat_config.ev.mode.clone(),
                                     gate_blocked: false,

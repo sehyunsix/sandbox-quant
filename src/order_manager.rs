@@ -528,6 +528,10 @@ impl OrderManager {
         self.position.update_unrealized_pnl(current_price);
     }
 
+    pub fn last_price(&self) -> Option<f64> {
+        (self.last_price > f64::EPSILON).then_some(self.last_price)
+    }
+
     /// Return current global rate-budget snapshot from the risk module.
     ///
     /// Intended for UI display and observability.
