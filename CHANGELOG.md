@@ -1,3 +1,7 @@
+## v0.30.0 - 2026-02-25
+
+- feat(ev): condition y-model by strategy signal side (beb4ad0)
+
 ## v0.29.3 - 2026-02-25
 
 - docs(rfc): add Y-based spot/futures EV model spec (00398e0)
