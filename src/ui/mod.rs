@@ -2,6 +2,7 @@ pub mod ui_projection;
 pub mod chart;
 pub mod dashboard;
 pub mod network_metrics;
+pub mod position_ledger;
 
 use std::collections::HashMap;
 
@@ -24,6 +25,7 @@ use crate::order_store;
 use crate::risk_module::RateBudgetSnapshot;
 use crate::strategy_catalog::{strategy_kind_categories, strategy_kind_labels};
 use crate::ui::network_metrics::{classify_health, count_since, percentile, rate_per_sec, ratio_pct, NetworkHealth};
+use crate::ui::position_ledger::build_open_order_positions_from_trades;
 
 use ui_projection::UiProjection;
 use ui_projection::AssetEntry;
@@ -40,6 +42,7 @@ pub enum GridTab {
     Risk,
     Network,
     History,
+    Positions,
     SystemLog,
 }
 
@@ -65,6 +68,7 @@ pub struct ViewState {
     pub is_account_popup_open: bool,
     pub is_history_popup_open: bool,
     pub is_focus_popup_open: bool,
+    pub is_close_all_confirm_open: bool,
     pub is_strategy_editor_open: bool,
 }
 
@@ -122,6 +126,7 @@ pub struct AppState {
     pub account_popup_open: bool,
     pub history_popup_open: bool,
     pub focus_popup_open: bool,
+    pub close_all_confirm_open: bool,
     pub strategy_editor_open: bool,
     pub strategy_editor_kind_category_selector_open: bool,
     pub strategy_editor_kind_selector_open: bool,
@@ -163,6 +168,15 @@ pub struct AppState {
     pub rate_budget_orders: RateBudgetSnapshot,
     pub rate_budget_account: RateBudgetSnapshot,
     pub rate_budget_market_data: RateBudgetSnapshot,
+    pub close_all_running: bool,
+    pub close_all_job_id: Option<u64>,
+    pub close_all_total: usize,
+    pub close_all_completed: usize,
+    pub close_all_failed: usize,
+    pub close_all_current_symbol: Option<String>,
+    pub close_all_status_expire_at_ms: Option<u64>,
+    pub close_all_row_status_by_symbol: HashMap<String, String>,
+    pub hide_small_positions: bool,
 }
 
 impl AppState {
@@ -237,6 +251,7 @@ impl AppState {
             account_popup_open: false,
             history_popup_open: false,
             focus_popup_open: false,
+            close_all_confirm_open: false,
             strategy_editor_open: false,
             strategy_editor_kind_category_selector_open: false,
             strategy_editor_kind_selector_open: false,
@@ -294,6 +309,15 @@ impl AppState {
                 limit: 0,
                 reset_in_ms: 0,
             },
+            close_all_running: false,
+            close_all_job_id: None,
+            close_all_total: 0,
+            close_all_completed: 0,
+            close_all_failed: 0,
+            close_all_current_symbol: None,
+            close_all_status_expire_at_ms: None,
+            close_all_row_status_by_symbol: HashMap::new(),
+            hide_small_positions: true,
         }
     }
 
@@ -359,6 +383,7 @@ impl AppState {
             is_account_popup_open: self.account_popup_open,
             is_history_popup_open: self.history_popup_open,
             is_focus_popup_open: self.focus_popup_open,
+            is_close_all_confirm_open: self.close_all_confirm_open,
             is_strategy_editor_open: self.strategy_editor_open,
         }
     }
@@ -434,6 +459,42 @@ impl AppState {
     }
     pub fn set_focus_popup_open(&mut self, open: bool) {
         self.focus_popup_open = open;
+    }
+    pub fn is_close_all_confirm_open(&self) -> bool {
+        self.close_all_confirm_open
+    }
+    pub fn set_close_all_confirm_open(&mut self, open: bool) {
+        self.close_all_confirm_open = open;
+    }
+    pub fn is_close_all_running(&self) -> bool {
+        self.close_all_running
+    }
+    pub fn close_all_status_text(&self) -> Option<String> {
+        let Some(job_id) = self.close_all_job_id else {
+            return None;
+        };
+        if self.close_all_total == 0 {
+            return Some(format!("close-all #{} RUNNING 0/0", job_id));
+        }
+        let ok = self.close_all_completed.saturating_sub(self.close_all_failed);
+        let current = self
+            .close_all_current_symbol
+            .as_ref()
+            .map(|s| format!(" current={}", s))
+            .unwrap_or_default();
+        let status = if self.close_all_running {
+            "RUNNING"
+        } else if self.close_all_failed == 0 {
+            "DONE"
+        } else if ok == 0 {
+            "FAILED"
+        } else {
+            "PARTIAL"
+        };
+        Some(format!(
+            "close-all #{} {} {}/{} ok:{} fail:{}{}",
+            job_id, status, self.close_all_completed, self.close_all_total, ok, self.close_all_failed, current
+        ))
     }
     pub fn is_strategy_editor_open(&self) -> bool {
         self.strategy_editor_open
@@ -1060,6 +1121,87 @@ impl AppState {
                 self.rate_budget_account = account;
                 self.rate_budget_market_data = market_data;
             }
+            AppEvent::CloseAllRequested {
+                job_id,
+                total,
+                symbols,
+            } => {
+                self.close_all_running = true;
+                self.close_all_job_id = Some(job_id);
+                self.close_all_total = total;
+                self.close_all_completed = 0;
+                self.close_all_failed = 0;
+                self.close_all_current_symbol = None;
+                self.close_all_status_expire_at_ms = None;
+                self.close_all_row_status_by_symbol.clear();
+                for symbol in symbols {
+                    self.close_all_row_status_by_symbol
+                        .insert(normalize_symbol_for_scope(&symbol), "PENDING".to_string());
+                }
+                self.push_log(format!("[INFO] close-all #{} started total={}", job_id, total));
+            }
+            AppEvent::CloseAllProgress {
+                job_id,
+                symbol,
+                completed,
+                total,
+                failed,
+                reason,
+            } => {
+                if self.close_all_job_id != Some(job_id) {
+                    self.close_all_job_id = Some(job_id);
+                }
+                self.close_all_running = completed < total;
+                self.close_all_total = total;
+                self.close_all_completed = completed;
+                self.close_all_failed = failed;
+                self.close_all_current_symbol = Some(symbol.clone());
+                let symbol_key = normalize_symbol_for_scope(&symbol);
+                let row_status = if let Some(r) = reason.as_ref() {
+                    if r.contains("too small")
+                        || r.contains("No ")
+                        || r.contains("Insufficient ")
+                    {
+                        "SKIP"
+                    } else {
+                        "FAIL"
+                    }
+                } else {
+                    "DONE"
+                };
+                self.close_all_row_status_by_symbol
+                    .insert(symbol_key, row_status.to_string());
+                let ok = completed.saturating_sub(failed);
+                self.push_log(format!(
+                    "[INFO] close-all #{} progress {}/{} ok={} fail={} symbol={}",
+                    job_id, completed, total, ok, failed, symbol
+                ));
+                if let Some(r) = reason {
+                    self.push_log(format!(
+                        "[WARN] close-all #{} {} ({}/{}) reason={}",
+                        job_id, symbol, completed, total, r
+                    ));
+                }
+            }
+            AppEvent::CloseAllFinished {
+                job_id,
+                completed,
+                total,
+                failed,
+            } => {
+                self.close_all_running = false;
+                self.close_all_job_id = Some(job_id);
+                self.close_all_total = total;
+                self.close_all_completed = completed;
+                self.close_all_failed = failed;
+                self.close_all_status_expire_at_ms =
+                    Some((chrono::Utc::now().timestamp_millis() as u64).saturating_add(5_000));
+                let ok = completed.saturating_sub(failed);
+                self.push_log(format!(
+                    "[INFO] close-all #{} finished ok={} fail={} total={}",
+                    job_id, ok, failed, total
+                ));
+            }
             AppEvent::TickDropped => {
                 self.network_tick_drop_count = self.network_tick_drop_count.saturating_add(1);
                 let now_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -1075,7 +1217,22 @@ impl AppState {
                 self.push_log(format!("[ERR] {}", msg));
             }
         }
-        self.prune_network_event_windows(chrono::Utc::now().timestamp_millis() as u64);
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        if !self.close_all_running
+            && self
+                .close_all_status_expire_at_ms
+                .map(|ts| now_ms >= ts)
+                .unwrap_or(false)
+        {
+            self.close_all_job_id = None;
+            self.close_all_total = 0;
+            self.close_all_completed = 0;
+            self.close_all_failed = 0;
+            self.close_all_current_symbol = None;
+            self.close_all_status_expire_at_ms = None;
+            self.close_all_row_status_by_symbol.clear();
+        }
+        self.prune_network_event_windows(now_ms);
         self.sync_projection_portfolio_summary();
         if rebuild_projection {
             self.rebuild_projection_preserve_focus(prev_focus);
@@ -1092,21 +1249,59 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         if view.is_strategy_editor_open {
             render_strategy_editor_popup(frame, state);
         }
+        if view.is_close_all_confirm_open {
+            render_close_all_confirm_popup(frame);
+        }
         return;
+    }
+
+    let area = frame.area();
+    let status_h = 1u16;
+    let keybind_h = 1u16;
+    let min_main_h = 8u16;
+    let mut order_log_h = 5u16;
+    let mut order_history_h = 6u16;
+    let mut system_log_h = 8u16;
+    let mut lower_total = order_log_h + order_history_h + system_log_h;
+    let lower_budget = area
+        .height
+        .saturating_sub(status_h + keybind_h + min_main_h);
+    if lower_total > lower_budget {
+        let mut overflow = lower_total - lower_budget;
+        while overflow > 0 && system_log_h > 0 {
+            system_log_h -= 1;
+            overflow -= 1;
+        }
+        while overflow > 0 && order_history_h > 0 {
+            order_history_h -= 1;
+            overflow -= 1;
+        }
+        while overflow > 0 && order_log_h > 0 {
+            order_log_h -= 1;
+            overflow -= 1;
+        }
+        lower_total = order_log_h + order_history_h + system_log_h;
+        if lower_total > lower_budget {
+            // Extremely small terminal fallback: keep bottom panels hidden first.
+            order_log_h = 0;
+            order_history_h = 0;
+            system_log_h = 0;
+        }
     }
 
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // status bar
-            Constraint::Min(8),    // main area (chart + position)
-            Constraint::Length(5), // order log
-            Constraint::Length(6), // order history
-            Constraint::Length(8), // system log
-            Constraint::Length(1), // keybinds
+            Constraint::Length(status_h),        // status bar
+            Constraint::Min(min_main_h),         // main area (chart + position)
+            Constraint::Length(order_log_h),     // order log
+            Constraint::Length(order_history_h), // order history
+            Constraint::Length(system_log_h),    // system log
+            Constraint::Length(keybind_h),       // keybinds
         ])
-        .split(frame.area());
+        .split(area);
 
+    let close_all_status_text = state.close_all_status_text();
     // Status bar
     frame.render_widget(
         StatusBar {
@@ -1119,6 +1314,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             last_price_latency_ms: state.last_price_latency_ms,
             last_order_history_update_ms: state.last_order_history_update_ms,
             last_order_history_latency_ms: state.last_order_history_latency_ms,
+            close_all_status: close_all_status_text.as_deref(),
+            close_all_running: state.close_all_running,
         },
         outer[0],
     );
@@ -1197,7 +1394,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     // Keybind bar
     frame.render_widget(KeybindBar, outer[5]);
 
-    if view.is_symbol_selector_open {
+    if view.is_close_all_confirm_open {
+        render_close_all_confirm_popup(frame);
+    } else if view.is_symbol_selector_open {
         render_selector_popup(
             frame,
             " Select Symbol ",
@@ -1342,6 +1541,35 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
     );
 }
 
+fn render_close_all_confirm_popup(frame: &mut Frame) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + area.width.saturating_sub(60) / 2,
+        y: area.y + area.height.saturating_sub(7) / 2,
+        width: 60.min(area.width.saturating_sub(2)).max(40),
+        height: 7.min(area.height.saturating_sub(2)).max(5),
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Confirm Close-All ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Close all open positions now?",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "[Y/Enter] Confirm   [N/Esc] Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+
 fn render_grid_popup(frame: &mut Frame, state: &AppState) {
     let view = state.view_state();
     let area = frame.area();
@@ -1380,13 +1608,15 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             Span::raw(" "),
             tab_span(GridTab::Strategies, "2", "Strategies"),
             Span::raw(" "),
-            tab_span(GridTab::Risk, "3", "Risk"),
+            tab_span(GridTab::Positions, "3", "Positions"),
             Span::raw(" "),
-            tab_span(GridTab::Network, "4", "Network"),
+            tab_span(GridTab::Risk, "4", "Risk"),
             Span::raw(" "),
-            tab_span(GridTab::History, "5", "History"),
+            tab_span(GridTab::Network, "5", "Network"),
             Span::raw(" "),
-            tab_span(GridTab::SystemLog, "6", "SystemLog"),
+            tab_span(GridTab::History, "6", "History"),
+            Span::raw(" "),
+            tab_span(GridTab::SystemLog, "7", "SystemLog"),
         ])),
         tab_area,
     );
@@ -1596,7 +1826,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             panel_chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), panel_chunks[3]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), panel_chunks[3]);
         return;
     }
 
@@ -1714,7 +1944,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), chunks[3]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[3]);
         return;
     }
 
@@ -1916,7 +2146,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), chunks[3]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[3]);
         return;
     }
 
@@ -1954,7 +2184,284 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[1],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), chunks[2]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[2]);
+        return;
+    }
+
+    if view.selected_grid_tab == GridTab::Positions {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(6), Constraint::Length(1)])
+            .split(body_area);
+        let persisted = if cfg!(test) {
+            Vec::new()
+        } else {
+            order_store::load_recent_persisted_trades_filtered(None, None, 20_000)
+                .unwrap_or_default()
+        };
+        let open_orders: Vec<_> = build_open_order_positions_from_trades(&persisted)
+            .into_iter()
+            .filter(|row| {
+                let px = asset_last_price_for_symbol(state, &row.symbol).unwrap_or(row.entry_price);
+                !state.hide_small_positions || (px * row.qty_open).abs() >= 1.0
+            })
+            .collect();
+
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Open Position Orders: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    open_orders.len().to_string(),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    if state.hide_small_positions {
+                        "  (order_id scope, filter: >= $1 | [U] toggle)"
+                    } else {
+                        "  (order_id scope, filter: OFF | [U] toggle)"
+                    },
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])),
+            chunks[0],
+        );
+
+        let header = Row::new(vec![
+            Cell::from("Symbol"),
+            Cell::from("Source"),
+            Cell::from("OrderId"),
+            Cell::from("Close"),
+            Cell::from("Market"),
+            Cell::from("Side"),
+            Cell::from("Qty"),
+            Cell::from("Entry"),
+            Cell::from("Last"),
+            Cell::from("Stop"),
+            Cell::from("EV"),
+            Cell::from("Score"),
+            Cell::from("Gate"),
+            Cell::from("StopType"),
+            Cell::from("UnrPnL"),
+        ])
+        .style(Style::default().fg(Color::DarkGray));
+        let mut rows: Vec<Row> = if open_orders.is_empty() {
+            state
+                .assets_view()
+                .iter()
+                .filter(|a| {
+                    let has_pos =
+                        a.position_qty.abs() > f64::EPSILON || a.entry_price.is_some() || a.side.is_some();
+                    let px = a
+                        .last_price
+                        .or(a.entry_price)
+                        .unwrap_or(0.0);
+                    has_pos && (!state.hide_small_positions || (px * a.position_qty.abs()) >= 1.0)
+                })
+                .map(|a| {
+                    let ev_snapshot =
+                        latest_ev_snapshot_for_symbol_relaxed(&state.ev_snapshot_by_scope, &a.symbol);
+                    let exit_policy =
+                        latest_exit_policy_for_symbol_relaxed(&state.exit_policy_by_scope, &a.symbol);
+                    Row::new(vec![
+                        Cell::from(a.symbol.clone()),
+                        Cell::from("SYS"),
+                        Cell::from("-"),
+                        Cell::from(
+                            close_all_row_status_for_symbol(state, &a.symbol).unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(if a.is_futures { "FUT" } else { "SPOT" }),
+                        Cell::from(a.side.clone().unwrap_or_else(|| "-".to_string())),
+                        Cell::from(format!("{:.5}", a.position_qty)),
+                        Cell::from(
+                            a.entry_price
+                                .map(|v| format!("{:.2}", v))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            a.last_price
+                                .map(|v| format!("{:.2}", v))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            exit_policy
+                                .and_then(|p| p.stop_price)
+                                .map(|v| format!("{:.2}", v))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            ev_snapshot
+                                .map(|v| format!("{:+.3}", v.ev))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            ev_snapshot
+                                .map(|v| format!("{:.2}", v.p_win))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            ev_snapshot
+                                .map(|v| {
+                                    if v.gate_blocked {
+                                        "BLOCK".to_string()
+                                    } else {
+                                        v.gate_mode.to_ascii_uppercase()
+                                    }
+                                })
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            if exit_policy.and_then(|p| p.stop_price).is_none() {
+                                "-".to_string()
+                            } else if exit_policy.and_then(|p| p.protective_stop_ok) == Some(true) {
+                                "ORDER".to_string()
+                            } else {
+                                "CALC".to_string()
+                            },
+                        ),
+                        Cell::from(format!("{:+.4}", a.unrealized_pnl_usdt)),
+                    ])
+                })
+                .collect()
+        } else {
+            open_orders
+                .iter()
+                .map(|row| {
+                    let symbol_view = display_symbol_for_storage(&row.symbol);
+                    let market_is_fut = row.symbol.ends_with("#FUT");
+                    let asset_last = asset_last_price_for_symbol(state, &row.symbol);
+                    let ev_snapshot =
+                        ev_snapshot_for_symbol_and_tag(state, &row.symbol, &row.source_tag)
+                            .or_else(|| {
+                                latest_ev_snapshot_for_symbol_relaxed(
+                                    &state.ev_snapshot_by_scope,
+                                    &row.symbol,
+                                )
+                                .cloned()
+                            });
+                    let exit_policy =
+                        exit_policy_for_symbol_and_tag(state, &row.symbol, &row.source_tag)
+                            .or_else(|| {
+                                latest_exit_policy_for_symbol_relaxed(
+                                    &state.exit_policy_by_scope,
+                                    &row.symbol,
+                                )
+                                .cloned()
+                            });
+                    let unr = asset_last
+                        .map(|px| (px - row.entry_price) * row.qty_open)
+                        .unwrap_or(0.0);
+                    Row::new(vec![
+                        Cell::from(symbol_view),
+                        Cell::from(row.source_tag.to_ascii_uppercase()),
+                        Cell::from(row.order_id.to_string()),
+                        Cell::from(
+                            close_all_row_status_for_symbol(state, &row.symbol)
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(if market_is_fut { "FUT" } else { "SPOT" }),
+                        Cell::from("BUY"),
+                        Cell::from(format!("{:.5}", row.qty_open)),
+                        Cell::from(format!("{:.2}", row.entry_price)),
+                        Cell::from(asset_last.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "-".to_string())),
+                        Cell::from(
+                            exit_policy
+                                .as_ref()
+                                .and_then(|p| p.stop_price)
+                                .map(|v| format!("{:.2}", v))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            ev_snapshot
+                                .as_ref()
+                                .map(|v| format!("{:+.3}", v.ev))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            ev_snapshot
+                                .as_ref()
+                                .map(|v| format!("{:.2}", v.p_win))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            ev_snapshot
+                                .as_ref()
+                                .map(|v| {
+                                    if v.gate_blocked {
+                                        "BLOCK".to_string()
+                                    } else {
+                                        v.gate_mode.to_ascii_uppercase()
+                                    }
+                                })
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            if exit_policy.as_ref().and_then(|p| p.stop_price).is_none() {
+                                "-".to_string()
+                            } else if exit_policy.as_ref().and_then(|p| p.protective_stop_ok) == Some(true) {
+                                "ORDER".to_string()
+                            } else {
+                                "CALC".to_string()
+                            },
+                        ),
+                        Cell::from(format!("{:+.4}", unr)),
+                    ])
+                })
+                .collect()
+        };
+        if rows.is_empty() {
+            rows.push(
+                Row::new(vec![
+                    Cell::from("(no open positions)"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                ])
+                .style(Style::default().fg(Color::DarkGray)),
+            );
+        }
+        frame.render_widget(
+            Table::new(
+                rows,
+                [
+                    Constraint::Length(14),
+                    Constraint::Length(8),
+                    Constraint::Length(12),
+                    Constraint::Length(8),
+                    Constraint::Length(7),
+                    Constraint::Length(8),
+                    Constraint::Length(11),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(8),
+                    Constraint::Length(7),
+                    Constraint::Length(8),
+                    Constraint::Length(9),
+                    Constraint::Length(11),
+                ],
+            )
+            .header(header)
+            .column_spacing(1)
+            .block(
+                Block::default()
+                    .title(" Positions ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[1],
+        );
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[2]);
         return;
     }
 
@@ -1990,7 +2497,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 ),
             chunks[0],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6] tab  [G/Esc] close"), chunks[1]);
+        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[1]);
         return;
     }
 
@@ -2837,6 +3344,98 @@ fn render_selector_popup(
     );
 }
 
+fn parse_scope_key(scope_key: &str) -> Option<(String, String)> {
+    let (symbol, tag) = scope_key.split_once("::")?;
+    let symbol = symbol.trim().to_ascii_uppercase();
+    let source_tag = tag.trim().to_ascii_lowercase();
+    if symbol.is_empty() || source_tag.is_empty() {
+        None
+    } else {
+        Some((symbol, source_tag))
+    }
+}
+
+fn ev_snapshot_for_symbol_and_tag(
+    state: &AppState,
+    symbol: &str,
+    source_tag: &str,
+) -> Option<EvSnapshotEntry> {
+    let tag = source_tag.trim().to_ascii_lowercase();
+    let candidates = symbol_scope_candidates(symbol);
+    state
+        .ev_snapshot_by_scope
+        .iter()
+        .filter_map(|(k, v)| {
+            let (scope_symbol, scope_tag) = parse_scope_key(k)?;
+            let symbol_ok = candidates
+                .iter()
+                .any(|prefix| prefix.trim_end_matches("::").eq_ignore_ascii_case(&scope_symbol));
+            if symbol_ok && scope_tag == tag {
+                Some(v)
+            } else {
+                None
+            }
+        })
+        .max_by_key(|v| v.updated_at_ms)
+        .cloned()
+}
+
+fn exit_policy_for_symbol_and_tag(
+    state: &AppState,
+    symbol: &str,
+    source_tag: &str,
+) -> Option<ExitPolicyEntry> {
+    let tag = source_tag.trim().to_ascii_lowercase();
+    let candidates = symbol_scope_candidates(symbol);
+    state
+        .exit_policy_by_scope
+        .iter()
+        .filter_map(|(k, v)| {
+            let (scope_symbol, scope_tag) = parse_scope_key(k)?;
+            let symbol_ok = candidates
+                .iter()
+                .any(|prefix| prefix.trim_end_matches("::").eq_ignore_ascii_case(&scope_symbol));
+            if symbol_ok && scope_tag == tag {
+                Some(v)
+            } else {
+                None
+            }
+        })
+        .max_by_key(|v| v.updated_at_ms)
+        .cloned()
+}
+
+fn display_symbol_for_storage(symbol: &str) -> String {
+    let upper = symbol.trim().to_ascii_uppercase();
+    if let Some(base) = upper.strip_suffix("#FUT") {
+        format!("{} (FUT)", base)
+    } else {
+        upper
+    }
+}
+
+fn asset_last_price_for_symbol(state: &AppState, symbol: &str) -> Option<f64> {
+    let target = normalize_symbol_for_scope(symbol);
+    state
+        .assets_view()
+        .iter()
+        .find(|a| normalize_symbol_for_scope(&a.symbol) == target)
+        .and_then(|a| a.last_price)
+}
+
+fn close_all_row_status_for_symbol(state: &AppState, symbol: &str) -> Option<String> {
+    let key = normalize_symbol_for_scope(symbol);
+    if state.close_all_running {
+        if let Some(found) = state.close_all_row_status_by_symbol.get(&key) {
+            if found == "PENDING" {
+                return Some("RUNNING".to_string());
+            }
+            return Some(found.clone());
+        }
+    }
+    state.close_all_row_status_by_symbol.get(&key).cloned()
+}
+
 fn strategy_stats_for_item<'a>(
     stats_map: &'a HashMap<String, OrderHistoryStats>,
     item: &str,
@@ -2909,6 +3508,57 @@ fn latest_exit_policy_for_symbol<'a>(
         .map(|(_, v)| v)
 }
 
+fn latest_ev_snapshot_for_symbol_relaxed<'a>(
+    ev_map: &'a HashMap<String, EvSnapshotEntry>,
+    symbol: &str,
+) -> Option<&'a EvSnapshotEntry> {
+    let candidates = symbol_scope_candidates(symbol);
+    ev_map
+        .iter()
+        .filter(|(k, _)| candidates.iter().any(|prefix| k.starts_with(prefix)))
+        .max_by_key(|(_, v)| v.updated_at_ms)
+        .map(|(_, v)| v)
+}
+
+fn latest_exit_policy_for_symbol_relaxed<'a>(
+    policy_map: &'a HashMap<String, ExitPolicyEntry>,
+    symbol: &str,
+) -> Option<&'a ExitPolicyEntry> {
+    let candidates = symbol_scope_candidates(symbol);
+    policy_map
+        .iter()
+        .filter(|(k, _)| candidates.iter().any(|prefix| k.starts_with(prefix)))
+        .max_by_key(|(_, v)| v.updated_at_ms)
+        .map(|(_, v)| v)
+}
+
+fn symbol_scope_candidates(symbol: &str) -> Vec<String> {
+    let mut variants: Vec<String> = Vec::new();
+    let upper = symbol.trim().to_ascii_uppercase();
+    let base = if let Some(raw) = upper.strip_suffix(" (FUT)") {
+        raw.trim().to_string()
+    } else if let Some(raw) = upper.strip_suffix("#FUT") {
+        raw.trim().to_string()
+    } else {
+        upper.clone()
+    };
+
+    if !base.is_empty() {
+        variants.push(base.clone());
+        variants.push(format!("{} (FUT)", base));
+        variants.push(format!("{}#FUT", base));
+    }
+    if !upper.is_empty() {
+        variants.push(upper);
+    }
+    variants.sort();
+    variants.dedup();
+    variants
+        .into_iter()
+        .map(|v| format!("{}::", v))
+        .collect()
+}
+
 fn strategy_stats_scope_key(symbol: &str, source_tag: &str) -> String {
     format!(
         "{}::{}",
@@ -2955,6 +3605,17 @@ fn parse_source_tag_from_client_order_id(client_order_id: &str) -> Option<&str> 
     } else {
         Some(source_tag)
     }
+}
+
+fn normalize_symbol_for_scope(symbol: &str) -> String {
+    let upper = symbol.trim().to_ascii_uppercase();
+    if let Some(raw) = upper.strip_suffix(" (FUT)") {
+        return raw.trim().to_string();
+    }
+    if let Some(raw) = upper.strip_suffix("#FUT") {
+        return raw.trim().to_string();
+    }
+    upper
 }
 
 fn format_log_record_compact(record: &LogRecord) -> String {
@@ -3057,7 +3718,7 @@ fn format_last_applied_fee(symbol: &str, fills: &[Fill]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::format_last_applied_fee;
+    use super::{format_last_applied_fee, symbol_scope_candidates};
     use crate::model::order::Fill;
 
     #[test]
@@ -3082,5 +3743,26 @@ mod tests {
         }];
         let summary = format_last_applied_fee("ETHUSDT", &fills).unwrap();
         assert_eq!(summary, "0.100% (1.0000 USDT)");
+    }
+
+    #[test]
+    fn symbol_scope_candidates_include_spot_and_futures_variants() {
+        let mut from_spot = symbol_scope_candidates("btcusdt");
+        from_spot.sort();
+        assert!(from_spot.contains(&"BTCUSDT::".to_string()));
+        assert!(from_spot.contains(&"BTCUSDT (FUT)::".to_string()));
+        assert!(from_spot.contains(&"BTCUSDT#FUT::".to_string()));
+
+        let mut from_fut_label = symbol_scope_candidates("BTCUSDT (FUT)");
+        from_fut_label.sort();
+        assert!(from_fut_label.contains(&"BTCUSDT::".to_string()));
+        assert!(from_fut_label.contains(&"BTCUSDT (FUT)::".to_string()));
+        assert!(from_fut_label.contains(&"BTCUSDT#FUT::".to_string()));
+
+        let mut from_hash_fut = symbol_scope_candidates("BTCUSDT#FUT");
+        from_hash_fut.sort();
+        assert!(from_hash_fut.contains(&"BTCUSDT::".to_string()));
+        assert!(from_hash_fut.contains(&"BTCUSDT (FUT)::".to_string()));
+        assert!(from_hash_fut.contains(&"BTCUSDT#FUT::".to_string()));
     }
 }

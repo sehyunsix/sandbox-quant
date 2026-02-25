@@ -155,6 +155,10 @@ fn parse_grid_command_maps_navigation_and_actions() {
         Some(GridCommand::ActivateStrategy)
     );
     assert_eq!(
+        parse_grid_command(&KeyCode::Char('u')),
+        Some(GridCommand::ToggleSmallPositionsFilter)
+    );
+    assert_eq!(
         parse_grid_command(&KeyCode::Esc),
         Some(GridCommand::CloseGrid)
     );

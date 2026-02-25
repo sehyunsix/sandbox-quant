@@ -304,6 +304,23 @@ fn storage_symbol_for_instrument(label: &str) -> String {
     }
 }
 
+fn close_all_reason_code(job_id: u64) -> String {
+    format!("ui.close_all#{}", job_id)
+}
+
+fn parse_close_all_job_id(reason_code: &str) -> Option<u64> {
+    reason_code
+        .strip_prefix("ui.close_all#")
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
+fn close_all_soft_skip_reason(reason_code: &str) -> bool {
+    matches!(
+        reason_code,
+        "risk.qty_too_small" | "risk.no_spot_base_balance" | "risk.insufficient_base_balance"
+    )
+}
+
 fn build_asset_pnl_snapshot(
     order_managers: &HashMap<String, OrderManager>,
     realized_pnl_by_symbol: &HashMap<String, f64>,
@@ -1388,6 +1405,19 @@ fn handle_grid_key(
                     );
                 }
             }
+            GridCommand::ToggleSmallPositionsFilter => {
+                if app_state.grid_tab() == GridTab::Positions {
+                    app_state.hide_small_positions = !app_state.hide_small_positions;
+                    app_state.push_log(format!(
+                        "Positions <$1 filter: {}",
+                        if app_state.hide_small_positions {
+                            "ON"
+                        } else {
+                            "OFF"
+                        }
+                    ));
+                }
+            }
             GridCommand::NewStrategy
             | GridCommand::EditStrategyConfig
             | GridCommand::DeleteStrategy
@@ -1462,7 +1492,7 @@ async fn main() -> Result<()> {
     let (app_tx, mut app_rx) = mpsc::channel::<AppEvent>(256);
     let (tick_tx, mut tick_rx) = mpsc::channel::<Tick>(4096);
     let (manual_order_tx, mut manual_order_rx) = mpsc::channel::<Signal>(16);
-    let (close_all_positions_tx, mut close_all_positions_rx) = mpsc::channel::<()>(8);
+    let (close_all_positions_tx, mut close_all_positions_rx) = mpsc::channel::<u64>(8);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (strategy_enabled_tx, strategy_enabled_rx) = watch::channel(true);
     let tradable_symbols = config.binance.tradable_instruments();
@@ -1737,6 +1767,8 @@ async fn main() -> Result<()> {
         let mut pending_entry_expectancy: HashMap<String, EntryExpectancySnapshot> = HashMap::new();
         let mut lifecycle_engine = PositionLifecycleEngine::default();
         let mut lifecycle_triggered_once: HashSet<String> = HashSet::new();
+        let mut ev_zero_exit_enqueued: HashSet<String> = HashSet::new();
+        let mut close_all_jobs: HashMap<u64, (usize, usize, usize)> = HashMap::new();
         let (risk_eval_tx, mut risk_eval_rx) = mpsc::channel::<(Signal, String, String)>(64);
         let (internal_exit_tx, mut internal_exit_rx) = mpsc::channel::<(String, String)>(64);
         let mut order_history_sync =
@@ -1821,7 +1853,7 @@ async fn main() -> Result<()> {
                     && mgr.position().entry_price > f64::EPSILON
                 {
                     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                    match if ev_enabled {
+                    let ev_value = match if ev_enabled {
                         ev_estimator.estimate_entry_expectancy("sys", &instrument, now_ms)
                     } else {
                         Err(anyhow::anyhow!("ev disabled"))
@@ -1837,6 +1869,7 @@ async fn main() -> Result<()> {
                                     gate_blocked: false,
                                 })
                                 .await;
+                            snapshot.expected_return_usdt
                         }
                         Err(_) => {
                             let _ = strat_app_tx
@@ -1849,7 +1882,28 @@ async fn main() -> Result<()> {
                                     gate_blocked: false,
                                 })
                                 .await;
+                            0.0
                         }
+                    };
+                    if ev_enabled
+                        && ev_value <= 0.0
+                        && !ev_zero_exit_enqueued.contains(&instrument)
+                    {
+                        ev_zero_exit_enqueued.insert(instrument.clone());
+                        let _ = strat_app_tx
+                            .send(app_log(
+                                LogLevel::Warn,
+                                LogDomain::Risk,
+                                "ev.exit.zero",
+                                format!(
+                                    "EV<=0 forced exit queued: {} ev={:+.4}",
+                                    instrument, ev_value
+                                ),
+                            ))
+                            .await;
+                        let _ = internal_exit_tx
+                            .send((instrument.clone(), "exit.ev_non_positive".to_string()))
+                            .await;
                     }
                 }
                 if let Some(stop_price) = derived_stop_price(mgr.position(), strat_config.exit.stop_loss_pct) {
@@ -1937,6 +1991,9 @@ async fn main() -> Result<()> {
                     }
 
                     if let Some(mgr) = order_managers.get_mut(&tick_symbol) {
+                        if mgr.position().is_flat() {
+                            ev_zero_exit_enqueued.remove(&tick_symbol);
+                        }
                         mgr.update_unrealized_pnl(tick.price);
                         if ev_enabled {
                             if let Some(trigger) =
@@ -2143,25 +2200,45 @@ async fn main() -> Result<()> {
                         tracing::error!(error = %e, "Failed to enqueue manual signal");
                     }
                 }
-                Some(()) = close_all_positions_rx.recv() => {
+                Some(job_id) = close_all_positions_rx.recv() => {
                     let close_targets: Vec<String> = order_managers
                         .iter()
                         .filter(|(_, mgr)| !mgr.position().is_flat())
                         .map(|(instrument, _)| instrument.clone())
                         .collect();
+                    let total = close_targets.len();
+                    close_all_jobs.insert(job_id, (total, 0, 0));
+                    let _ = strat_app_tx
+                        .send(AppEvent::CloseAllRequested {
+                            job_id,
+                            total,
+                            symbols: close_targets.clone(),
+                        })
+                        .await;
                     let _ = strat_app_tx
                         .send(app_log(
                             LogLevel::Warn,
                             LogDomain::Risk,
                             "position.close_all.request",
-                            format!("Close-all requested: {} open positions", close_targets.len()),
+                            format!(
+                                "Close-all requested: {} open positions (job #{})",
+                                total, job_id
+                            ),
                         ))
                         .await;
                     for instrument in close_targets {
                         if let Err(e) = internal_exit_tx
-                            .send((instrument.clone(), "ui.close_all".to_string()))
+                            .send((instrument.clone(), close_all_reason_code(job_id)))
                             .await
                         {
+                            let mut completed = 0usize;
+                            let mut failed = 0usize;
+                            if let Some(state) = close_all_jobs.get_mut(&job_id) {
+                                state.1 = state.1.saturating_add(1);
+                                state.2 = state.2.saturating_add(1);
+                                completed = state.1;
+                                failed = state.2;
+                            }
                             let _ = strat_app_tx
                                 .send(app_log(
                                     LogLevel::Warn,
@@ -2170,7 +2247,39 @@ async fn main() -> Result<()> {
                                     format!("Close-all enqueue failed ({}): {}", instrument, e),
                                 ))
                                 .await;
+                            let _ = strat_app_tx
+                                .send(AppEvent::CloseAllProgress {
+                                    job_id,
+                                    symbol: instrument.clone(),
+                                    completed,
+                                    total,
+                                    failed,
+                                    reason: Some(e.to_string()),
+                                })
+                                .await;
+                            if completed >= total {
+                                let _ = strat_app_tx
+                                    .send(AppEvent::CloseAllFinished {
+                                        job_id,
+                                        completed,
+                                        total,
+                                        failed,
+                                    })
+                                    .await;
+                                close_all_jobs.remove(&job_id);
+                            }
                         }
+                    }
+                    if total == 0 {
+                        let _ = strat_app_tx
+                            .send(AppEvent::CloseAllFinished {
+                                job_id,
+                                completed: 0,
+                                total: 0,
+                                failed: 0,
+                            })
+                            .await;
+                        close_all_jobs.remove(&job_id);
                     }
                 }
                 Some((signal, source_tag, instrument)) = risk_eval_rx.recv() => {
@@ -2538,6 +2647,7 @@ async fn main() -> Result<()> {
                 }
                 Some((instrument, reason_code)) = internal_exit_rx.recv() => {
                     let source_tag_lc = "sys".to_string();
+                    let close_all_job_id = parse_close_all_job_id(&reason_code);
                     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
                     let _ = strat_app_tx
                         .send(AppEvent::StrategySignal {
@@ -2563,11 +2673,22 @@ async fn main() -> Result<()> {
                     }
                     let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&instrument) {
+                        let mut close_failed_reason: Option<String> = None;
+                        let mut close_reject_code: Option<String> = None;
                         match mgr
                             .emergency_close_position(&source_tag_lc, &reason_code)
                             .await
                         {
                             Ok(Some(ref update)) => {
+                                if let OrderUpdate::Rejected {
+                                    reason_code,
+                                    reason,
+                                    ..
+                                } = update
+                                {
+                                    close_reject_code = Some(reason_code.clone());
+                                    close_failed_reason = Some(reason.clone());
+                                }
                                 if instrument == selected_symbol {
                                     let _ = strat_app_tx
                                         .send(AppEvent::OrderUpdate(update.clone()))
@@ -2629,7 +2750,47 @@ async fn main() -> Result<()> {
                             }
                             Ok(None) => {}
                             Err(e) => {
+                                close_failed_reason = Some(e.to_string());
                                 let _ = strat_app_tx.send(AppEvent::Error(e.to_string())).await;
+                            }
+                        }
+                        if let Some(job_id) = close_all_job_id {
+                            let (total, completed, failed) =
+                                if let Some(state) = close_all_jobs.get_mut(&job_id) {
+                                    state.1 = state.1.saturating_add(1);
+                                    let is_soft_skip = close_reject_code
+                                        .as_deref()
+                                        .map(close_all_soft_skip_reason)
+                                        .unwrap_or(false);
+                                    if close_failed_reason.is_some() && !is_soft_skip {
+                                        state.2 = state.2.saturating_add(1);
+                                    }
+                                    (state.0, state.1, state.2)
+                                } else {
+                                    (0, 0, 0)
+                                };
+                            if total > 0 || completed > 0 {
+                                let _ = strat_app_tx
+                                    .send(AppEvent::CloseAllProgress {
+                                        job_id,
+                                        symbol: instrument.clone(),
+                                        completed,
+                                        total,
+                                        failed,
+                                        reason: close_failed_reason.clone(),
+                                    })
+                                    .await;
+                                if completed >= total {
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::CloseAllFinished {
+                                            job_id,
+                                            completed,
+                                            total,
+                                            failed,
+                                        })
+                                        .await;
+                                    close_all_jobs.remove(&job_id);
+                                }
                             }
                         }
                     }
@@ -2646,6 +2807,9 @@ async fn main() -> Result<()> {
                 }
                 _ = order_history_sync.tick() => {
                     for (instrument, mgr) in order_managers.iter_mut() {
+                        if mgr.position().is_flat() {
+                            ev_zero_exit_enqueued.remove(instrument);
+                        }
                         match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
                             Ok(history) => {
                                 if instrument == &selected_symbol {
@@ -2676,7 +2840,7 @@ async fn main() -> Result<()> {
                             && mgr.position().entry_price > f64::EPSILON
                         {
                             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                            match if ev_enabled {
+                            let ev_value = match if ev_enabled {
                                 ev_estimator.estimate_entry_expectancy("sys", instrument, now_ms)
                             } else {
                                 Err(anyhow::anyhow!("ev disabled"))
@@ -2692,6 +2856,7 @@ async fn main() -> Result<()> {
                                             gate_blocked: false,
                                         })
                                         .await;
+                                    snapshot.expected_return_usdt
                                 }
                                 Err(_) => {
                                     let _ = strat_app_tx
@@ -2704,7 +2869,28 @@ async fn main() -> Result<()> {
                                             gate_blocked: false,
                                         })
                                         .await;
+                                    0.0
                                 }
+                            };
+                            if ev_enabled
+                                && ev_value <= 0.0
+                                && !ev_zero_exit_enqueued.contains(instrument)
+                            {
+                                ev_zero_exit_enqueued.insert(instrument.clone());
+                                let _ = strat_app_tx
+                                    .send(app_log(
+                                        LogLevel::Warn,
+                                        LogDomain::Risk,
+                                        "ev.exit.zero",
+                                        format!(
+                                            "EV<=0 forced exit queued: {} ev={:+.4}",
+                                            instrument, ev_value
+                                        ),
+                                    ))
+                                    .await;
+                                let _ = internal_exit_tx
+                                    .send((instrument.clone(), "exit.ev_non_positive".to_string()))
+                                    .await;
                             }
                         }
                         if let Some(stop_price) = derived_stop_price(mgr.position(), strat_config.exit.stop_loss_pct) {
@@ -2948,6 +3134,7 @@ async fn main() -> Result<()> {
     app_state.push_log(format!("sandbox-quant started | {} | demo", initial_symbol));
     let mut current_symbol = initial_symbol.clone();
     let mut current_strategy_profile = initial_strategy_profile;
+    let mut close_all_job_seq: u64 = 0;
 
     loop {
         refresh_strategy_lists(&mut app_state, &strategy_catalog, &enabled_strategy_tags);
@@ -2961,6 +3148,49 @@ async fn main() -> Result<()> {
                     tracing::info!("User quit");
                     let _ = shutdown_tx.send(true);
                     break;
+                }
+                if app_state.is_close_all_confirm_open() {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                            app_state.set_close_all_confirm_open(false);
+                            if app_state.is_close_all_running() {
+                                app_state.push_log("[WARN] close-all already running".to_string());
+                            } else {
+                                close_all_job_seq = close_all_job_seq.saturating_add(1);
+                                app_state.close_all_running = true;
+                                app_state.close_all_job_id = Some(close_all_job_seq);
+                                app_state.close_all_total = 0;
+                                app_state.close_all_completed = 0;
+                                app_state.close_all_failed = 0;
+                                app_state.close_all_current_symbol = None;
+                                app_state.close_all_status_expire_at_ms = None;
+                                app_state.push_log(format!(
+                                    "Close ALL positions confirmed (job #{})",
+                                    close_all_job_seq
+                                ));
+                                if close_all_positions_tx.try_send(close_all_job_seq).is_err() {
+                                    app_state.push_log(
+                                        "[WARN] Close-all queue busy; retry in a moment".to_string(),
+                                    );
+                                }
+                            }
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            app_state.set_close_all_confirm_open(false);
+                            app_state.push_log("Close ALL positions canceled".to_string());
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                if matches!(parse_main_command(&key.code), Some(UiCommand::CloseAllPositions)) {
+                    if app_state.is_close_all_running() {
+                        app_state.push_log("[WARN] close-all already running".to_string());
+                        continue;
+                    }
+                    app_state.set_close_all_confirm_open(true);
+                    app_state.push_log("Confirm close-all: [Y]es / [N]o".to_string());
+                    continue;
                 }
                 if app_state.is_symbol_selector_open() {
                     if let Some(cmd) = parse_popup_command(PopupKind::SymbolSelector, &key.code) {
@@ -3091,14 +3321,7 @@ async fn main() -> Result<()> {
                         app_state.push_log("Manual SELL (position)".to_string());
                         let _ = manual_order_tx.try_send(Signal::Sell);
                     }
-                    UiCommand::CloseAllPositions => {
-                        app_state.push_log("Close ALL positions requested".to_string());
-                        if close_all_positions_tx.try_send(()).is_err() {
-                            app_state.push_log(
-                                "[WARN] Close-all queue busy; retry in a moment".to_string(),
-                            );
-                        }
-                    }
+                    UiCommand::CloseAllPositions => {}
                     UiCommand::SwitchTimeframe(interval) => {
                         switch_timeframe(&current_symbol, interval, &rest_client, &config, &app_tx);
                     }

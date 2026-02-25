@@ -1451,6 +1451,13 @@ impl OrderManager {
         if self.position.is_flat() {
             return Ok(None);
         }
+        // Emergency close should prefer best-effort execution over stale local cache.
+        // Refresh balances first and ensure we have a fallback price for risk normalization.
+        let _ = self.refresh_balances().await;
+        if self.last_price <= f64::EPSILON && self.position.entry_price > f64::EPSILON {
+            self.last_price = self.position.entry_price;
+            self.position.update_unrealized_pnl(self.last_price);
+        }
         tracing::warn!(
             symbol = %self.symbol,
             market = %normalize_market_label(self.market),

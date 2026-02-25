@@ -34,6 +34,7 @@ pub enum GridCommand {
     DeleteStrategy,
     ToggleStrategyOnOff,
     ActivateStrategy,
+    ToggleSmallPositionsFilter,
     CloseGrid,
 }
 
@@ -109,6 +110,7 @@ pub fn parse_grid_command(key_code: &KeyCode) -> Option<GridCommand> {
             'x' => Some(GridCommand::DeleteStrategy),
             'o' => Some(GridCommand::ToggleStrategyOnOff),
             'f' => Some(GridCommand::ActivateStrategy),
+            'u' => Some(GridCommand::ToggleSmallPositionsFilter),
             'g' => Some(GridCommand::CloseGrid),
             _ => None,
         },

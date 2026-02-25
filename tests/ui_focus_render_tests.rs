@@ -1,6 +1,10 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
+use std::collections::HashMap;
+
+use sandbox_quant::event::{AppEvent, AssetPnlEntry};
+use sandbox_quant::model::order::OrderSide;
 use sandbox_quant::order_manager::OrderHistoryStats;
 use sandbox_quant::ui::ui_projection::UiProjection;
 use sandbox_quant::ui::{self, AppState, GridTab};
@@ -44,6 +48,25 @@ fn render_focus_popup_when_enabled() {
 }
 
 #[test]
+/// Verifies close-all confirmation popup rendering:
+/// when `close_all_confirm_open` is enabled, confirmation title and hint should be visible.
+fn render_close_all_confirm_popup_when_enabled() {
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.set_close_all_confirm_open(true);
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Confirm Close-All"));
+    assert!(text.contains("Y/Enter"));
+    assert!(text.contains("N/Esc"));
+}
+
+#[test]
 /// Verifies grid strategy selection surface:
 /// grid popup should render strategy rows and show selector marker for the current index.
 fn render_grid_popup_with_strategy_selector() {
@@ -73,6 +96,135 @@ fn render_grid_popup_with_strategy_selector() {
     assert!(
         text.contains("Strategy"),
         "grid strategy navigation hint should be visible"
+    );
+}
+
+#[test]
+/// Verifies grid positions tab rendering:
+/// selecting positions tab should show position table title and row headers.
+fn render_grid_popup_positions_tab() {
+    let backend = TestBackend::new(140, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.grid_open = true;
+    state.grid_tab = GridTab::Positions;
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Portfolio Grid"));
+    assert!(text.contains("Positions"));
+    assert!(text.contains("Symbol"));
+    assert!(text.contains("OrderId"));
+    assert!(text.contains("Close"));
+    assert!(text.contains("Stop"));
+    assert!(text.contains("StopType"));
+    assert!(text.contains("EV"));
+    assert!(text.contains("Score"));
+    assert!(text.contains("Gate"));
+    assert!(text.contains("UnrPnL"));
+}
+
+#[test]
+/// Verifies positions EV columns still render concrete values after layout changes.
+fn render_grid_popup_positions_tab_shows_ev_values() {
+    let backend = TestBackend::new(140, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.grid_open = true;
+    state.grid_tab = GridTab::Positions;
+
+    let mut pnl = HashMap::new();
+    pnl.insert(
+        "BTCUSDT".to_string(),
+        AssetPnlEntry {
+            is_futures: false,
+            side: Some(OrderSide::Buy),
+            position_qty: 0.01,
+            entry_price: 63000.0,
+            realized_pnl_usdt: 1.0,
+            unrealized_pnl_usdt: 2.0,
+        },
+    );
+    state.apply(AppEvent::AssetPnlUpdate { by_symbol: pnl });
+    state.apply(AppEvent::EvSnapshotUpdate {
+        symbol: "BTCUSDT".to_string(),
+        source_tag: "c01".to_string(),
+        ev: 1.234,
+        p_win: 0.77,
+        gate_mode: "soft".to_string(),
+        gate_blocked: false,
+    });
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("+1.234"));
+    assert!(text.contains("0.77"));
+    assert!(text.contains("SOFT"));
+}
+
+#[test]
+/// Verifies periodic SYS-scope EV snapshots are rendered in positions table.
+fn render_grid_popup_positions_tab_shows_sys_ev_values() {
+    let backend = TestBackend::new(140, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT (FUT)", "MA(Config)", 120, 60_000, "1m");
+    state.grid_open = true;
+    state.grid_tab = GridTab::Positions;
+
+    let mut pnl = HashMap::new();
+    pnl.insert(
+        "BTCUSDT (FUT)".to_string(),
+        AssetPnlEntry {
+            is_futures: true,
+            side: Some(OrderSide::Buy),
+            position_qty: 0.02,
+            entry_price: 67000.0,
+            realized_pnl_usdt: -1.0,
+            unrealized_pnl_usdt: 3.0,
+        },
+    );
+    state.apply(AppEvent::AssetPnlUpdate { by_symbol: pnl });
+    state.apply(AppEvent::EvSnapshotUpdate {
+        symbol: "BTCUSDT (FUT)".to_string(),
+        source_tag: "sys".to_string(),
+        ev: 0.5,
+        p_win: 0.55,
+        gate_mode: "shadow".to_string(),
+        gate_blocked: false,
+    });
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("+0.500"));
+    assert!(text.contains("0.55"));
+    assert!(text.contains("SHADOW"));
+}
+
+#[test]
+/// Verifies compact-height main layout:
+/// even on short terminal height, main view should still render the Position panel.
+fn render_main_view_keeps_position_panel_in_compact_terminal() {
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(
+        text.contains("Position"),
+        "position panel title should remain visible in compact terminal"
     );
 }
 
