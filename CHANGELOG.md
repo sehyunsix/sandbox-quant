@@ -1,3 +1,7 @@
+## v0.29.1 - 2026-02-25
+
+- Improve close-all UX, EV exit handling, and position filter toggle (700fe61)
+
 ## v0.29.0 - 2026-02-24
 
 - feat(ui): add grid history tab and EV fallback for strategy rows (92950fe)
