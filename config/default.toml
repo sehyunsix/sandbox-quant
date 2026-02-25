@@ -44,6 +44,15 @@ market_data_per_minute = 360
 [ev]
 enabled = true
 mode = "shadow"
+forward_p_win = 0.53
+forward_target_rr = 1.8
+y_mu = 0.0
+y_sigma_spot = 0.01
+y_sigma_futures = 0.015
+futures_multiplier = 1.0
+y_ewma_alpha_mean = 0.08
+y_ewma_alpha_var = 0.08
+y_min_sigma = 0.001
 lookback_trades = 200
 prior_a = 6.0
 prior_b = 6.0
