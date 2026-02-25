@@ -17,6 +17,14 @@ fn parse_main_command_maps_case_insensitive_char_keys() {
         parse_main_command(&KeyCode::Char('s')),
         Some(UiCommand::ManualSell)
     );
+    assert_eq!(
+        parse_main_command(&KeyCode::Char('z')),
+        Some(UiCommand::CloseAllPositions)
+    );
+    assert_eq!(
+        parse_main_command(&KeyCode::Char('Z')),
+        Some(UiCommand::CloseAllPositions)
+    );
 }
 
 #[test]
@@ -88,18 +96,22 @@ fn parse_grid_command_maps_navigation_and_actions() {
     );
     assert_eq!(
         parse_grid_command(&KeyCode::Char('3')),
-        Some(GridCommand::TabRisk)
+        Some(GridCommand::TabPositions)
     );
     assert_eq!(
         parse_grid_command(&KeyCode::Char('4')),
-        Some(GridCommand::TabNetwork)
+        Some(GridCommand::TabRisk)
     );
     assert_eq!(
         parse_grid_command(&KeyCode::Char('5')),
-        Some(GridCommand::TabHistory)
+        Some(GridCommand::TabNetwork)
     );
     assert_eq!(
         parse_grid_command(&KeyCode::Char('6')),
+        Some(GridCommand::TabHistory)
+    );
+    assert_eq!(
+        parse_grid_command(&KeyCode::Char('7')),
         Some(GridCommand::TabSystemLog)
     );
     assert_eq!(

@@ -619,6 +619,8 @@ impl Widget for KeybindBar {
             Span::styled("[B]", Style::default().fg(Color::Green)),
             Span::styled("/[S] ", Style::default().fg(Color::DarkGray)),
             Span::styled("buy/sell ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Z] ", Style::default().fg(Color::Red)),
+            Span::styled("close-all ", Style::default().fg(Color::DarkGray)),
             Span::styled("[G]", Style::default().fg(Color::Magenta)),
             Span::styled(" grid ", Style::default().fg(Color::DarkGray)),
             Span::styled("| ", Style::default().fg(Color::DarkGray)),
