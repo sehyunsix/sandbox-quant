@@ -410,6 +410,8 @@ pub struct StatusBar<'a> {
     pub last_price_latency_ms: Option<u64>,
     pub last_order_history_update_ms: Option<u64>,
     pub last_order_history_latency_ms: Option<u64>,
+    pub close_all_status: Option<&'a str>,
+    pub close_all_running: bool,
 }
 
 impl Widget for StatusBar<'_> {
@@ -448,7 +450,7 @@ impl Widget for StatusBar<'_> {
             Span::styled(" STRAT ON ", Style::default().fg(Color::Green))
         };
 
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 " sandbox-quant ",
                 Style::default()
@@ -488,7 +490,19 @@ impl Widget for StatusBar<'_> {
                 ),
                 Style::default().fg(Color::Cyan),
             ),
-        ]);
+        ];
+        if let Some(status) = self.close_all_status {
+            spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                status,
+                Style::default().fg(if self.close_all_running {
+                    Color::Yellow
+                } else {
+                    Color::LightGreen
+                }),
+            ));
+        }
+        let line = Line::from(spans);
 
         buf.set_line(area.x, area.y, &line, area.width);
     }
@@ -660,6 +674,8 @@ impl Widget for GridKeybindBar {
             Span::styled(" run ", Style::default().fg(Color::DarkGray)),
             Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
             Span::styled(" close ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Z]", Style::default().fg(Color::Red)),
+            Span::styled(" close-all ", Style::default().fg(Color::DarkGray)),
         ]);
 
         buf.set_line(area.x, area.y, &line, area.width);

@@ -262,3 +262,44 @@ fn app_state_applies_ev_and_exit_policy_events() {
     assert_eq!(exit.expected_holding_ms, Some(600_000));
     assert_eq!(exit.protective_stop_ok, Some(true));
 }
+
+#[test]
+/// Verifies close-all progress lifecycle:
+/// requested/progress/finished events should update running flag and counters.
+fn app_state_tracks_close_all_progress_events() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    s.apply(AppEvent::CloseAllRequested {
+        job_id: 7,
+        total: 3,
+        symbols: vec![
+            "BTCUSDT".to_string(),
+            "ETHUSDT".to_string(),
+            "BNBUSDT".to_string(),
+        ],
+    });
+    assert!(s.close_all_running);
+    assert_eq!(s.close_all_total, 3);
+    assert_eq!(s.close_all_job_id, Some(7));
+
+    s.apply(AppEvent::CloseAllProgress {
+        job_id: 7,
+        symbol: "BTCUSDT".to_string(),
+        completed: 1,
+        total: 3,
+        failed: 0,
+        reason: None,
+    });
+    assert_eq!(s.close_all_completed, 1);
+    assert_eq!(s.close_all_failed, 0);
+    assert_eq!(s.close_all_current_symbol.as_deref(), Some("BTCUSDT"));
+
+    s.apply(AppEvent::CloseAllFinished {
+        job_id: 7,
+        completed: 3,
+        total: 3,
+        failed: 1,
+    });
+    assert!(!s.close_all_running);
+    assert_eq!(s.close_all_completed, 3);
+    assert_eq!(s.close_all_failed, 1);
+}
