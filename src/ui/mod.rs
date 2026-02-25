@@ -1072,15 +1072,21 @@ impl AppState {
                 symbol,
                 source_tag,
                 ev,
+                entry_ev,
                 p_win,
                 gate_mode,
                 gate_blocked,
             } => {
                 let key = strategy_stats_scope_key(&symbol, &source_tag);
+                let prev_entry_ev = self
+                    .ev_snapshot_by_scope
+                    .get(&key)
+                    .and_then(|v| v.entry_ev);
                 self.ev_snapshot_by_scope.insert(
                     key,
                     EvSnapshotEntry {
                         ev,
+                        entry_ev: entry_ev.or(prev_entry_ev),
                         p_win,
                         gate_mode,
                         gate_blocked,
@@ -2237,7 +2243,8 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             Cell::from("Entry"),
             Cell::from("Last"),
             Cell::from("Stop"),
-            Cell::from("EV"),
+            Cell::from("LiveEV"),
+            Cell::from("EntryEV"),
             Cell::from("Score"),
             Cell::from("Gate"),
             Cell::from("StopType"),
@@ -2291,6 +2298,12 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                         Cell::from(
                             ev_snapshot
                                 .map(|v| format!("{:+.3}", v.ev))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            ev_snapshot
+                                .and_then(|v| v.entry_ev)
+                                .map(|v| format!("{:+.3}", v))
                                 .unwrap_or_else(|| "-".to_string()),
                         ),
                         Cell::from(
@@ -2379,6 +2392,13 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                         Cell::from(
                             ev_snapshot
                                 .as_ref()
+                                .and_then(|v| v.entry_ev)
+                                .map(|v| format!("{:+.3}", v))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        Cell::from(
+                            ev_snapshot
+                                .as_ref()
                                 .map(|v| format!("{:.2}", v.p_win))
                                 .unwrap_or_else(|| "-".to_string()),
                         ),
@@ -2412,6 +2432,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             rows.push(
                 Row::new(vec![
                     Cell::from("(no open positions)"),
+                    Cell::from("-"),
                     Cell::from("-"),
                     Cell::from("-"),
                     Cell::from("-"),
