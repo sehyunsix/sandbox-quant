@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ev::price_model::YNormal;
+use crate::model::signal::Signal;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EwmaYModelConfig {
@@ -31,6 +32,7 @@ struct EwmaState {
 pub struct EwmaYModel {
     cfg: EwmaYModelConfig,
     by_instrument: HashMap<String, EwmaState>,
+    by_scope_side: HashMap<String, EwmaState>,
 }
 
 impl EwmaYModel {
@@ -38,22 +40,90 @@ impl EwmaYModel {
         Self {
             cfg,
             by_instrument: HashMap::new(),
+            by_scope_side: HashMap::new(),
         }
     }
 
     pub fn observe_price(&mut self, instrument: &str, price: f64) {
+        Self::update_state(
+            self.by_instrument
+                .entry(instrument.to_string())
+                .or_default(),
+            price,
+            self.cfg,
+        );
+    }
+
+    pub fn observe_signal_price(
+        &mut self,
+        instrument: &str,
+        source_tag: &str,
+        signal: &Signal,
+        price: f64,
+    ) {
+        let key = scoped_side_key(instrument, source_tag, signal);
+        Self::update_state(self.by_scope_side.entry(key).or_default(), price, self.cfg);
+    }
+
+    pub fn estimate_base(&self, instrument: &str, fallback_mu: f64, fallback_sigma: f64) -> YNormal {
+        let Some(st) = self.by_instrument.get(instrument) else {
+            return YNormal {
+                mu: fallback_mu,
+                sigma: fallback_sigma.max(self.cfg.min_sigma),
+            };
+        };
+        let sigma = st.var.max(0.0).sqrt().max(self.cfg.min_sigma);
+        let mu = if st.samples == 0 { fallback_mu } else { st.mu };
+        YNormal { mu, sigma }
+    }
+
+    pub fn estimate_for_signal(
+        &self,
+        instrument: &str,
+        source_tag: &str,
+        signal: &Signal,
+        fallback_mu: f64,
+        fallback_sigma: f64,
+    ) -> YNormal {
+        let base = self.estimate_base(instrument, fallback_mu, fallback_sigma);
+        let key = scoped_side_key(instrument, source_tag, signal);
+        let Some(scoped) = self.by_scope_side.get(&key) else {
+            return base;
+        };
+        if scoped.samples == 0 {
+            return base;
+        }
+        // Shrink conditioned estimate toward base to avoid noisy overreaction.
+        let n = scoped.samples as f64;
+        let w = n / (n + 20.0);
+        let base_var = base.sigma * base.sigma;
+        let scoped_var = scoped.var.max(0.0);
+        let mu = w * scoped.mu + (1.0 - w) * base.mu;
+        let sigma = (w * scoped_var + (1.0 - w) * base_var)
+            .max(0.0)
+            .sqrt()
+            .max(self.cfg.min_sigma);
+        YNormal { mu, sigma }
+    }
+
+    pub fn estimate(
+        &self,
+        instrument: &str,
+        fallback_mu: f64,
+        fallback_sigma: f64,
+    ) -> YNormal {
+        self.estimate_base(instrument, fallback_mu, fallback_sigma)
+    }
+
+    fn update_state(st: &mut EwmaState, price: f64, cfg: EwmaYModelConfig) {
         if price <= f64::EPSILON {
             return;
         }
-        let st = self
-            .by_instrument
-            .entry(instrument.to_string())
-            .or_default();
         if let Some(prev) = st.last_price {
             if prev > f64::EPSILON {
                 let r = (price / prev).ln();
-                let a_mu = self.cfg.alpha_mean.clamp(0.0, 1.0);
-                let a_var = self.cfg.alpha_var.clamp(0.0, 1.0);
+                let a_mu = cfg.alpha_mean.clamp(0.0, 1.0);
+                let a_var = cfg.alpha_var.clamp(0.0, 1.0);
                 st.mu = if st.samples == 0 {
                     r
                 } else {
@@ -71,21 +141,18 @@ impl EwmaYModel {
         }
         st.last_price = Some(price);
     }
+}
 
-    pub fn estimate(
-        &self,
-        instrument: &str,
-        fallback_mu: f64,
-        fallback_sigma: f64,
-    ) -> YNormal {
-        let Some(st) = self.by_instrument.get(instrument) else {
-            return YNormal {
-                mu: fallback_mu,
-                sigma: fallback_sigma.max(self.cfg.min_sigma),
-            };
-        };
-        let sigma = st.var.max(0.0).sqrt().max(self.cfg.min_sigma);
-        let mu = if st.samples == 0 { fallback_mu } else { st.mu };
-        YNormal { mu, sigma }
-    }
+fn scoped_side_key(instrument: &str, source_tag: &str, signal: &Signal) -> String {
+    let side = match signal {
+        Signal::Buy => "buy",
+        Signal::Sell => "sell",
+        Signal::Hold => "hold",
+    };
+    format!(
+        "{}::{}::{}",
+        instrument.trim().to_ascii_uppercase(),
+        source_tag.trim().to_ascii_lowercase(),
+        side
+    )
 }
