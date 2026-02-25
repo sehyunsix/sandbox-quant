@@ -10,8 +10,8 @@ use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
 use sandbox_quant::ev::{
-    EntryExpectancySnapshot, EvEstimator, EvEstimatorConfig, TradeStatsReader, TradeStatsSample,
-    TradeStatsWindow,
+    futures_ev_from_y_normal, spot_ev_from_y_normal, EntryExpectancySnapshot, EvEstimatorConfig,
+    EwmaYModel, EwmaYModelConfig, FuturesEvInputs, PositionSide, SpotEvInputs, YNormal,
 };
 use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
 use sandbox_quant::input::{
@@ -50,69 +50,6 @@ use sandbox_quant::ui::{AppState, GridTab};
 
 const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
-
-#[derive(Clone, Default)]
-struct OrderStoreTradeStatsReader;
-
-impl TradeStatsReader for OrderStoreTradeStatsReader {
-    fn load_local_stats(
-        &self,
-        source_tag: &str,
-        instrument: &str,
-        lookback: usize,
-    ) -> Result<TradeStatsWindow> {
-        let symbol = storage_symbol_for_instrument(instrument);
-        let rows = order_store::load_recent_persisted_trades_filtered(
-            Some(&symbol),
-            None,
-            lookback.saturating_mul(6).max(20),
-        )?;
-        Ok(build_trade_stats_window(rows, Some(source_tag), lookback))
-    }
-
-    fn load_global_stats(&self, source_tag: &str, lookback: usize) -> Result<TradeStatsWindow> {
-        let rows = order_store::load_recent_persisted_trades_filtered(
-            None,
-            None,
-            lookback.saturating_mul(10).max(50),
-        )?;
-        Ok(build_trade_stats_window(rows, Some(source_tag), lookback))
-    }
-}
-
-fn build_trade_stats_window(
-    rows: Vec<order_store::PersistedTrade>,
-    source_tag_filter: Option<&str>,
-    limit: usize,
-) -> TradeStatsWindow {
-    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-    let filter = source_tag_filter
-        .map(|s| canonical_strategy_tag(s))
-        .unwrap_or_default();
-    let mut samples: Vec<TradeStatsSample> = rows
-        .into_iter()
-        .filter(|row| {
-            if filter.is_empty() {
-                return true;
-            }
-            canonical_strategy_tag(&row.source) == filter
-        })
-        .filter(|row| row.trade.realized_pnl.abs() > f64::EPSILON)
-        .map(|row| {
-            let age_ms = now_ms.saturating_sub(row.trade.time);
-            TradeStatsSample {
-                age_days: age_ms as f64 / 86_400_000.0,
-                pnl_usdt: row.trade.realized_pnl,
-                // Holding time is not persisted yet; keep a conservative placeholder.
-                holding_ms: 60_000,
-            }
-        })
-        .collect();
-    if samples.len() > limit {
-        samples.truncate(limit);
-    }
-    TradeStatsWindow { samples }
-}
 
 #[derive(Debug)]
 enum StrategyRuntime {
@@ -295,15 +232,6 @@ fn normalize_instrument_label(label: &str) -> String {
     }
 }
 
-fn storage_symbol_for_instrument(label: &str) -> String {
-    let (symbol, market) = parse_instrument_label(label);
-    if market == MarketKind::Futures {
-        format!("{}#FUT", symbol)
-    } else {
-        symbol
-    }
-}
-
 fn close_all_reason_code(job_id: u64) -> String {
     format!("ui.close_all#{}", job_id)
 }
@@ -393,6 +321,131 @@ fn derived_stop_price(position: &Position, stop_loss_pct: f64) -> Option<f64> {
         }
         _ => Some(position.entry_price * (1.0 - pct)),
     }
+}
+
+fn y_snapshot_for_entry(
+    ev_cfg: &EvEstimatorConfig,
+    market: MarketKind,
+    futures_multiplier: f64,
+    y: YNormal,
+    order_amount_usdt: f64,
+    entry_price: f64,
+    max_holding_ms: u64,
+    now_ms: u64,
+) -> Option<EntryExpectancySnapshot> {
+    if entry_price <= f64::EPSILON || order_amount_usdt <= f64::EPSILON {
+        return None;
+    }
+    let qty = order_amount_usdt / entry_price;
+    if qty <= f64::EPSILON {
+        return None;
+    }
+    let stats = if market == MarketKind::Futures {
+        futures_ev_from_y_normal(
+            y,
+            FuturesEvInputs {
+                p0: entry_price,
+                qty,
+                multiplier: futures_multiplier,
+                side: PositionSide::Long,
+                fee: 0.0,
+                slippage: ev_cfg.fee_slippage_penalty_usdt,
+                funding: 0.0,
+                liq_risk: 0.0,
+            },
+        )
+    } else {
+        spot_ev_from_y_normal(
+            y,
+            SpotEvInputs {
+                p0: entry_price,
+                qty,
+                side: PositionSide::Long,
+                fee: 0.0,
+                slippage: ev_cfg.fee_slippage_penalty_usdt,
+                borrow: 0.0,
+            },
+        )
+    };
+    Some(EntryExpectancySnapshot {
+        expected_return_usdt: stats.ev,
+        expected_holding_ms: max_holding_ms.max(1),
+        worst_case_loss_usdt: stats.ev_std,
+        fee_slippage_penalty_usdt: ev_cfg.fee_slippage_penalty_usdt,
+        probability: sandbox_quant::ev::ProbabilitySnapshot {
+            p_win: stats.p_win,
+            p_tail_loss: 1.0 - stats.p_win,
+            p_timeout_exit: 0.5,
+            n_eff: 0.0,
+            confidence: sandbox_quant::ev::ConfidenceLevel::Low,
+            prob_model_version: "y-normal-v1".to_string(),
+        },
+        ev_model_version: "y-normal-spot-fut-v1".to_string(),
+        computed_at_ms: now_ms,
+    })
+}
+
+fn y_snapshot_for_open_position(
+    ev_cfg: &EvEstimatorConfig,
+    market: MarketKind,
+    futures_multiplier: f64,
+    y: YNormal,
+    entry_price: f64,
+    qty: f64,
+    side: Option<sandbox_quant::model::order::OrderSide>,
+    max_holding_ms: u64,
+    now_ms: u64,
+) -> Option<EntryExpectancySnapshot> {
+    if entry_price <= f64::EPSILON || qty.abs() <= f64::EPSILON {
+        return None;
+    }
+    let side = match side {
+        Some(sandbox_quant::model::order::OrderSide::Sell) => PositionSide::Short,
+        _ => PositionSide::Long,
+    };
+    let stats = if market == MarketKind::Futures {
+        futures_ev_from_y_normal(
+            y,
+            FuturesEvInputs {
+                p0: entry_price,
+                qty: qty.abs(),
+                multiplier: futures_multiplier,
+                side,
+                fee: 0.0,
+                slippage: ev_cfg.fee_slippage_penalty_usdt,
+                funding: 0.0,
+                liq_risk: 0.0,
+            },
+        )
+    } else {
+        spot_ev_from_y_normal(
+            y,
+            SpotEvInputs {
+                p0: entry_price,
+                qty: qty.abs(),
+                side,
+                fee: 0.0,
+                slippage: ev_cfg.fee_slippage_penalty_usdt,
+                borrow: 0.0,
+            },
+        )
+    };
+    Some(EntryExpectancySnapshot {
+        expected_return_usdt: stats.ev,
+        expected_holding_ms: max_holding_ms.max(1),
+        worst_case_loss_usdt: stats.ev_std,
+        fee_slippage_penalty_usdt: ev_cfg.fee_slippage_penalty_usdt,
+        probability: sandbox_quant::ev::ProbabilitySnapshot {
+            p_win: stats.p_win,
+            p_tail_loss: 1.0 - stats.p_win,
+            p_timeout_exit: 0.5,
+            n_eff: 0.0,
+            confidence: sandbox_quant::ev::ConfidenceLevel::Low,
+            prob_model_version: "y-normal-v1".to_string(),
+        },
+        ev_model_version: "y-normal-spot-fut-v1".to_string(),
+        computed_at_ms: now_ms,
+    })
 }
 
 fn enabled_instruments(
@@ -1755,15 +1808,15 @@ async fn main() -> Result<()> {
             prob_model_version: "beta-binomial-v1".to_string(),
             ev_model_version: "ev-conservative-v1".to_string(),
         };
-        let ev_estimator = EvEstimator::new(
-            ev_cfg,
-            OrderStoreTradeStatsReader,
-            strat_config.ev.lookback_trades.max(1),
-        );
         let ev_enabled = strat_config.ev.enabled;
         let ev_shadow_mode = strat_config.ev.mode.eq_ignore_ascii_case("shadow");
         let ev_soft_mode = strat_config.ev.mode.eq_ignore_ascii_case("soft");
         let ev_hard_mode = strat_config.ev.mode.eq_ignore_ascii_case("hard");
+        let mut y_model = EwmaYModel::new(EwmaYModelConfig {
+            alpha_mean: strat_config.ev.y_ewma_alpha_mean,
+            alpha_var: strat_config.ev.y_ewma_alpha_var,
+            min_sigma: strat_config.ev.y_min_sigma,
+        });
         let mut pending_entry_expectancy: HashMap<String, EntryExpectancySnapshot> = HashMap::new();
         let mut lifecycle_engine = PositionLifecycleEngine::default();
         let mut lifecycle_triggered_once: HashSet<String> = HashSet::new();
@@ -1853,38 +1906,38 @@ async fn main() -> Result<()> {
                     && mgr.position().entry_price > f64::EPSILON
                 {
                     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                    let ev_value = match if ev_enabled {
-                        ev_estimator.estimate_entry_expectancy("sys", &instrument, now_ms)
+                    let (_, market) = parse_instrument_label(&instrument);
+                    let fallback_sigma = if market == MarketKind::Futures {
+                        strat_config.ev.y_sigma_futures
                     } else {
-                        Err(anyhow::anyhow!("ev disabled"))
-                    } {
-                        Ok(snapshot) => {
-                            let _ = strat_app_tx
-                                .send(AppEvent::EvSnapshotUpdate {
-                                    symbol: instrument.clone(),
-                                    source_tag: "sys".to_string(),
-                                    ev: snapshot.expected_return_usdt,
-                                    p_win: snapshot.probability.p_win,
-                                    gate_mode: strat_config.ev.mode.clone(),
-                                    gate_blocked: false,
-                                })
-                                .await;
-                            snapshot.expected_return_usdt
-                        }
-                        Err(_) => {
-                            let _ = strat_app_tx
-                                .send(AppEvent::EvSnapshotUpdate {
-                                    symbol: instrument.clone(),
-                                    source_tag: "sys".to_string(),
-                                    ev: 0.0,
-                                    p_win: 0.5,
-                                    gate_mode: strat_config.ev.mode.clone(),
-                                    gate_blocked: false,
-                                })
-                                .await;
-                            0.0
-                        }
+                        strat_config.ev.y_sigma_spot
                     };
+                    let y = y_model.estimate(&instrument, strat_config.ev.y_mu, fallback_sigma);
+                    let Some(snapshot) = y_snapshot_for_open_position(
+                        &ev_cfg,
+                        market,
+                        strat_config.ev.futures_multiplier,
+                        y,
+                        mgr.position().entry_price,
+                        mgr.position().qty,
+                        mgr.position().side,
+                        strat_config.exit.max_holding_ms,
+                        now_ms,
+                    ) else {
+                        continue;
+                    };
+                    let ev_value = snapshot.expected_return_usdt;
+                    let _ = strat_app_tx
+                        .send(AppEvent::EvSnapshotUpdate {
+                            symbol: instrument.clone(),
+                            source_tag: "sys".to_string(),
+                            ev: snapshot.expected_return_usdt,
+                            entry_ev: lifecycle_engine.entry_ev_locked(&instrument),
+                            p_win: snapshot.probability.p_win,
+                            gate_mode: strat_config.ev.mode.clone(),
+                            gate_blocked: false,
+                        })
+                        .await;
                     if ev_enabled
                         && ev_value <= 0.0
                         && !ev_zero_exit_enqueued.contains(&instrument)
@@ -1949,8 +2002,16 @@ async fn main() -> Result<()> {
                 LogDomain::Strategy,
                 "ev.config",
                 format!(
-                    "EV config: enabled={} mode={} gate_min={:+.4}",
-                    ev_enabled, strat_config.ev.mode, strat_config.ev.entry_gate_min_ev_usdt
+                    "EV config: enabled={} mode={} gate_min={:+.4} basis=y-normal mu={:+.4} sigma_spot={:.4} sigma_fut={:.4} ewma(a_mu={:.3},a_var={:.3},min_sig={:.4})",
+                    ev_enabled,
+                    strat_config.ev.mode,
+                    strat_config.ev.entry_gate_min_ev_usdt,
+                    strat_config.ev.y_mu,
+                    strat_config.ev.y_sigma_spot,
+                    strat_config.ev.y_sigma_futures,
+                    strat_config.ev.y_ewma_alpha_mean,
+                    strat_config.ev.y_ewma_alpha_var,
+                    strat_config.ev.y_min_sigma
                 ),
             ))
             .await;
@@ -1983,6 +2044,7 @@ async fn main() -> Result<()> {
                     };
                     let tick_symbol = normalize_instrument_label(&tick.symbol);
                     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    y_model.observe_price(&tick_symbol, tick.price);
 
                     if tick_symbol == selected_symbol {
                         let _ = strat_app_tx
@@ -2091,65 +2153,66 @@ async fn main() -> Result<()> {
                                     .map(|m| m.position().is_flat())
                                     .unwrap_or(true);
                                 let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                                match ev_estimator
-                                    .estimate_entry_expectancy(&source_tag_lc, &queue_instrument, now_ms)
-                                {
-                                    Ok(snapshot) => {
-                                        let ev = snapshot.expected_return_usdt;
-                                        let p_win = snapshot.probability.p_win;
-                                        let gate_blocked = is_buy_entry_attempt
-                                            && ev_hard_mode
-                                            && ev <= strat_config.ev.entry_gate_min_ev_usdt;
-                                        let _ = strat_app_tx
-                                            .send(AppEvent::EvSnapshotUpdate {
-                                                symbol: queue_instrument.clone(),
-                                                source_tag: source_tag_lc.clone(),
-                                                ev,
-                                                p_win,
-                                                gate_mode: strat_config.ev.mode.clone(),
-                                                gate_blocked,
-                                            })
-                                            .await;
-                                        let _ = strat_app_tx
-                                            .send(app_log(
-                                                LogLevel::Info,
-                                                LogDomain::Strategy,
-                                                "ev.signal.snapshot",
-                                                format!(
-                                                    "EV snapshot(prequeue): {} src={} ev={:+.4} p_win={:.3} entry_attempt={}",
-                                                    queue_instrument, source_tag_lc, ev, p_win, is_buy_entry_attempt
-                                                ),
-                                            ))
-                                            .await;
+                                let (_, market) = parse_instrument_label(&queue_instrument);
+                                let fallback_sigma = if market == MarketKind::Futures {
+                                    strat_config.ev.y_sigma_futures
+                                } else {
+                                    strat_config.ev.y_sigma_spot
+                                };
+                                let y = y_model.estimate(&queue_instrument, strat_config.ev.y_mu, fallback_sigma);
+                                if let Some(snapshot) = y_snapshot_for_entry(
+                                    &ev_cfg,
+                                    market,
+                                    strat_config.ev.futures_multiplier,
+                                    y,
+                                    strat_config.strategy.order_amount_usdt,
+                                    tick.price,
+                                    strat_config.exit.max_holding_ms,
+                                    now_ms,
+                                ) {
+                                    let ev = snapshot.expected_return_usdt;
+                                    let p_win = snapshot.probability.p_win;
+                                    let gate_blocked = is_buy_entry_attempt
+                                        && ev_hard_mode
+                                        && ev <= strat_config.ev.entry_gate_min_ev_usdt;
+                                    let _ = strat_app_tx
+                                        .send(AppEvent::EvSnapshotUpdate {
+                                            symbol: queue_instrument.clone(),
+                                            source_tag: source_tag_lc.clone(),
+                                            ev,
+                                            entry_ev: None,
+                                            p_win,
+                                            gate_mode: strat_config.ev.mode.clone(),
+                                            gate_blocked,
+                                        })
+                                        .await;
+                                    if is_buy_entry_attempt {
+                                        pending_entry_expectancy
+                                            .insert(queue_instrument.clone(), snapshot);
                                     }
-                                    Err(e) => {
-                                        let fallback_ev = 0.0f64;
-                                        let fallback_p_win = 0.5f64;
-                                        let gate_blocked = is_buy_entry_attempt
-                                            && ev_hard_mode
-                                            && fallback_ev <= strat_config.ev.entry_gate_min_ev_usdt;
-                                        let _ = strat_app_tx
-                                            .send(AppEvent::EvSnapshotUpdate {
-                                                symbol: queue_instrument.clone(),
-                                                source_tag: source_tag_lc.clone(),
-                                                ev: fallback_ev,
-                                                p_win: fallback_p_win,
-                                                gate_mode: strat_config.ev.mode.clone(),
-                                                gate_blocked,
-                                            })
-                                            .await;
-                                        let _ = strat_app_tx
-                                            .send(app_log(
-                                                LogLevel::Warn,
-                                                LogDomain::Strategy,
-                                                "ev.signal.snapshot.fail",
-                                                format!(
-                                                    "EV snapshot(prequeue) failed [{}|{}]: {} | fallback ev={:+.4} p_win={:.3}",
-                                                    queue_instrument, source_tag_lc, e, fallback_ev, fallback_p_win
-                                                ),
-                                            ))
-                                            .await;
-                                    }
+                                    let _ = strat_app_tx
+                                        .send(app_log(
+                                            LogLevel::Info,
+                                            LogDomain::Strategy,
+                                            "ev.signal.snapshot",
+                                            format!(
+                                                "EV snapshot(prequeue,forward): {} src={} ev={:+.4} p_win={:.3} entry_attempt={}",
+                                                queue_instrument, source_tag_lc, ev, p_win, is_buy_entry_attempt
+                                            ),
+                                        ))
+                                        .await;
+                                } else {
+                                    let _ = strat_app_tx
+                                        .send(app_log(
+                                            LogLevel::Warn,
+                                            LogDomain::Strategy,
+                                            "ev.signal.snapshot.skip",
+                                            format!(
+                                                "EV snapshot(prequeue,forward) skipped [{}|{}]: invalid entry inputs",
+                                                queue_instrument, source_tag_lc
+                                            ),
+                                        ))
+                                        .await;
                                 }
                             }
                             if let Err(e) = risk_eval_tx
@@ -2312,99 +2375,123 @@ async fn main() -> Result<()> {
                         let mut block_by_ev_gate = false;
                         if ev_enabled && is_buy_signal {
                             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                            match ev_estimator.estimate_entry_expectancy(&source_tag_lc, &instrument, now_ms) {
-                                Ok(snapshot) => {
-                                    let ev = snapshot.expected_return_usdt;
-                                    let p_win = snapshot.probability.p_win;
-                                    if is_buy_entry_attempt
-                                        && ev_hard_mode
-                                        && ev <= strat_config.ev.entry_gate_min_ev_usdt
-                                    {
-                                        block_by_ev_gate = true;
-                                    }
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::EvSnapshotUpdate {
-                                            symbol: instrument.clone(),
-                                            source_tag: source_tag_lc.clone(),
+                            let snapshot = if is_buy_entry_attempt {
+                                pending_entry_expectancy
+                                    .get(&instrument)
+                                    .cloned()
+                                    .or_else(|| {
+                                        mgr.last_price().and_then(|price| {
+                                            let (_, market) = parse_instrument_label(&instrument);
+                                            let fallback_sigma = if market == MarketKind::Futures {
+                                                strat_config.ev.y_sigma_futures
+                                            } else {
+                                                strat_config.ev.y_sigma_spot
+                                            };
+                                            let y = y_model.estimate(
+                                                &instrument,
+                                                strat_config.ev.y_mu,
+                                                fallback_sigma,
+                                            );
+                                            y_snapshot_for_entry(
+                                                &ev_cfg,
+                                                market,
+                                                strat_config.ev.futures_multiplier,
+                                                y,
+                                                strat_config.strategy.order_amount_usdt,
+                                                price,
+                                                strat_config.exit.max_holding_ms,
+                                                now_ms,
+                                            )
+                                        })
+                                    })
+                            } else if mgr.position().qty.abs() > f64::EPSILON
+                                && mgr.position().entry_price > f64::EPSILON
+                            {
+                                let (_, market) = parse_instrument_label(&instrument);
+                                let fallback_sigma = if market == MarketKind::Futures {
+                                    strat_config.ev.y_sigma_futures
+                                } else {
+                                    strat_config.ev.y_sigma_spot
+                                };
+                                let y = y_model.estimate(&instrument, strat_config.ev.y_mu, fallback_sigma);
+                                y_snapshot_for_open_position(
+                                    &ev_cfg,
+                                    market,
+                                    strat_config.ev.futures_multiplier,
+                                    y,
+                                    mgr.position().entry_price,
+                                    mgr.position().qty,
+                                    mgr.position().side,
+                                    strat_config.exit.max_holding_ms,
+                                    now_ms,
+                                )
+                            } else {
+                                None
+                            };
+                            if let Some(snapshot) = snapshot {
+                                let ev = snapshot.expected_return_usdt;
+                                let p_win = snapshot.probability.p_win;
+                                if is_buy_entry_attempt
+                                    && ev_hard_mode
+                                    && ev <= strat_config.ev.entry_gate_min_ev_usdt
+                                {
+                                    block_by_ev_gate = true;
+                                }
+                                let _ = strat_app_tx
+                                    .send(AppEvent::EvSnapshotUpdate {
+                                        symbol: instrument.clone(),
+                                        source_tag: source_tag_lc.clone(),
+                                        ev,
+                                        entry_ev: lifecycle_engine.entry_ev_locked(&instrument),
+                                        p_win,
+                                        gate_mode: strat_config.ev.mode.clone(),
+                                        gate_blocked: block_by_ev_gate,
+                                    })
+                                    .await;
+                                if is_buy_entry_attempt {
+                                    pending_entry_expectancy.insert(instrument.clone(), snapshot);
+                                }
+                                let _ = strat_app_tx
+                                    .send(app_log(
+                                        if block_by_ev_gate {
+                                            LogLevel::Warn
+                                        } else {
+                                            LogLevel::Info
+                                        },
+                                        LogDomain::Strategy,
+                                        if block_by_ev_gate {
+                                            "ev.entry.gate.block"
+                                        } else if !is_buy_entry_attempt {
+                                            "ev.signal.snapshot"
+                                        } else if ev_soft_mode && ev <= strat_config.ev.entry_gate_min_ev_usdt {
+                                            "ev.entry.gate.soft_warn"
+                                        } else {
+                                            "ev.entry.snapshot"
+                                        },
+                                        format!(
+                                            "EV snapshot(forward): {} src={} mode={} ev={:+.4} p_win={:.3} gate_min={:+.4} entry_attempt={}",
+                                            instrument,
+                                            source_tag_lc,
+                                            strat_config.ev.mode,
                                             ev,
                                             p_win,
-                                            gate_mode: strat_config.ev.mode.clone(),
-                                            gate_blocked: block_by_ev_gate,
-                                        })
-                                        .await;
-                                    if is_buy_entry_attempt {
-                                        pending_entry_expectancy.insert(instrument.clone(), snapshot);
-                                    }
-                                    let _ = strat_app_tx
-                                        .send(app_log(
-                                            if block_by_ev_gate {
-                                                LogLevel::Warn
-                                            } else {
-                                                LogLevel::Info
-                                            },
-                                            LogDomain::Strategy,
-                                            if block_by_ev_gate {
-                                                "ev.entry.gate.block"
-                                            } else if !is_buy_entry_attempt {
-                                                "ev.signal.snapshot"
-                                            } else if ev_soft_mode && ev <= strat_config.ev.entry_gate_min_ev_usdt {
-                                                "ev.entry.gate.soft_warn"
-                                            } else {
-                                                "ev.entry.snapshot"
-                                            },
-                                            format!(
-                                                "EV snapshot: {} src={} mode={} ev={:+.4} p_win={:.3} gate_min={:+.4} entry_attempt={}",
-                                                instrument,
-                                                source_tag_lc,
-                                                strat_config.ev.mode,
-                                                ev,
-                                                p_win,
-                                                strat_config.ev.entry_gate_min_ev_usdt,
-                                                is_buy_entry_attempt
-                                            ),
-                                        ))
-                                        .await;
-                                }
-                                Err(e) => {
-                                    let fallback_ev = 0.0f64;
-                                    let fallback_p_win = 0.5f64;
-                                    if is_buy_entry_attempt
-                                        && ev_hard_mode
-                                        && fallback_ev <= strat_config.ev.entry_gate_min_ev_usdt
-                                    {
-                                        block_by_ev_gate = true;
-                                    }
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::EvSnapshotUpdate {
-                                            symbol: instrument.clone(),
-                                            source_tag: source_tag_lc.clone(),
-                                            ev: fallback_ev,
-                                            p_win: fallback_p_win,
-                                            gate_mode: strat_config.ev.mode.clone(),
-                                            gate_blocked: block_by_ev_gate,
-                                        })
-                                        .await;
-                                    let _ = strat_app_tx
-                                        .send(app_log(
-                                            LogLevel::Warn,
-                                            LogDomain::Strategy,
-                                            if is_buy_entry_attempt {
-                                                "ev.entry.snapshot.fail"
-                                            } else {
-                                                "ev.signal.snapshot.fail"
-                                            },
-                                            format!(
-                                                "EV snapshot failed [{}|{}] entry_attempt={}: {} | fallback ev={:+.4} p_win={:.3}",
-                                                instrument,
-                                                source_tag_lc,
-                                                is_buy_entry_attempt,
-                                                e,
-                                                fallback_ev,
-                                                fallback_p_win
-                                            ),
-                                        ))
-                                        .await;
-                                }
+                                            strat_config.ev.entry_gate_min_ev_usdt,
+                                            is_buy_entry_attempt
+                                        ),
+                                    ))
+                                    .await;
+                            } else {
+                                let _ = strat_app_tx
+                                    .send(app_log(
+                                        LogLevel::Warn,
+                                        LogDomain::Strategy,
+                                        "ev.entry.snapshot.skip",
+                                        format!(
+                                            "EV snapshot(forward) skipped [{}|{}] entry_attempt={}: missing entry price/qty",
+                                            instrument, source_tag_lc, is_buy_entry_attempt
+                                        ),
+                                    ))
+                                    .await;
                             }
                         }
                         if block_by_ev_gate {
@@ -2461,13 +2548,27 @@ async fn main() -> Result<()> {
                                         let expectancy = pending_entry_expectancy
                                             .remove(&instrument)
                                             .or_else(|| {
-                                                ev_estimator
-                                                    .estimate_entry_expectancy(
-                                                        &source_tag_lc,
-                                                        &instrument,
-                                                        fallback_now,
-                                                    )
-                                                    .ok()
+                                                let (_, market) = parse_instrument_label(&instrument);
+                                                let fallback_sigma = if market == MarketKind::Futures {
+                                                    strat_config.ev.y_sigma_futures
+                                                } else {
+                                                    strat_config.ev.y_sigma_spot
+                                                };
+                                                let y = y_model.estimate(
+                                                    &instrument,
+                                                    strat_config.ev.y_mu,
+                                                    fallback_sigma,
+                                                );
+                                                y_snapshot_for_entry(
+                                                    &ev_cfg,
+                                                    market,
+                                                    strat_config.ev.futures_multiplier,
+                                                    y,
+                                                    strat_config.strategy.order_amount_usdt,
+                                                    *avg_price,
+                                                    strat_config.exit.max_holding_ms,
+                                                    fallback_now,
+                                                )
                                             });
                                         if let Some(expectancy) = expectancy {
                                             let position_id = lifecycle_engine.on_entry_filled(
@@ -2487,6 +2588,17 @@ async fn main() -> Result<()> {
                                                         expectancy.expected_holding_ms,
                                                     ),
                                                     protective_stop_ok: None,
+                                                })
+                                                .await;
+                                            let _ = strat_app_tx
+                                                .send(AppEvent::EvSnapshotUpdate {
+                                                    symbol: instrument.clone(),
+                                                    source_tag: source_tag_lc.clone(),
+                                                    ev: expectancy.expected_return_usdt,
+                                                    entry_ev: Some(expectancy.expected_return_usdt),
+                                                    p_win: expectancy.probability.p_win,
+                                                    gate_mode: strat_config.ev.mode.clone(),
+                                                    gate_blocked: false,
                                                 })
                                                 .await;
                                             lifecycle_triggered_once.remove(&instrument);
@@ -2840,38 +2952,38 @@ async fn main() -> Result<()> {
                             && mgr.position().entry_price > f64::EPSILON
                         {
                             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                            let ev_value = match if ev_enabled {
-                                ev_estimator.estimate_entry_expectancy("sys", instrument, now_ms)
+                            let (_, market) = parse_instrument_label(instrument);
+                            let fallback_sigma = if market == MarketKind::Futures {
+                                strat_config.ev.y_sigma_futures
                             } else {
-                                Err(anyhow::anyhow!("ev disabled"))
-                            } {
-                                Ok(snapshot) => {
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::EvSnapshotUpdate {
-                                            symbol: instrument.clone(),
-                                            source_tag: "sys".to_string(),
-                                            ev: snapshot.expected_return_usdt,
-                                            p_win: snapshot.probability.p_win,
-                                            gate_mode: strat_config.ev.mode.clone(),
-                                            gate_blocked: false,
-                                        })
-                                        .await;
-                                    snapshot.expected_return_usdt
-                                }
-                                Err(_) => {
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::EvSnapshotUpdate {
-                                            symbol: instrument.clone(),
-                                            source_tag: "sys".to_string(),
-                                            ev: 0.0,
-                                            p_win: 0.5,
-                                            gate_mode: strat_config.ev.mode.clone(),
-                                            gate_blocked: false,
-                                        })
-                                        .await;
-                                    0.0
-                                }
+                                strat_config.ev.y_sigma_spot
                             };
+                            let y = y_model.estimate(instrument, strat_config.ev.y_mu, fallback_sigma);
+                            let Some(snapshot) = y_snapshot_for_open_position(
+                                &ev_cfg,
+                                market,
+                                strat_config.ev.futures_multiplier,
+                                y,
+                                mgr.position().entry_price,
+                                mgr.position().qty,
+                                mgr.position().side,
+                                strat_config.exit.max_holding_ms,
+                                now_ms,
+                            ) else {
+                                continue;
+                            };
+                            let ev_value = snapshot.expected_return_usdt;
+                            let _ = strat_app_tx
+                                .send(AppEvent::EvSnapshotUpdate {
+                                    symbol: instrument.clone(),
+                                    source_tag: "sys".to_string(),
+                                    ev: snapshot.expected_return_usdt,
+                                    entry_ev: lifecycle_engine.entry_ev_locked(instrument),
+                                    p_win: snapshot.probability.p_win,
+                                    gate_mode: strat_config.ev.mode.clone(),
+                                    gate_blocked: false,
+                                })
+                                .await;
                             if ev_enabled
                                 && ev_value <= 0.0
                                 && !ev_zero_exit_enqueued.contains(instrument)

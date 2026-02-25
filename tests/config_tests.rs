@@ -76,6 +76,15 @@ level = "debug"
     assert!(config.ev.enabled);
     assert_eq!(config.ev.mode, "shadow");
     assert_eq!(config.ev.lookback_trades, 200);
+    assert!((config.ev.forward_p_win - 0.5).abs() < f64::EPSILON);
+    assert!((config.ev.forward_target_rr - 1.5).abs() < f64::EPSILON);
+    assert!((config.ev.y_mu - 0.0).abs() < f64::EPSILON);
+    assert!((config.ev.y_sigma_spot - 0.01).abs() < f64::EPSILON);
+    assert!((config.ev.y_sigma_futures - 0.015).abs() < f64::EPSILON);
+    assert!((config.ev.futures_multiplier - 1.0).abs() < f64::EPSILON);
+    assert!((config.ev.y_ewma_alpha_mean - 0.08).abs() < f64::EPSILON);
+    assert!((config.ev.y_ewma_alpha_var - 0.08).abs() < f64::EPSILON);
+    assert!((config.ev.y_min_sigma - 0.001).abs() < f64::EPSILON);
     assert_eq!(config.exit.max_holding_ms, 1_800_000);
     assert!((config.exit.stop_loss_pct - 0.015).abs() < f64::EPSILON);
     assert!(config.exit.enforce_protective_stop);

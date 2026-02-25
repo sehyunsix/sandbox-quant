@@ -119,6 +119,24 @@ pub struct EvConfig {
     pub fee_slippage_penalty_usdt: f64,
     #[serde(default = "default_ev_entry_gate_min_ev_usdt")]
     pub entry_gate_min_ev_usdt: f64,
+    #[serde(default = "default_ev_forward_p_win")]
+    pub forward_p_win: f64,
+    #[serde(default = "default_ev_forward_target_rr")]
+    pub forward_target_rr: f64,
+    #[serde(default = "default_ev_y_mu")]
+    pub y_mu: f64,
+    #[serde(default = "default_ev_y_sigma_spot")]
+    pub y_sigma_spot: f64,
+    #[serde(default = "default_ev_y_sigma_futures")]
+    pub y_sigma_futures: f64,
+    #[serde(default = "default_ev_futures_multiplier")]
+    pub futures_multiplier: f64,
+    #[serde(default = "default_ev_y_ewma_alpha_mean")]
+    pub y_ewma_alpha_mean: f64,
+    #[serde(default = "default_ev_y_ewma_alpha_var")]
+    pub y_ewma_alpha_var: f64,
+    #[serde(default = "default_ev_y_min_sigma")]
+    pub y_min_sigma: f64,
 }
 
 impl Default for EvConfig {
@@ -137,6 +155,15 @@ impl Default for EvConfig {
             gamma_tail_penalty: default_ev_gamma_tail_penalty(),
             fee_slippage_penalty_usdt: default_ev_fee_slippage_penalty_usdt(),
             entry_gate_min_ev_usdt: default_ev_entry_gate_min_ev_usdt(),
+            forward_p_win: default_ev_forward_p_win(),
+            forward_target_rr: default_ev_forward_target_rr(),
+            y_mu: default_ev_y_mu(),
+            y_sigma_spot: default_ev_y_sigma_spot(),
+            y_sigma_futures: default_ev_y_sigma_futures(),
+            futures_multiplier: default_ev_futures_multiplier(),
+            y_ewma_alpha_mean: default_ev_y_ewma_alpha_mean(),
+            y_ewma_alpha_var: default_ev_y_ewma_alpha_var(),
+            y_min_sigma: default_ev_y_min_sigma(),
         }
     }
 }
@@ -282,6 +309,42 @@ fn default_ev_fee_slippage_penalty_usdt() -> f64 {
 
 fn default_ev_entry_gate_min_ev_usdt() -> f64 {
     0.0
+}
+
+fn default_ev_forward_p_win() -> f64 {
+    0.5
+}
+
+fn default_ev_forward_target_rr() -> f64 {
+    1.5
+}
+
+fn default_ev_y_mu() -> f64 {
+    0.0
+}
+
+fn default_ev_y_sigma_spot() -> f64 {
+    0.01
+}
+
+fn default_ev_y_sigma_futures() -> f64 {
+    0.015
+}
+
+fn default_ev_futures_multiplier() -> f64 {
+    1.0
+}
+
+fn default_ev_y_ewma_alpha_mean() -> f64 {
+    0.08
+}
+
+fn default_ev_y_ewma_alpha_var() -> f64 {
+    0.08
+}
+
+fn default_ev_y_min_sigma() -> f64 {
+    0.001
 }
 
 fn default_exit_max_holding_ms() -> u64 {
