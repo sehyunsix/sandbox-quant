@@ -1,3 +1,7 @@
+## v0.31.0 - 2026-03-01
+
+- feat: add predictor abstraction, routing, and evaluation metrics (fe8a2e7)
+
 ## v0.30.1 - 2026-02-25
 
 - fix(ui): show live ev and entry ev in positions panel (2aaba1a)
