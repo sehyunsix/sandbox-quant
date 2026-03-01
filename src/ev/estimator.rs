@@ -152,7 +152,8 @@ fn posterior_tail_prob(
     prior_a: f64,
     prior_b: f64,
 ) -> f64 {
-    let (tail_events, loss_events) = window.weighted_tail_events(recency_lambda, loss_threshold_usdt);
+    let (tail_events, loss_events) =
+        window.weighted_tail_events(recency_lambda, loss_threshold_usdt);
     (prior_a + tail_events) / (prior_a + prior_b + loss_events).max(1e-9)
 }
 

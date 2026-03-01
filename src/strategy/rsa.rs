@@ -79,8 +79,8 @@ impl RsaStrategy {
         self.avg_gain = Some(next_avg_gain);
         self.avg_loss = Some(next_avg_loss);
 
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
         let rsi = self.rsi_value().unwrap_or(50.0);
         if rsi <= self.lower && self.position == PositionState::Flat && cooldown_ok {
             self.position = PositionState::Long;

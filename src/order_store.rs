@@ -433,7 +433,11 @@ pub fn load_recent_persisted_trades_filtered(
     match (bind_symbol, bind_source) {
         (true, true) => {
             let rows = stmt.query_map(
-                params![symbol.unwrap_or_default(), source.unwrap_or_default(), limit],
+                params![
+                    symbol.unwrap_or_default(),
+                    source.unwrap_or_default(),
+                    limit
+                ],
                 map_persisted_trade_row,
             )?;
             for row in rows {

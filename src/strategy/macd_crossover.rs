@@ -54,8 +54,8 @@ impl MacdCrossoverStrategy {
             return Signal::Hold;
         };
 
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
 
         let out = match (self.prev_macd, self.prev_signal) {
             (Some(pm), Some(ps)) if pm <= ps && macd > signal => {

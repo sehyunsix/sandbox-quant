@@ -60,8 +60,8 @@ impl BollingerReversionStrategy {
         let std_dev = variance.sqrt();
 
         let lower = mean - self.band_mult * std_dev;
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
 
         if tick.price <= lower && self.position == PositionState::Flat && cooldown_ok {
             self.position = PositionState::Long;

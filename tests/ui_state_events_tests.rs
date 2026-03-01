@@ -1,4 +1,6 @@
-use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord, WsConnectionStatus};
+use sandbox_quant::event::{
+    AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord, WsConnectionStatus,
+};
 use sandbox_quant::model::order::OrderSide;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::order_manager::OrderHistoryStats;
@@ -21,7 +23,10 @@ fn app_state_rebuilds_projection_after_events() {
     });
 
     assert_eq!(s.ui_projection.focus.symbol.as_deref(), Some("BTCUSDT"));
-    assert_eq!(s.ui_projection.focus.strategy_id.as_deref(), Some("MA(Config)"));
+    assert_eq!(
+        s.ui_projection.focus.strategy_id.as_deref(),
+        Some("MA(Config)")
+    );
     assert_eq!(s.ui_projection.portfolio.total_equity_usdt, Some(1000.0));
 }
 
@@ -88,7 +93,10 @@ fn app_state_restores_default_focus_when_missing() {
     s.apply(AppEvent::LogMessage("refresh".to_string()));
 
     assert_eq!(s.ui_projection.focus.symbol.as_deref(), Some("BTCUSDT"));
-    assert_eq!(s.ui_projection.focus.strategy_id.as_deref(), Some("MA(Config)"));
+    assert_eq!(
+        s.ui_projection.focus.strategy_id.as_deref(),
+        Some("MA(Config)")
+    );
 }
 
 #[test]
@@ -174,7 +182,10 @@ fn app_state_applies_strategy_stats_update_event() {
     s.apply(AppEvent::StrategyStatsUpdate {
         strategy_stats: stats,
     });
-    let cfg = s.strategy_stats.get("cfg").expect("cfg stats should be present");
+    let cfg = s
+        .strategy_stats
+        .get("cfg")
+        .expect("cfg stats should be present");
     assert_eq!(cfg.trade_count, 4);
     assert!((cfg.realized_pnl - 12.5).abs() < f64::EPSILON);
 }
@@ -217,7 +228,10 @@ fn app_state_accepts_log_record_event() {
     );
     r.symbol = Some("BTCUSDT".to_string());
     s.apply(AppEvent::LogRecord(r));
-    let last = s.log_messages.last().expect("expected formatted log message");
+    let last = s
+        .log_messages
+        .last()
+        .expect("expected formatted log message");
     assert!(last.contains("[WARN]"));
     assert!(last.contains("ws.connect.fail"));
     assert!(last.contains("BTCUSDT"));
@@ -272,6 +286,34 @@ fn app_state_applies_ev_and_exit_policy_events() {
     assert_eq!(exit.stop_price, Some(43000.0));
     assert_eq!(exit.expected_holding_ms, Some(600_000));
     assert_eq!(exit.protective_stop_ok, Some(true));
+}
+
+#[test]
+/// Verifies predictor quality event propagation:
+/// live predictor metrics should be persisted by scope key for Predictor grid rendering.
+fn app_state_applies_predictor_metrics_update_event() {
+    let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    s.apply(AppEvent::PredictorMetricsUpdate {
+        symbol: "BTCUSDT".to_string(),
+        market: "spot".to_string(),
+        predictor: "ewma-v1".to_string(),
+        horizon: "1m".to_string(),
+        r2: Some(0.42),
+        hit_rate: Some(0.66),
+        mae: Some(0.0012),
+        sample_count: 120,
+        updated_at_ms: 12345,
+    });
+
+    let key = "BTCUSDT::spot::ewma-v1::1m";
+    let m = s
+        .predictor_metrics_by_scope
+        .get(key)
+        .expect("predictor metrics should be present");
+    assert_eq!(m.predictor, "ewma-v1");
+    assert_eq!(m.horizon, "1m");
+    assert_eq!(m.sample_count, 120);
+    assert_eq!(m.r2, Some(0.42));
 }
 
 #[test]

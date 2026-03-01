@@ -45,8 +45,8 @@ impl RocMomentumStrategy {
 
         let base = self.prices.front().copied().unwrap_or(tick.price);
         let roc = (tick.price - base) / base.abs().max(f64::EPSILON);
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
 
         if roc >= self.threshold && self.position == PositionState::Flat && cooldown_ok {
             self.position = PositionState::Long;

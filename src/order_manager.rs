@@ -780,7 +780,9 @@ impl OrderManager {
                 Ok(saved) if !saved.is_empty() => {
                     trades_for_stats = saved.iter().map(|r| r.trade.clone()).collect();
                     for row in saved {
-                        order_source_by_id.entry(row.trade.order_id).or_insert(row.source);
+                        order_source_by_id
+                            .entry(row.trade.order_id)
+                            .or_insert(row.source);
                     }
                 }
                 Ok(_) => {}
@@ -875,7 +877,8 @@ impl OrderManager {
             let mut strategy_stats =
                 compute_trade_stats_by_source(trades_for_stats, &order_source_by_id, &storage_key);
             let persisted_stats = to_persistable_stats_map(&strategy_stats);
-            if let Err(e) = order_store::persist_strategy_symbol_stats(&storage_key, &persisted_stats)
+            if let Err(e) =
+                order_store::persist_strategy_symbol_stats(&storage_key, &persisted_stats)
             {
                 tracing::warn!(error = %e, "Failed to persist strategy stats (futures)");
             }
@@ -1541,8 +1544,8 @@ mod tests {
     use super::{
         compute_trade_stats_by_source, display_qty_for_history, split_symbol_assets, OrderManager,
     };
-    use crate::binance::types::BinanceMyTrade;
     use crate::binance::rest::BinanceRestClient;
+    use crate::binance::types::BinanceMyTrade;
     use crate::config::{EndpointRateLimitConfig, RiskConfig, SymbolExposureLimitConfig};
     use crate::model::order::{Order, OrderSide, OrderStatus, OrderType};
     use std::sync::Arc;

@@ -58,8 +58,8 @@ impl EnsembleVoteStrategy {
         let slow = self.slow_sma.push(tick.price);
         self.update_rsi(tick.price);
 
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
         let score = self.vote_score(fast, slow, prev_fast, prev_slow, tick.price);
         let rsi = self.rsi_value();
 
@@ -143,7 +143,6 @@ impl EnsembleVoteStrategy {
             self.avg_gain = Some(((prev_avg_gain * (period - 1.0)) + gain) / period);
             self.avg_loss = Some(((prev_avg_loss * (period - 1.0)) + loss) / period);
         }
-
     }
 
     fn rsi_value(&self) -> Option<f64> {

@@ -41,7 +41,10 @@ fn deterministic_output() {
         .collect();
     let run = |prices: &[f64]| {
         let mut strat = EmaCrossover::new(5, 13, 0);
-        prices.iter().map(|&p| strat.on_tick(&tick(p))).collect::<Vec<_>>()
+        prices
+            .iter()
+            .map(|&p| strat.on_tick(&tick(p)))
+            .collect::<Vec<_>>()
     };
     assert_eq!(run(&prices), run(&prices));
 }

@@ -60,7 +60,11 @@ fn no_double_buy() {
 
     for &p in &[160.0, 170.0, 180.0, 190.0] {
         let sig = strat.on_tick(&tick(p));
-        assert_eq!(sig, Signal::Hold, "Should not double-buy while already long");
+        assert_eq!(
+            sig,
+            Signal::Hold,
+            "Should not double-buy while already long"
+        );
     }
 }
 

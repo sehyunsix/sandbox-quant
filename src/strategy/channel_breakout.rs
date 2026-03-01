@@ -49,8 +49,8 @@ impl ChannelBreakoutStrategy {
                 .rev()
                 .take(self.exit_window)
                 .fold(f64::MAX, |acc, p| acc.min(*p));
-            let cooldown_ok =
-                self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
+            let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
+                >= self.min_ticks_between_signals;
             if tick.price > entry_high && self.position == PositionState::Flat && cooldown_ok {
                 self.position = PositionState::Long;
                 self.last_signal_tick = self.tick_count;

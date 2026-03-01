@@ -55,8 +55,8 @@ impl RegimeSwitchStrategy {
             let _ = self.prices.pop_front();
         }
 
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
 
         let signal = match (fast, slow, self.prev_fast, self.prev_slow) {
             (Some(f), Some(s), Some(pf), Some(ps)) if self.prices.len() >= self.slow_period => {

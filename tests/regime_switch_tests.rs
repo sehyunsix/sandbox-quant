@@ -33,7 +33,9 @@ fn regime_switch_emits_actionable_signals() {
 fn regime_switch_respects_cooldown() {
     let mut strategy = RegimeSwitchStrategy::new(3, 8, 4);
 
-    for p in [100.0, 101.0, 102.0, 104.0, 106.0, 108.0, 110.0, 112.0, 114.0] {
+    for p in [
+        100.0, 101.0, 102.0, 104.0, 106.0, 108.0, 110.0, 112.0, 114.0,
+    ] {
         let _ = strategy.on_tick(&tick(p));
     }
 

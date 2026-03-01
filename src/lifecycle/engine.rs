@@ -57,7 +57,12 @@ impl PositionLifecycleEngine {
         position_id
     }
 
-    pub fn on_tick(&mut self, instrument: &str, mark_price: f64, now_ms: u64) -> Option<ExitTrigger> {
+    pub fn on_tick(
+        &mut self,
+        instrument: &str,
+        mark_price: f64,
+        now_ms: u64,
+    ) -> Option<ExitTrigger> {
         let state = self.states.get_mut(instrument)?;
         let unrealized = (mark_price - state.entry_price) * state.qty;
         if unrealized > state.mfe_usdt {

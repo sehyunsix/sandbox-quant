@@ -262,10 +262,8 @@ pub fn seed_state() -> AppState {
         now_ms.saturating_sub(1_800),
         now_ms.saturating_sub(8_000),
     ];
-    state.network_tick_drop_timestamps_ms = vec![
-        now_ms.saturating_sub(600),
-        now_ms.saturating_sub(9_500),
-    ];
+    state.network_tick_drop_timestamps_ms =
+        vec![now_ms.saturating_sub(600), now_ms.saturating_sub(9_500)];
     state.network_reconnect_timestamps_ms = vec![now_ms.saturating_sub(16_000)];
     state.network_disconnect_timestamps_ms = vec![now_ms.saturating_sub(15_500)];
     state.network_last_fill_ms = Some(now_ms.saturating_sub(4_500));
@@ -320,20 +318,30 @@ fn apply_key_action(state: &mut AppState, key: &str) -> Result<()> {
         }
         "3" => {
             if state.grid_open {
-                state.grid_tab = GridTab::Risk;
+                state.grid_tab = GridTab::Positions;
             }
         }
         "4" => {
             if state.grid_open {
-                state.grid_tab = GridTab::Network;
+                state.grid_tab = GridTab::Risk;
             }
         }
         "5" => {
             if state.grid_open {
-                state.grid_tab = GridTab::History;
+                state.grid_tab = GridTab::Network;
             }
         }
         "6" => {
+            if state.grid_open {
+                state.grid_tab = GridTab::History;
+            }
+        }
+        "7" => {
+            if state.grid_open {
+                state.grid_tab = GridTab::Predictors;
+            }
+        }
+        "8" => {
             if state.grid_open {
                 state.grid_tab = GridTab::SystemLog;
             }

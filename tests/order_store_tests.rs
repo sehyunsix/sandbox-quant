@@ -95,5 +95,7 @@ fn load_recent_persisted_trades_filtered_by_symbol_and_source() {
         .expect("filtered load should succeed");
     assert!(!rows.is_empty());
     assert!(rows.iter().all(|r| r.trade.symbol == symbol));
-    assert!(rows.iter().all(|r| r.source.eq_ignore_ascii_case("MA(Config)")));
+    assert!(rows
+        .iter()
+        .all(|r| r.source.eq_ignore_ascii_case("MA(Config)")));
 }

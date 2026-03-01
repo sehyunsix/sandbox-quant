@@ -72,7 +72,7 @@ enforce_protective_stop = true
 
 [ui]
 refresh_rate_ms = 100
-price_history_len = 120
+price_history_len = 1200
 
 [logging]
 level = "debug"
