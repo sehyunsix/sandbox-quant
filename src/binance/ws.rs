@@ -106,14 +106,12 @@ impl BinanceWsClient {
                         .await;
                     tracing::warn!(attempt, error = %e, "WS connection attempt failed");
                     let _ = status_tx
-                        .send(AppEvent::LogRecord(
-                            ws_log(
-                                LogLevel::Warn,
-                                "connect.fail",
-                                &instrument,
-                                format!("attempt={} error={}", attempt, e),
-                            ),
-                        ))
+                        .send(AppEvent::LogRecord(ws_log(
+                            LogLevel::Warn,
+                            "connect.fail",
+                            &instrument,
+                            format!("attempt={} error={}", attempt, e),
+                        )))
                         .await;
 
                     let delay = backoff.next_delay();

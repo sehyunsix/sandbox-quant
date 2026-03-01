@@ -1,7 +1,7 @@
 pub mod binance;
 pub mod config;
-pub mod ev;
 pub mod error;
+pub mod ev;
 pub mod event;
 pub mod indicator;
 pub mod input;
@@ -9,6 +9,7 @@ pub mod lifecycle;
 pub mod model;
 pub mod order_manager;
 pub mod order_store;
+pub mod predictor;
 pub mod risk_module;
 pub mod runtime;
 pub mod strategy;

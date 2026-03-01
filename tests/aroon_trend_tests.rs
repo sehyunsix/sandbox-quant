@@ -17,7 +17,9 @@ fn tick(price: f64) -> Tick {
 fn aroon_emits_actionable_signal() {
     let mut strategy = AroonTrendStrategy::new(8, 70, 0);
 
-    for p in [100.0, 99.0, 98.0, 97.0, 96.0, 97.0, 98.0, 99.0, 101.0, 103.0] {
+    for p in [
+        100.0, 99.0, 98.0, 97.0, 96.0, 97.0, 98.0, 99.0, 101.0, 103.0,
+    ] {
         if strategy.on_tick(&tick(p)) != Signal::Hold {
             return;
         }

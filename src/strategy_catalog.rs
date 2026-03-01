@@ -166,13 +166,8 @@ const STRATEGY_KIND_SPECS: [StrategyKindSpec; 16] = [
         default_cooldown: 1,
     },
 ];
-const STRATEGY_CATEGORY_ORDER: [&str; 5] = [
-    "Trend",
-    "MeanReversion",
-    "Volatility",
-    "Breakout",
-    "Hybrid",
-];
+const STRATEGY_CATEGORY_ORDER: [&str; 5] =
+    ["Trend", "MeanReversion", "Volatility", "Breakout", "Hybrid"];
 
 impl StrategyKind {
     pub fn specs() -> &'static [StrategyKindSpec] {
@@ -820,7 +815,12 @@ impl StrategyCatalog {
             StrategyKind::Atr => {
                 let threshold_x100 = slow_period.clamp(110, 500);
                 (
-                    format!("ATRX(Custom {} {:.2}x) [{}]", fast, threshold_x100 as f64 / 100.0, tag),
+                    format!(
+                        "ATRX(Custom {} {:.2}x) [{}]",
+                        fast,
+                        threshold_x100 as f64 / 100.0,
+                        tag
+                    ),
                     threshold_x100,
                 )
             }
@@ -923,7 +923,10 @@ impl StrategyCatalog {
             }
             StrategyKind::Arn => {
                 let threshold = slow_period.clamp(50, 90);
-                (format!("ARN(Custom {} {}) [{}]", fast, threshold, tag), threshold)
+                (
+                    format!("ARN(Custom {} {}) [{}]", fast, threshold, tag),
+                    threshold,
+                )
             }
         };
         let profile = StrategyProfile {

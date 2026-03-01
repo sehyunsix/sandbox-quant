@@ -51,8 +51,8 @@ impl StochasticReversionStrategy {
         let high = self.prices.iter().fold(f64::MIN, |acc, p| acc.max(*p));
         let range = (high - low).max(f64::EPSILON);
         let k = ((tick.price - low) / range) * 100.0;
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
 
         if k <= self.lower && self.position == PositionState::Flat && cooldown_ok {
             self.position = PositionState::Long;

@@ -46,9 +46,7 @@ impl RejectionReasonCode {
             Self::RiskInsufficientQuoteBalance => "risk.insufficient_quote_balance",
             Self::RiskInsufficientBaseBalance => "risk.insufficient_base_balance",
             Self::RiskStrategyCooldownActive => "risk.strategy_cooldown_active",
-            Self::RiskStrategyMaxActiveOrdersExceeded => {
-                "risk.strategy_max_active_orders_exceeded"
-            }
+            Self::RiskStrategyMaxActiveOrdersExceeded => "risk.strategy_max_active_orders_exceeded",
             Self::RiskSymbolExposureLimitExceeded => "risk.symbol_exposure_limit_exceeded",
             Self::RateGlobalBudgetExceeded => "rate.global_budget_exceeded",
             Self::RateEndpointBudgetExceeded => "rate.endpoint_budget_exceeded",
@@ -458,7 +456,11 @@ fn floor_to_step(value: f64, step: f64) -> f64 {
     }
     let units = (value / step).floor();
     let floored = units * step;
-    if floored < 0.0 { 0.0 } else { floored }
+    if floored < 0.0 {
+        0.0
+    } else {
+        floored
+    }
 }
 
 fn ceil_to_step(value: f64, step: f64) -> f64 {
@@ -467,7 +469,11 @@ fn ceil_to_step(value: f64, step: f64) -> f64 {
     }
     let units = (value / step).ceil();
     let ceiled = units * step;
-    if ceiled < 0.0 { 0.0 } else { ceiled }
+    if ceiled < 0.0 {
+        0.0
+    } else {
+        ceiled
+    }
 }
 
 fn split_symbol_assets(symbol: &str) -> (String, String) {

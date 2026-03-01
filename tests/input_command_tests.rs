@@ -6,9 +6,18 @@ use sandbox_quant::input::{
 
 #[test]
 fn parse_main_command_maps_case_insensitive_char_keys() {
-    assert_eq!(parse_main_command(&KeyCode::Char('p')), Some(UiCommand::Pause));
-    assert_eq!(parse_main_command(&KeyCode::Char('P')), Some(UiCommand::Pause));
-    assert_eq!(parse_main_command(&KeyCode::Char('r')), Some(UiCommand::Resume));
+    assert_eq!(
+        parse_main_command(&KeyCode::Char('p')),
+        Some(UiCommand::Pause)
+    );
+    assert_eq!(
+        parse_main_command(&KeyCode::Char('P')),
+        Some(UiCommand::Pause)
+    );
+    assert_eq!(
+        parse_main_command(&KeyCode::Char('r')),
+        Some(UiCommand::Resume)
+    );
     assert_eq!(
         parse_main_command(&KeyCode::Char('B')),
         Some(UiCommand::ManualBuy)
@@ -112,6 +121,10 @@ fn parse_grid_command_maps_navigation_and_actions() {
     );
     assert_eq!(
         parse_grid_command(&KeyCode::Char('7')),
+        Some(GridCommand::TabPredictors)
+    );
+    assert_eq!(
+        parse_grid_command(&KeyCode::Char('8')),
         Some(GridCommand::TabSystemLog)
     );
     assert_eq!(

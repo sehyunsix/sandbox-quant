@@ -55,4 +55,3 @@ impl Sma {
         self.period
     }
 }
-

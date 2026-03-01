@@ -243,11 +243,17 @@ impl Widget for StrategyMetricsPanel<'_> {
             ]),
             Line::from(vec![
                 Span::styled("Trades: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(self.trade_count.to_string(), Style::default().fg(Color::White)),
+                Span::styled(
+                    self.trade_count.to_string(),
+                    Style::default().fg(Color::White),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Win: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(self.win_count.to_string(), Style::default().fg(Color::Green)),
+                Span::styled(
+                    self.win_count.to_string(),
+                    Style::default().fg(Color::Green),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Lose: ", Style::default().fg(Color::DarkGray)),
@@ -255,7 +261,10 @@ impl Widget for StrategyMetricsPanel<'_> {
             ]),
             Line::from(vec![
                 Span::styled("WinRate: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:.1}%", win_rate), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{:.1}%", win_rate),
+                    Style::default().fg(Color::Cyan),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("RlzPL: ", Style::default().fg(Color::DarkGray)),

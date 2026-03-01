@@ -60,8 +60,8 @@ impl VolatilityCompressionStrategy {
         let std_dev = variance.sqrt();
         let bandwidth = (2.0 * std_dev) / mean.abs().max(f64::EPSILON);
         let upper_trigger = mean + std_dev;
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
 
         if self.position == PositionState::Flat
             && bandwidth <= self.compression_threshold

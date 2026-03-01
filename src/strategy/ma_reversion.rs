@@ -36,8 +36,8 @@ impl MaReversionStrategy {
             return Signal::Hold;
         };
 
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
         let buy_line = mean * (1.0 - self.entry_threshold);
 
         if tick.price <= buy_line && self.position == PositionState::Flat && cooldown_ok {

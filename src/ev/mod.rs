@@ -10,8 +10,8 @@ pub use price_model::{
     futures_ev_from_y_normal, spot_ev_from_y_normal, EvStats, FuturesEvInputs, PositionSide,
     SpotEvInputs, YNormal,
 };
-pub use y_model::{EwmaYModel, EwmaYModelConfig};
 pub use types::{
     ConfidenceLevel, EntryExpectancySnapshot, ProbabilitySnapshot, TradeStatsSample,
     TradeStatsWindow,
 };
+pub use y_model::{EwmaYModel, EwmaYModelConfig};

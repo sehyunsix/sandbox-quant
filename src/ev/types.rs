@@ -60,7 +60,11 @@ impl TradeStatsWindow {
         (wins, losses)
     }
 
-    pub fn weighted_tail_events(&self, recency_lambda: f64, loss_threshold_usdt: f64) -> (f64, f64) {
+    pub fn weighted_tail_events(
+        &self,
+        recency_lambda: f64,
+        loss_threshold_usdt: f64,
+    ) -> (f64, f64) {
         let mut tail_events = 0.0;
         let mut loss_events = 0.0;
         for s in &self.samples {

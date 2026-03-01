@@ -80,4 +80,3 @@ impl MaCrossover {
         self.position == PositionState::Long
     }
 }
-

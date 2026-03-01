@@ -197,7 +197,10 @@ fn strategy_catalog_from_profiles_injects_missing_builtin_profiles() {
     assert!(catalog.labels().iter().any(|l| l == "MRV(SMA 20 -2.00%)"));
     assert!(catalog.labels().iter().any(|l| l == "BBR(BB 20 2.00x)"));
     assert!(catalog.labels().iter().any(|l| l == "STO(Stoch 14 20/80)"));
-    assert!(catalog.labels().iter().any(|l| l == "VLC(Compression 20 1.20%)"));
+    assert!(catalog
+        .labels()
+        .iter()
+        .any(|l| l == "VLC(Compression 20 1.20%)"));
     assert!(catalog.labels().iter().any(|l| l == "ORB(Opening 12/8)"));
     assert!(catalog.labels().iter().any(|l| l == "REG(Regime 10/30)"));
     assert!(catalog.labels().iter().any(|l| l == "ENS(Vote 10/30)"));

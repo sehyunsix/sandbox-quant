@@ -65,8 +65,8 @@ impl AroonTrendStrategy {
         let aroon_up = 100.0 * (lookback - periods_since_high) / lookback.max(1.0);
         let aroon_down = 100.0 * (lookback - periods_since_low) / lookback.max(1.0);
 
-        let cooldown_ok = self.tick_count.saturating_sub(self.last_signal_tick)
-            >= self.min_ticks_between_signals;
+        let cooldown_ok =
+            self.tick_count.saturating_sub(self.last_signal_tick) >= self.min_ticks_between_signals;
 
         if aroon_up >= self.threshold
             && aroon_down <= 100.0 - self.threshold

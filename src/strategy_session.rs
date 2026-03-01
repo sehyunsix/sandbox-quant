@@ -56,8 +56,8 @@ pub fn load_strategy_session_from_path(
 
     let payload = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let persisted: PersistedStrategySession =
-        serde_json::from_str(&payload).context("failed to parse persisted strategy session json")?;
+    let persisted: PersistedStrategySession = serde_json::from_str(&payload)
+        .context("failed to parse persisted strategy session json")?;
 
     Ok(Some(LoadedStrategySession {
         catalog: StrategyCatalog::from_profiles(

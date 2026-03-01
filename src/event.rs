@@ -49,6 +49,17 @@ pub enum AppEvent {
         gate_mode: String,
         gate_blocked: bool,
     },
+    PredictorMetricsUpdate {
+        symbol: String,
+        market: String,
+        predictor: String,
+        horizon: String,
+        r2: Option<f64>,
+        hit_rate: Option<f64>,
+        mae: Option<f64>,
+        sample_count: u64,
+        updated_at_ms: u64,
+    },
     ExitPolicyUpdate {
         symbol: String,
         source_tag: String,
@@ -97,6 +108,19 @@ pub struct EvSnapshotEntry {
     pub p_win: f64,
     pub gate_mode: String,
     pub gate_blocked: bool,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PredictorMetricEntry {
+    pub symbol: String,
+    pub market: String,
+    pub predictor: String,
+    pub horizon: String,
+    pub r2: Option<f64>,
+    pub hit_rate: Option<f64>,
+    pub mae: Option<f64>,
+    pub sample_count: u64,
     pub updated_at_ms: u64,
 }
 
@@ -150,7 +174,12 @@ pub struct LogRecord {
 }
 
 impl LogRecord {
-    pub fn new(level: LogLevel, domain: LogDomain, event: &'static str, msg: impl Into<String>) -> Self {
+    pub fn new(
+        level: LogLevel,
+        domain: LogDomain,
+        event: &'static str,
+        msg: impl Into<String>,
+    ) -> Self {
         Self {
             ts_ms: chrono::Utc::now().timestamp_millis() as u64,
             level,

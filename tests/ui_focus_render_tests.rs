@@ -404,7 +404,9 @@ fn render_grid_popup_system_log_tab() {
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
     state.grid_open = true;
     state.grid_tab = GridTab::SystemLog;
-    state.log_messages.push("system: warmup complete".to_string());
+    state
+        .log_messages
+        .push("system: warmup complete".to_string());
     state.log_messages.push("system: ws connected".to_string());
 
     terminal
@@ -414,6 +416,41 @@ fn render_grid_popup_system_log_tab() {
     let text = buffer_text(&terminal);
     assert!(text.contains("System Log"));
     assert!(text.contains("system: ws connected"));
+}
+
+#[test]
+/// Verifies predictor tab rendering:
+/// predictor table should show predictor id/horizon and live R2 metric values.
+fn render_grid_popup_predictors_tab() {
+    let backend = TestBackend::new(150, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.grid_open = true;
+    state.grid_tab = GridTab::Predictors;
+    state.apply(AppEvent::PredictorMetricsUpdate {
+        symbol: "BTCUSDT".to_string(),
+        market: "spot".to_string(),
+        predictor: "ewma-v1".to_string(),
+        horizon: "1m".to_string(),
+        r2: Some(0.317),
+        hit_rate: Some(0.625),
+        mae: Some(0.0017),
+        sample_count: 48,
+        updated_at_ms: 999,
+    });
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Predictors"));
+    assert!(text.contains("Predictor"));
+    assert!(text.contains("Horizon"));
+    assert!(text.contains("R2"));
+    assert!(text.contains("ewma-v1"));
+    assert!(text.contains("1m"));
+    assert!(text.contains("+0.317"));
 }
 
 #[test]

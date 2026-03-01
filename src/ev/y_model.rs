@@ -65,7 +65,12 @@ impl EwmaYModel {
         Self::update_state(self.by_scope_side.entry(key).or_default(), price, self.cfg);
     }
 
-    pub fn estimate_base(&self, instrument: &str, fallback_mu: f64, fallback_sigma: f64) -> YNormal {
+    pub fn estimate_base(
+        &self,
+        instrument: &str,
+        fallback_mu: f64,
+        fallback_sigma: f64,
+    ) -> YNormal {
         let Some(st) = self.by_instrument.get(instrument) else {
             return YNormal {
                 mu: fallback_mu,
@@ -106,12 +111,7 @@ impl EwmaYModel {
         YNormal { mu, sigma }
     }
 
-    pub fn estimate(
-        &self,
-        instrument: &str,
-        fallback_mu: f64,
-        fallback_sigma: f64,
-    ) -> YNormal {
+    pub fn estimate(&self, instrument: &str, fallback_mu: f64, fallback_sigma: f64) -> YNormal {
         self.estimate_base(instrument, fallback_mu, fallback_sigma)
     }
 

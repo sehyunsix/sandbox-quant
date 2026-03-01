@@ -1,8 +1,8 @@
-pub mod ui_projection;
 pub mod chart;
 pub mod dashboard;
 pub mod network_metrics;
 pub mod position_ledger;
+pub mod ui_projection;
 
 use std::collections::HashMap;
 
@@ -14,7 +14,7 @@ use ratatui::Frame;
 
 use crate::event::{
     AppEvent, AssetPnlEntry, EvSnapshotEntry, ExitPolicyEntry, LogDomain, LogLevel, LogRecord,
-    WsConnectionStatus,
+    PredictorMetricEntry, WsConnectionStatus,
 };
 use crate::model::candle::{Candle, CandleBuilder};
 use crate::model::order::{Fill, OrderSide};
@@ -24,13 +24,18 @@ use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};
 use crate::order_store;
 use crate::risk_module::RateBudgetSnapshot;
 use crate::strategy_catalog::{strategy_kind_categories, strategy_kind_labels};
-use crate::ui::network_metrics::{classify_health, count_since, percentile, rate_per_sec, ratio_pct, NetworkHealth};
+use crate::ui::network_metrics::{
+    classify_health, count_since, percentile, rate_per_sec, ratio_pct, NetworkHealth,
+};
 use crate::ui::position_ledger::build_open_order_positions_from_trades;
 
-use ui_projection::UiProjection;
-use ui_projection::AssetEntry;
 use chart::{FillMarker, PriceChart};
-use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar, StrategyMetricsPanel};
+use dashboard::{
+    KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, PositionPanel, StatusBar,
+    StrategyMetricsPanel,
+};
+use ui_projection::AssetEntry;
+use ui_projection::UiProjection;
 
 const MAX_LOG_MESSAGES: usize = 200;
 const MAX_FILL_MARKERS: usize = 200;
@@ -43,6 +48,7 @@ pub enum GridTab {
     Network,
     History,
     Positions,
+    Predictors,
     SystemLog,
 }
 
@@ -105,6 +111,7 @@ pub struct AppState {
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub ev_snapshot_by_scope: HashMap<String, EvSnapshotEntry>,
     pub exit_policy_by_scope: HashMap<String, ExitPolicyEntry>,
+    pub predictor_metrics_by_scope: HashMap<String, PredictorMetricEntry>,
     pub history_fills: Vec<OrderHistoryFill>,
     pub last_price_update_ms: Option<u64>,
     pub last_price_event_ms: Option<u64>,
@@ -177,6 +184,8 @@ pub struct AppState {
     pub close_all_status_expire_at_ms: Option<u64>,
     pub close_all_row_status_by_symbol: HashMap<String, String>,
     pub hide_small_positions: bool,
+    pub hide_empty_predictor_rows: bool,
+    pub predictor_scroll_offset: usize,
 }
 
 impl AppState {
@@ -220,6 +229,7 @@ impl AppState {
             strategy_stats: HashMap::new(),
             ev_snapshot_by_scope: HashMap::new(),
             exit_policy_by_scope: HashMap::new(),
+            predictor_metrics_by_scope: HashMap::new(),
             history_fills: Vec::new(),
             last_price_update_ms: None,
             last_price_event_ms: None,
@@ -318,6 +328,8 @@ impl AppState {
             close_all_status_expire_at_ms: None,
             close_all_row_status_by_symbol: HashMap::new(),
             hide_small_positions: true,
+            hide_empty_predictor_rows: true,
+            predictor_scroll_offset: 0,
         }
     }
 
@@ -364,7 +376,8 @@ impl AppState {
         self.network_tick_in_timestamps_ms.retain(|&v| v >= lower);
         self.network_tick_drop_timestamps_ms.retain(|&v| v >= lower);
         self.network_reconnect_timestamps_ms.retain(|&v| v >= lower);
-        self.network_disconnect_timestamps_ms.retain(|&v| v >= lower);
+        self.network_disconnect_timestamps_ms
+            .retain(|&v| v >= lower);
     }
 
     /// Transitional projection for RFC-0016 Phase 2.
@@ -399,6 +412,9 @@ impl AppState {
     }
     pub fn set_grid_tab(&mut self, tab: GridTab) {
         self.grid_tab = tab;
+        if tab != GridTab::Predictors {
+            self.predictor_scroll_offset = 0;
+        }
     }
     pub fn selected_grid_symbol_index(&self) -> usize {
         self.grid_symbol_index
@@ -417,6 +433,12 @@ impl AppState {
     }
     pub fn set_on_panel_selected(&mut self, selected: bool) {
         self.grid_select_on_panel = selected;
+    }
+    pub fn predictor_scroll_offset(&self) -> usize {
+        self.predictor_scroll_offset
+    }
+    pub fn set_predictor_scroll_offset(&mut self, offset: usize) {
+        self.predictor_scroll_offset = offset;
     }
     pub fn is_symbol_selector_open(&self) -> bool {
         self.symbol_selector_open
@@ -476,7 +498,9 @@ impl AppState {
         if self.close_all_total == 0 {
             return Some(format!("close-all #{} RUNNING 0/0", job_id));
         }
-        let ok = self.close_all_completed.saturating_sub(self.close_all_failed);
+        let ok = self
+            .close_all_completed
+            .saturating_sub(self.close_all_failed);
         let current = self
             .close_all_current_symbol
             .as_ref()
@@ -493,7 +517,13 @@ impl AppState {
         };
         Some(format!(
             "close-all #{} {} {}/{} ok:{} fail:{}{}",
-            job_id, status, self.close_all_completed, self.close_all_total, ok, self.close_all_failed, current
+            job_id,
+            status,
+            self.close_all_completed,
+            self.close_all_total,
+            ok,
+            self.close_all_failed,
+            current
         ))
     }
     pub fn is_strategy_editor_open(&self) -> bool {
@@ -749,7 +779,10 @@ impl AppState {
                         let should_emit = self
                             .strategy_last_event_by_tag
                             .get(&source_tag)
-                            .map(|e| e.side != OrderSide::Buy || timestamp_ms.saturating_sub(e.timestamp_ms) >= 1000)
+                            .map(|e| {
+                                e.side != OrderSide::Buy
+                                    || timestamp_ms.saturating_sub(e.timestamp_ms) >= 1000
+                            })
                             .unwrap_or(true);
                         if should_emit {
                             let mut record = LogRecord::new(
@@ -781,7 +814,10 @@ impl AppState {
                         let should_emit = self
                             .strategy_last_event_by_tag
                             .get(&source_tag)
-                            .map(|e| e.side != OrderSide::Sell || timestamp_ms.saturating_sub(e.timestamp_ms) >= 1000)
+                            .map(|e| {
+                                e.side != OrderSide::Sell
+                                    || timestamp_ms.saturating_sub(e.timestamp_ms) >= 1000
+                            })
                             .unwrap_or(true);
                         if should_emit {
                             let mut record = LogRecord::new(
@@ -829,7 +865,8 @@ impl AppState {
                         let now_ms = chrono::Utc::now().timestamp_millis() as u64;
                         let source_tag = parse_source_tag_from_client_order_id(client_order_id)
                             .map(|s| s.to_ascii_lowercase());
-                        if let Some(submit_ms) = self.network_pending_submit_ms_by_intent.remove(intent_id)
+                        if let Some(submit_ms) =
+                            self.network_pending_submit_ms_by_intent.remove(intent_id)
                         {
                             Self::push_latency_sample(
                                 &mut self.network_fill_latencies_ms,
@@ -887,7 +924,8 @@ impl AppState {
                         );
                         record.symbol = Some(self.symbol.clone());
                         record.strategy_tag =
-                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                            parse_source_tag_from_client_order_id(client_order_id)
+                                .map(|s| s.to_ascii_lowercase());
                         self.push_log_record(record);
                     }
                     OrderUpdate::Submitted {
@@ -910,7 +948,8 @@ impl AppState {
                         );
                         record.symbol = Some(self.symbol.clone());
                         record.strategy_tag =
-                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                            parse_source_tag_from_client_order_id(client_order_id)
+                                .map(|s| s.to_ascii_lowercase());
                         self.push_log_record(record);
                     }
                     OrderUpdate::Rejected {
@@ -935,7 +974,8 @@ impl AppState {
                         );
                         record.symbol = Some(self.symbol.clone());
                         record.strategy_tag =
-                            parse_source_tag_from_client_order_id(client_order_id).map(|s| s.to_ascii_lowercase());
+                            parse_source_tag_from_client_order_id(client_order_id)
+                                .map(|s| s.to_ascii_lowercase());
                         self.push_log_record(record);
                     }
                 }
@@ -948,14 +988,20 @@ impl AppState {
                 WsConnectionStatus::Disconnected => {
                     self.ws_connected = false;
                     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                    Self::push_network_event_sample(&mut self.network_disconnect_timestamps_ms, now_ms);
+                    Self::push_network_event_sample(
+                        &mut self.network_disconnect_timestamps_ms,
+                        now_ms,
+                    );
                     self.push_log("[WARN] WebSocket Disconnected".to_string());
                 }
                 WsConnectionStatus::Reconnecting { attempt, delay_ms } => {
                     self.ws_connected = false;
                     self.network_reconnect_count += 1;
                     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                    Self::push_network_event_sample(&mut self.network_reconnect_timestamps_ms, now_ms);
+                    Self::push_network_event_sample(
+                        &mut self.network_reconnect_timestamps_ms,
+                        now_ms,
+                    );
                     self.push_log(format!(
                         "[WARN] Reconnecting (attempt {}, wait {}ms)",
                         attempt, delay_ms
@@ -1078,10 +1124,7 @@ impl AppState {
                 gate_blocked,
             } => {
                 let key = strategy_stats_scope_key(&symbol, &source_tag);
-                let prev_entry_ev = self
-                    .ev_snapshot_by_scope
-                    .get(&key)
-                    .and_then(|v| v.entry_ev);
+                let prev_entry_ev = self.ev_snapshot_by_scope.get(&key).and_then(|v| v.entry_ev);
                 self.ev_snapshot_by_scope.insert(
                     key,
                     EvSnapshotEntry {
@@ -1091,6 +1134,33 @@ impl AppState {
                         gate_mode,
                         gate_blocked,
                         updated_at_ms: chrono::Utc::now().timestamp_millis() as u64,
+                    },
+                );
+            }
+            AppEvent::PredictorMetricsUpdate {
+                symbol,
+                market,
+                predictor,
+                horizon,
+                r2,
+                hit_rate,
+                mae,
+                sample_count,
+                updated_at_ms,
+            } => {
+                let key = predictor_metrics_scope_key(&symbol, &market, &predictor, &horizon);
+                self.predictor_metrics_by_scope.insert(
+                    key,
+                    PredictorMetricEntry {
+                        symbol,
+                        market,
+                        predictor,
+                        horizon,
+                        r2,
+                        hit_rate,
+                        mae,
+                        sample_count,
+                        updated_at_ms,
                     },
                 );
             }
@@ -1144,7 +1214,10 @@ impl AppState {
                     self.close_all_row_status_by_symbol
                         .insert(normalize_symbol_for_scope(&symbol), "PENDING".to_string());
                 }
-                self.push_log(format!("[INFO] close-all #{} started total={}", job_id, total));
+                self.push_log(format!(
+                    "[INFO] close-all #{} started total={}",
+                    job_id, total
+                ));
             }
             AppEvent::CloseAllProgress {
                 job_id,
@@ -1164,10 +1237,7 @@ impl AppState {
                 self.close_all_current_symbol = Some(symbol.clone());
                 let symbol_key = normalize_symbol_for_scope(&symbol);
                 let row_status = if let Some(r) = reason.as_ref() {
-                    if r.contains("too small")
-                        || r.contains("No ")
-                        || r.contains("Insufficient ")
-                    {
+                    if r.contains("too small") || r.contains("No ") || r.contains("Insufficient ") {
                         "SKIP"
                     } else {
                         "FAIL"
@@ -1333,8 +1403,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         .split(outer[1]);
     let selected_strategy_stats =
         strategy_stats_for_item(&state.strategy_stats, &state.strategy_label, &state.symbol)
-        .cloned()
-        .unwrap_or_default();
+            .cloned()
+            .unwrap_or_default();
 
     // Price chart (candles + in-progress candle)
     let current_price = state.last_price();
@@ -1357,8 +1427,16 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.position,
             current_price,
             &state.last_applied_fee,
-            ev_snapshot_for_item(&state.ev_snapshot_by_scope, &state.strategy_label, &state.symbol),
-            exit_policy_for_item(&state.exit_policy_by_scope, &state.strategy_label, &state.symbol),
+            ev_snapshot_for_item(
+                &state.ev_snapshot_by_scope,
+                &state.strategy_label,
+                &state.symbol,
+            ),
+            exit_policy_for_item(
+                &state.exit_policy_by_scope,
+                &state.strategy_label,
+                &state.symbol,
+            ),
         ),
         right_panels[0],
     );
@@ -1470,13 +1548,10 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
 
     let focus_symbol = state.focus_symbol().unwrap_or(&state.symbol);
     let focus_strategy = state.focus_strategy_id().unwrap_or(&state.strategy_label);
-    let focus_strategy_stats = strategy_stats_for_item(
-        &state.strategy_stats,
-        focus_strategy,
-        focus_symbol,
-    )
-        .cloned()
-        .unwrap_or_default();
+    let focus_strategy_stats =
+        strategy_stats_for_item(&state.strategy_stats, focus_strategy, focus_symbol)
+            .cloned()
+            .unwrap_or_default();
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -1565,7 +1640,9 @@ fn render_close_all_confirm_popup(frame: &mut Frame) {
     let lines = vec![
         Line::from(Span::styled(
             "Close all open positions now?",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "[Y/Enter] Confirm   [N/Esc] Cancel",
@@ -1574,7 +1651,6 @@ fn render_close_all_confirm_popup(frame: &mut Frame) {
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
-
 
 fn render_grid_popup(frame: &mut Frame, state: &AppState) {
     let view = state.view_state();
@@ -1622,7 +1698,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             Span::raw(" "),
             tab_span(GridTab::History, "6", "History"),
             Span::raw(" "),
-            tab_span(GridTab::SystemLog, "7", "SystemLog"),
+            tab_span(GridTab::Predictors, "7", "Predictors"),
+            Span::raw(" "),
+            tab_span(GridTab::SystemLog, "8", "SystemLog"),
         ])),
         tab_area,
     );
@@ -1818,10 +1896,15 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 Span::styled(" Total PnL: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:+.4}", total_pnl),
-                    Style::default().fg(total_color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(total_color)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("   Realized: {:+.4}   Unrealized: {:+.4}", total_rlz, total_unrlz),
+                    format!(
+                        "   Realized: {:+.4}   Unrealized: {:+.4}",
+                        total_rlz, total_unrlz
+                    ),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]))
@@ -1832,7 +1915,10 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             panel_chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), panel_chunks[3]);
+        frame.render_widget(
+            Paragraph::new("[1/2/3/4/5/6/7/8] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"),
+            panel_chunks[3],
+        );
         return;
     }
 
@@ -1950,7 +2036,10 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[3]);
+        frame.render_widget(
+            Paragraph::new("[1/2/3/4/5/6/7/8] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"),
+            chunks[3],
+        );
         return;
     }
 
@@ -1969,11 +2058,15 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
         let tick_drop_rate_1s = rate_per_sec(tick_drop_1s, 1.0);
         let tick_drop_rate_10s = rate_per_sec(tick_drop_10s, 10.0);
         let tick_drop_rate_60s = rate_per_sec(tick_drop_60s, 60.0);
-        let tick_drop_ratio_10s = ratio_pct(tick_drop_10s, tick_in_10s.saturating_add(tick_drop_10s));
-        let tick_drop_ratio_60s = ratio_pct(tick_drop_60s, tick_in_60s.saturating_add(tick_drop_60s));
+        let tick_drop_ratio_10s =
+            ratio_pct(tick_drop_10s, tick_in_10s.saturating_add(tick_drop_10s));
+        let tick_drop_ratio_60s =
+            ratio_pct(tick_drop_60s, tick_in_60s.saturating_add(tick_drop_60s));
         let reconnect_rate_60s = reconnect_60s as f64;
         let disconnect_rate_60s = disconnect_60s as f64;
-        let heartbeat_gap_ms = state.last_price_update_ms.map(|ts| now_ms.saturating_sub(ts));
+        let heartbeat_gap_ms = state
+            .last_price_update_ms
+            .map(|ts| now_ms.saturating_sub(ts));
         let tick_p95_ms = percentile(&state.network_tick_latencies_ms, 95);
         let health = classify_health(
             state.ws_connected,
@@ -2022,7 +2115,10 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 Span::styled(
                     format!(
                         "  in1s={:.1}/s  drop10s={:.2}/s  ratio10s={:.2}%  reconn60s={:.0}/min",
-                        tick_in_rate_1s, tick_drop_rate_10s, tick_drop_ratio_10s, reconnect_rate_60s
+                        tick_in_rate_1s,
+                        tick_drop_rate_10s,
+                        tick_drop_ratio_10s,
+                        reconnect_rate_60s
                     ),
                     Style::default().fg(Color::DarkGray),
                 ),
@@ -2152,14 +2248,21 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[2],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[3]);
+        frame.render_widget(
+            Paragraph::new("[1/2/3/4/5/6/7/8] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"),
+            chunks[3],
+        );
         return;
     }
 
     if view.selected_grid_tab == GridTab::History {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Min(6), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Min(6),
+                Constraint::Length(1),
+            ])
             .split(body_area);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -2170,7 +2273,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                         order_store::HistoryBucket::Hour => "Hour",
                         order_store::HistoryBucket::Month => "Month",
                     },
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     "  (popup hotkeys: D/H/M)",
@@ -2180,7 +2285,10 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             chunks[0],
         );
 
-        let visible = build_history_lines(&state.history_rows, chunks[1].height.saturating_sub(2) as usize);
+        let visible = build_history_lines(
+            &state.history_rows,
+            chunks[1].height.saturating_sub(2) as usize,
+        );
         frame.render_widget(
             Paragraph::new(visible).block(
                 Block::default()
@@ -2190,14 +2298,21 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[1],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[2]);
+        frame.render_widget(
+            Paragraph::new("[1/2/3/4/5/6/7/8] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"),
+            chunks[2],
+        );
         return;
     }
 
     if view.selected_grid_tab == GridTab::Positions {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Min(6), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Min(6),
+                Constraint::Length(1),
+            ])
             .split(body_area);
         let persisted = if cfg!(test) {
             Vec::new()
@@ -2215,10 +2330,15 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
 
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Open Position Orders: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "Open Position Orders: ",
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled(
                     open_orders.len().to_string(),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     if state.hide_small_positions {
@@ -2256,25 +2376,28 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 .assets_view()
                 .iter()
                 .filter(|a| {
-                    let has_pos =
-                        a.position_qty.abs() > f64::EPSILON || a.entry_price.is_some() || a.side.is_some();
-                    let px = a
-                        .last_price
-                        .or(a.entry_price)
-                        .unwrap_or(0.0);
+                    let has_pos = a.position_qty.abs() > f64::EPSILON
+                        || a.entry_price.is_some()
+                        || a.side.is_some();
+                    let px = a.last_price.or(a.entry_price).unwrap_or(0.0);
                     has_pos && (!state.hide_small_positions || (px * a.position_qty.abs()) >= 1.0)
                 })
                 .map(|a| {
-                    let ev_snapshot =
-                        latest_ev_snapshot_for_symbol_relaxed(&state.ev_snapshot_by_scope, &a.symbol);
-                    let exit_policy =
-                        latest_exit_policy_for_symbol_relaxed(&state.exit_policy_by_scope, &a.symbol);
+                    let ev_snapshot = latest_ev_snapshot_for_symbol_relaxed(
+                        &state.ev_snapshot_by_scope,
+                        &a.symbol,
+                    );
+                    let exit_policy = latest_exit_policy_for_symbol_relaxed(
+                        &state.exit_policy_by_scope,
+                        &a.symbol,
+                    );
                     Row::new(vec![
                         Cell::from(a.symbol.clone()),
                         Cell::from("SYS"),
                         Cell::from("-"),
                         Cell::from(
-                            close_all_row_status_for_symbol(state, &a.symbol).unwrap_or_else(|| "-".to_string()),
+                            close_all_row_status_for_symbol(state, &a.symbol)
+                                .unwrap_or_else(|| "-".to_string()),
                         ),
                         Cell::from(if a.is_futures { "FUT" } else { "SPOT" }),
                         Cell::from(a.side.clone().unwrap_or_else(|| "-".to_string())),
@@ -2322,15 +2445,13 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                                 })
                                 .unwrap_or_else(|| "-".to_string()),
                         ),
-                        Cell::from(
-                            if exit_policy.and_then(|p| p.stop_price).is_none() {
-                                "-".to_string()
-                            } else if exit_policy.and_then(|p| p.protective_stop_ok) == Some(true) {
-                                "ORDER".to_string()
-                            } else {
-                                "CALC".to_string()
-                            },
-                        ),
+                        Cell::from(if exit_policy.and_then(|p| p.stop_price).is_none() {
+                            "-".to_string()
+                        } else if exit_policy.and_then(|p| p.protective_stop_ok) == Some(true) {
+                            "ORDER".to_string()
+                        } else {
+                            "CALC".to_string()
+                        }),
                         Cell::from(format!("{:+.4}", a.unrealized_pnl_usdt)),
                     ])
                 })
@@ -2375,7 +2496,11 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                         Cell::from("BUY"),
                         Cell::from(format!("{:.5}", row.qty_open)),
                         Cell::from(format!("{:.2}", row.entry_price)),
-                        Cell::from(asset_last.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "-".to_string())),
+                        Cell::from(
+                            asset_last
+                                .map(|v| format!("{:.2}", v))
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
                         Cell::from(
                             exit_policy
                                 .as_ref()
@@ -2417,7 +2542,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                         Cell::from(
                             if exit_policy.as_ref().and_then(|p| p.stop_price).is_none() {
                                 "-".to_string()
-                            } else if exit_policy.as_ref().and_then(|p| p.protective_stop_ok) == Some(true) {
+                            } else if exit_policy.as_ref().and_then(|p| p.protective_stop_ok)
+                                == Some(true)
+                            {
                                 "ORDER".to_string()
                             } else {
                                 "CALC".to_string()
@@ -2482,7 +2609,153 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[1],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[2]);
+        frame.render_widget(
+            Paragraph::new("[1/2/3/4/5/6/7/8] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"),
+            chunks[2],
+        );
+        return;
+    }
+
+    if view.selected_grid_tab == GridTab::Predictors {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Min(6),
+                Constraint::Length(1),
+            ])
+            .split(body_area);
+        let mut entries: Vec<&PredictorMetricEntry> = state
+            .predictor_metrics_by_scope
+            .values()
+            .filter(|e| !state.hide_empty_predictor_rows || e.sample_count > 0)
+            .collect();
+        entries.sort_by(|a, b| match (a.r2, b.r2) {
+            (Some(ra), Some(rb)) => rb
+                .partial_cmp(&ra)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.sample_count.cmp(&a.sample_count))
+                .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => b
+                .sample_count
+                .cmp(&a.sample_count)
+                .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms)),
+        });
+        let visible_rows = chunks[1].height.saturating_sub(3).max(1) as usize;
+        let max_start = entries.len().saturating_sub(visible_rows);
+        let start = state.predictor_scroll_offset.min(max_start);
+        let end = (start + visible_rows).min(entries.len());
+        let visible_entries = &entries[start..end];
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Predictor Rows: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    entries.len().to_string(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    if state.hide_empty_predictor_rows {
+                        "  (N>0 only | [U] toggle)"
+                    } else {
+                        "  (all rows | [U] toggle)"
+                    },
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("  view {}-{}", start.saturating_add(1), end.max(start)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])),
+            chunks[0],
+        );
+
+        let header = Row::new(vec![
+            Cell::from("Symbol"),
+            Cell::from("Market"),
+            Cell::from("Predictor"),
+            Cell::from("Horizon"),
+            Cell::from("R2"),
+            Cell::from("MAE"),
+            Cell::from("N"),
+        ])
+        .style(Style::default().fg(Color::DarkGray));
+        let mut rows: Vec<Row> = visible_entries
+            .iter()
+            .map(|e| {
+                Row::new(vec![
+                    Cell::from(display_symbol_for_storage(&e.symbol)),
+                    Cell::from(e.market.to_ascii_uppercase()),
+                    Cell::from(e.predictor.clone()),
+                    Cell::from(e.horizon.clone()),
+                    Cell::from(e.r2.map(|v| format!("{:+.3}", v)).unwrap_or_else(|| {
+                        if e.sample_count > 0 {
+                            "WARMUP".to_string()
+                        } else {
+                            "-".to_string()
+                        }
+                    })),
+                    Cell::from(
+                        e.mae
+                            .map(|v| {
+                                if v.abs() < 1e-5 {
+                                    format!("{:.2e}", v)
+                                } else {
+                                    format!("{:.5}", v)
+                                }
+                            })
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                    Cell::from(e.sample_count.to_string()),
+                ])
+            })
+            .collect();
+        if rows.is_empty() {
+            rows.push(
+                Row::new(vec![
+                    Cell::from("(no predictor metrics)"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                ])
+                .style(Style::default().fg(Color::DarkGray)),
+            );
+        }
+        frame.render_widget(
+            Table::new(
+                rows,
+                [
+                    Constraint::Length(14),
+                    Constraint::Length(7),
+                    Constraint::Length(14),
+                    Constraint::Length(8),
+                    Constraint::Length(8),
+                    Constraint::Length(10),
+                    Constraint::Length(6),
+                ],
+            )
+            .header(header)
+            .column_spacing(1)
+            .block(
+                Block::default()
+                    .title(" Predictors ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[1],
+        );
+        frame.render_widget(
+            Paragraph::new(
+                "[1/2/3/4/5/6/7/8] tab  [J/K] scroll  [U] <$1 filter  [Z] close-all  [G/Esc] close",
+            ),
+            chunks[2],
+        );
         return;
     }
 
@@ -2508,7 +2781,10 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
         }
         frame.render_widget(
             Table::new(log_rows, [Constraint::Min(1)])
-                .header(Row::new(vec![Cell::from("Message")]).style(Style::default().fg(Color::DarkGray)))
+                .header(
+                    Row::new(vec![Cell::from("Message")])
+                        .style(Style::default().fg(Color::DarkGray)),
+                )
                 .column_spacing(1)
                 .block(
                     Block::default()
@@ -2518,7 +2794,10 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 ),
             chunks[0],
         );
-        frame.render_widget(Paragraph::new("[1/2/3/4/5/6/7] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"), chunks[1]);
+        frame.render_widget(
+            Paragraph::new("[1/2/3/4/5/6/7/8] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"),
+            chunks[1],
+        );
         return;
     }
 
@@ -2977,9 +3256,12 @@ fn latency_stats(samples: &[u64]) -> (String, String, String) {
     let p95 = percentile(samples, 95);
     let p99 = percentile(samples, 99);
     (
-        p50.map(|v| format!("{}ms", v)).unwrap_or_else(|| "-".to_string()),
-        p95.map(|v| format!("{}ms", v)).unwrap_or_else(|| "-".to_string()),
-        p99.map(|v| format!("{}ms", v)).unwrap_or_else(|| "-".to_string()),
+        p50.map(|v| format!("{}ms", v))
+            .unwrap_or_else(|| "-".to_string()),
+        p95.map(|v| format!("{}ms", v))
+            .unwrap_or_else(|| "-".to_string()),
+        p99.map(|v| format!("{}ms", v))
+            .unwrap_or_else(|| "-".to_string()),
     )
 }
 
@@ -3067,7 +3349,10 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
     } else if is_atr {
         let threshold_x100 = state.strategy_editor_slow.clamp(110, 500);
         lines.push(Line::from(Span::styled(
-            format!("ATR expansion threshold: {:.2}x", threshold_x100 as f64 / 100.0),
+            format!(
+                "ATR expansion threshold: {:.2}x",
+                threshold_x100 as f64 / 100.0
+            ),
             Style::default().fg(Color::DarkGray),
         )));
     } else if is_chb {
@@ -3101,9 +3386,12 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
             frame,
             " Select Strategy Category ",
             &state.strategy_editor_kind_category_items,
-            state
-                .strategy_editor_kind_category_index
-                .min(state.strategy_editor_kind_category_items.len().saturating_sub(1)),
+            state.strategy_editor_kind_category_index.min(
+                state
+                    .strategy_editor_kind_category_items
+                    .len()
+                    .saturating_sub(1),
+            ),
             None,
             None,
             None,
@@ -3113,9 +3401,12 @@ fn render_strategy_editor_popup(frame: &mut Frame, state: &AppState) {
             frame,
             " Select Strategy Type ",
             &state.strategy_editor_kind_popup_items,
-            state
-                .strategy_editor_kind_selector_index
-                .min(state.strategy_editor_kind_popup_items.len().saturating_sub(1)),
+            state.strategy_editor_kind_selector_index.min(
+                state
+                    .strategy_editor_kind_popup_items
+                    .len()
+                    .saturating_sub(1),
+            ),
             None,
             None,
             None,
@@ -3388,9 +3679,11 @@ fn ev_snapshot_for_symbol_and_tag(
         .iter()
         .filter_map(|(k, v)| {
             let (scope_symbol, scope_tag) = parse_scope_key(k)?;
-            let symbol_ok = candidates
-                .iter()
-                .any(|prefix| prefix.trim_end_matches("::").eq_ignore_ascii_case(&scope_symbol));
+            let symbol_ok = candidates.iter().any(|prefix| {
+                prefix
+                    .trim_end_matches("::")
+                    .eq_ignore_ascii_case(&scope_symbol)
+            });
             if symbol_ok && scope_tag == tag {
                 Some(v)
             } else {
@@ -3413,9 +3706,11 @@ fn exit_policy_for_symbol_and_tag(
         .iter()
         .filter_map(|(k, v)| {
             let (scope_symbol, scope_tag) = parse_scope_key(k)?;
-            let symbol_ok = candidates
-                .iter()
-                .any(|prefix| prefix.trim_end_matches("::").eq_ignore_ascii_case(&scope_symbol));
+            let symbol_ok = candidates.iter().any(|prefix| {
+                prefix
+                    .trim_end_matches("::")
+                    .eq_ignore_ascii_case(&scope_symbol)
+            });
             if symbol_ok && scope_tag == tag {
                 Some(v)
             } else {
@@ -3574,10 +3869,7 @@ fn symbol_scope_candidates(symbol: &str) -> Vec<String> {
     }
     variants.sort();
     variants.dedup();
-    variants
-        .into_iter()
-        .map(|v| format!("{}::", v))
-        .collect()
+    variants.into_iter().map(|v| format!("{}::", v)).collect()
 }
 
 fn strategy_stats_scope_key(symbol: &str, source_tag: &str) -> String {
@@ -3585,6 +3877,21 @@ fn strategy_stats_scope_key(symbol: &str, source_tag: &str) -> String {
         "{}::{}",
         symbol.trim().to_ascii_uppercase(),
         source_tag.trim().to_ascii_lowercase()
+    )
+}
+
+fn predictor_metrics_scope_key(
+    symbol: &str,
+    market: &str,
+    predictor: &str,
+    horizon: &str,
+) -> String {
+    format!(
+        "{}::{}::{}::{}",
+        symbol.trim().to_ascii_uppercase(),
+        market.trim().to_ascii_lowercase(),
+        predictor.trim().to_ascii_lowercase(),
+        horizon.trim().to_ascii_lowercase()
     )
 }
 
