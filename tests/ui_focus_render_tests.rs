@@ -454,6 +454,61 @@ fn render_grid_popup_predictors_tab() {
 }
 
 #[test]
+/// Verifies predictor tab ordering:
+/// 5m/3m horizons should be prioritized over 1m in predictor list sorting.
+fn render_grid_popup_predictors_tab_prioritizes_mid_horizons() {
+    let backend = TestBackend::new(150, 40);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
+    state.grid_open = true;
+    state.grid_tab = GridTab::Predictors;
+    state.apply(AppEvent::PredictorMetricsUpdate {
+        symbol: "BTCUSDT".to_string(),
+        market: "spot".to_string(),
+        predictor: "p-1m".to_string(),
+        horizon: "1m".to_string(),
+        r2: Some(0.900),
+        hit_rate: Some(0.62),
+        mae: Some(0.0017),
+        sample_count: 120,
+        updated_at_ms: 1000,
+    });
+    state.apply(AppEvent::PredictorMetricsUpdate {
+        symbol: "BTCUSDT".to_string(),
+        market: "spot".to_string(),
+        predictor: "p-3m".to_string(),
+        horizon: "3m".to_string(),
+        r2: Some(0.100),
+        hit_rate: Some(0.52),
+        mae: Some(0.0019),
+        sample_count: 120,
+        updated_at_ms: 1001,
+    });
+    state.apply(AppEvent::PredictorMetricsUpdate {
+        symbol: "BTCUSDT".to_string(),
+        market: "spot".to_string(),
+        predictor: "p-5m".to_string(),
+        horizon: "5m".to_string(),
+        r2: Some(0.050),
+        hit_rate: Some(0.51),
+        mae: Some(0.0020),
+        sample_count: 120,
+        updated_at_ms: 1002,
+    });
+
+    terminal
+        .draw(|frame| ui::render(frame, &state))
+        .expect("render should succeed");
+
+    let text = buffer_text(&terminal);
+    let idx_5m = text.find("p-5m").expect("5m row should be present");
+    let idx_3m = text.find("p-3m").expect("3m row should be present");
+    let idx_1m = text.find("p-1m").expect("1m row should be present");
+    assert!(idx_5m < idx_3m, "5m row should appear before 3m row");
+    assert!(idx_3m < idx_1m, "3m row should appear before 1m row");
+}
+
+#[test]
 /// Verifies projection asset aggregation:
 /// balances and configured symbols should both contribute to asset row count.
 fn projection_asset_aggregation_includes_balance_assets() {

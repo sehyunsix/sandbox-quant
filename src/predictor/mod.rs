@@ -315,6 +315,19 @@ pub fn default_predictor_specs(base: EwmaYModelConfig) -> PredictorSpecs {
             },
         ),
         (
+            "feat-rls-robust-v1".to_string(),
+            PredictorConfig {
+                kind: PredictorKind::FeatureRls,
+                alpha_mean: 0.08,
+                alpha_var: 0.03,
+                min_sigma: base.min_sigma,
+                phi_clip: 0.999,
+                beta_trend: 0.015,
+                process_var: 0.08,
+                measure_var: 2.2,
+            },
+        ),
+        (
             "feat-rls-fast-v1".to_string(),
             PredictorConfig {
                 kind: PredictorKind::FeatureRls,
@@ -344,7 +357,11 @@ pub fn default_predictor_specs(base: EwmaYModelConfig) -> PredictorSpecs {
 }
 
 pub fn default_predictor_horizons() -> Vec<(String, u64)> {
-    vec![("1m".to_string(), 60_000)]
+    vec![
+        ("1m".to_string(), 60_000),
+        ("3m".to_string(), 180_000),
+        ("5m".to_string(), 300_000),
+    ]
 }
 
 pub fn build_predictor_models(
@@ -3146,6 +3163,7 @@ pub struct PendingPrediction {
     pub due_ms: u64,
     pub base_price: f64,
     pub mu: f64,
+    pub norm_scale: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -3259,6 +3277,62 @@ pub fn backfill_predictor_metrics_from_closes(
                     has_mu = true;
                 } else {
                     mu = (1.0 - a) * mu + a * r;
+                }
+            }
+        }
+        prev = Some(*p);
+    }
+    out
+}
+
+pub fn backfill_predictor_metrics_from_closes_volnorm(
+    closes: &[f64],
+    alpha_mean: f64,
+    alpha_var: f64,
+    min_sigma: f64,
+    window: usize,
+) -> OnlinePredictorMetrics {
+    let mut out = OnlinePredictorMetrics::with_window(window);
+    let mut prev: Option<f64> = None;
+    let mut has_mu = false;
+    let mut mu: f64 = 0.0;
+    let mut var: f64 = 0.0;
+    let mut has_var = false;
+    let a_mu = alpha_mean.clamp(0.0, 1.0);
+    let a_var = alpha_var.clamp(0.0, 1.0);
+    let sigma_floor = min_sigma.max(1e-8);
+
+    for p in closes {
+        if *p <= f64::EPSILON {
+            continue;
+        }
+        if let Some(pp) = prev {
+            if pp > f64::EPSILON {
+                let r = (p / pp).ln();
+                let pred = if has_mu { mu } else { 0.0 };
+                let sigma = if has_var {
+                    var.max(0.0).sqrt().max(sigma_floor)
+                } else {
+                    sigma_floor
+                };
+                out.observe(r / sigma, pred / sigma);
+
+                if !has_mu {
+                    mu = r;
+                    has_mu = true;
+                    var = r * r;
+                    has_var = true;
+                } else {
+                    let prev_mu = mu;
+                    mu = (1.0 - a_mu) * mu + a_mu * r;
+                    let centered = r - prev_mu;
+                    let sample_var = centered * centered;
+                    if !has_var {
+                        var = sample_var;
+                        has_var = true;
+                    } else {
+                        var = (1.0 - a_var) * var + a_var * sample_var;
+                    }
                 }
             }
         }
