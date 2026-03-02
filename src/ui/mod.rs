@@ -40,6 +40,14 @@ use ui_projection::UiProjection;
 const MAX_LOG_MESSAGES: usize = 200;
 const MAX_FILL_MARKERS: usize = 200;
 
+fn predictor_horizon_priority(h: &str) -> u8 {
+    match h.trim().to_ascii_lowercase().as_str() {
+        "5m" => 2,
+        "3m" => 1,
+        _ => 0,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GridTab {
     Assets,
@@ -2630,18 +2638,22 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             .values()
             .filter(|e| !state.hide_empty_predictor_rows || e.sample_count > 0)
             .collect();
-        entries.sort_by(|a, b| match (a.r2, b.r2) {
-            (Some(ra), Some(rb)) => rb
-                .partial_cmp(&ra)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.sample_count.cmp(&a.sample_count))
-                .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => b
-                .sample_count
-                .cmp(&a.sample_count)
-                .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms)),
+        entries.sort_by(|a, b| {
+            predictor_horizon_priority(&b.horizon)
+                .cmp(&predictor_horizon_priority(&a.horizon))
+                .then_with(|| match (a.r2, b.r2) {
+                    (Some(ra), Some(rb)) => rb
+                        .partial_cmp(&ra)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| b.sample_count.cmp(&a.sample_count))
+                        .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms)),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => b
+                        .sample_count
+                        .cmp(&a.sample_count)
+                        .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms)),
+                })
         });
         let visible_rows = chunks[1].height.saturating_sub(3).max(1) as usize;
         let max_start = entries.len().saturating_sub(visible_rows);

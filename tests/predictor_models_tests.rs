@@ -1,8 +1,9 @@
 use sandbox_quant::ev::EwmaYModelConfig;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::predictor::{
-    backfill_predictor_metrics_from_closes, build_predictor_models, default_predictor_horizons,
-    default_predictor_specs, OnlinePredictorMetrics, PREDICTOR_R2_MIN_SAMPLES,
+    backfill_predictor_metrics_from_closes, backfill_predictor_metrics_from_closes_volnorm,
+    build_predictor_models, default_predictor_horizons, default_predictor_specs,
+    OnlinePredictorMetrics, PREDICTOR_R2_MIN_SAMPLES,
 };
 
 #[test]
@@ -27,6 +28,7 @@ fn default_predictor_specs_include_ar1_variants() {
     assert!(ids.contains(&"selfcalib-v1".to_string()));
     assert!(ids.contains(&"selfcalib-fast-v1".to_string()));
     assert!(ids.contains(&"feat-rls-v1".to_string()));
+    assert!(ids.contains(&"feat-rls-robust-v1".to_string()));
     assert!(ids.contains(&"feat-rls-fast-v1".to_string()));
     assert!(ids.contains(&"xasset-macro-rls-v1".to_string()));
 }
@@ -51,6 +53,7 @@ fn build_predictor_models_constructs_requested_models() {
     assert!(models.contains_key("microrev-fast-v1"));
     assert!(models.contains_key("selfcalib-v1"));
     assert!(models.contains_key("selfcalib-fast-v1"));
+    assert!(models.contains_key("feat-rls-robust-v1"));
     assert!(models.contains_key("xasset-macro-rls-v1"));
 }
 
@@ -79,6 +82,14 @@ fn metrics_backfill_produces_non_empty_samples() {
 }
 
 #[test]
+fn metrics_backfill_volnorm_produces_non_empty_samples() {
+    let closes = vec![100.0, 101.0, 99.8, 100.9, 100.1, 101.4, 100.4, 101.8];
+    let metrics = backfill_predictor_metrics_from_closes_volnorm(&closes, 0.1, 0.08, 1e-4, 120);
+    assert!(metrics.sample_count() > 0);
+    assert!(metrics.mae().is_some());
+}
+
+#[test]
 fn online_metrics_r2_is_defined_after_multiple_points() {
     let mut m = OnlinePredictorMetrics::with_window(PREDICTOR_R2_MIN_SAMPLES + 16);
     for i in 0..PREDICTOR_R2_MIN_SAMPLES {
@@ -91,11 +102,15 @@ fn online_metrics_r2_is_defined_after_multiple_points() {
 }
 
 #[test]
-fn default_horizon_is_minute_only() {
+fn default_horizon_includes_multi_minute_variants() {
     let hs = default_predictor_horizons();
-    assert_eq!(hs.len(), 1);
+    assert_eq!(hs.len(), 3);
     assert_eq!(hs[0].0, "1m");
     assert_eq!(hs[0].1, 60_000);
+    assert_eq!(hs[1].0, "3m");
+    assert_eq!(hs[1].1, 180_000);
+    assert_eq!(hs[2].0, "5m");
+    assert_eq!(hs[2].1, 300_000);
 }
 
 #[test]

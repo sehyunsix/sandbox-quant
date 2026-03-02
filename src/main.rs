@@ -25,10 +25,10 @@ use sandbox_quant::model::tick::Tick;
 use sandbox_quant::order_manager::{MarketKind, OrderHistoryStats, OrderManager, OrderUpdate};
 use sandbox_quant::order_store;
 use sandbox_quant::predictor::{
-    backfill_predictor_metrics_from_closes, build_predictor_models, default_predictor_horizons,
-    default_predictor_specs, parse_predictor_metrics_scope_key, predictor_metrics_scope_key,
-    stride_closes, OnlinePredictorMetrics, PendingPrediction, PREDICTOR_METRIC_WINDOW,
-    PREDICTOR_WINDOW_MAX,
+    backfill_predictor_metrics_from_closes_volnorm, build_predictor_models,
+    default_predictor_horizons, default_predictor_specs, parse_predictor_metrics_scope_key,
+    predictor_metrics_scope_key, stride_closes, OnlinePredictorMetrics, PendingPrediction,
+    PREDICTOR_METRIC_WINDOW, PREDICTOR_WINDOW_MAX,
 };
 use sandbox_quant::strategy::aroon_trend::AroonTrendStrategy;
 use sandbox_quant::strategy::atr_expansion::AtrExpansionStrategy;
@@ -56,6 +56,40 @@ use sandbox_quant::ui::{AppState, GridTab};
 
 const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PredictorEvalVolState {
+    last_price: Option<f64>,
+    var: f64,
+    ready: bool,
+}
+
+fn observe_predictor_eval_volatility(st: &mut PredictorEvalVolState, price: f64, alpha_var: f64) {
+    if price <= f64::EPSILON {
+        return;
+    }
+    if let Some(prev) = st.last_price {
+        if prev > f64::EPSILON {
+            let r = (price / prev).ln();
+            if !st.ready {
+                st.var = r * r;
+                st.ready = true;
+            } else {
+                let a = alpha_var.clamp(0.0, 1.0);
+                st.var = (1.0 - a) * st.var + a * (r * r);
+            }
+        }
+    }
+    st.last_price = Some(price);
+}
+
+fn predictor_eval_scale(st: &PredictorEvalVolState, min_sigma: f64) -> f64 {
+    if st.ready {
+        st.var.max(0.0).sqrt().max(min_sigma.max(1e-8))
+    } else {
+        min_sigma.max(1e-8)
+    }
+}
 
 #[derive(Debug)]
 enum StrategyRuntime {
@@ -1925,8 +1959,14 @@ async fn main() -> Result<()> {
         };
         let mut y_model = EwmaYModel::new(base_predictor_cfg);
         let predictor_specs = default_predictor_specs(base_predictor_cfg);
+        let predictor_cfg_by_id: HashMap<String, _> = predictor_specs
+            .iter()
+            .map(|(id, cfg)| (id.clone(), *cfg))
+            .collect();
         let mut predictor_models = build_predictor_models(&predictor_specs);
         let mut pending_predictor_eval: HashMap<String, VecDeque<PendingPrediction>> =
+            HashMap::new();
+        let mut predictor_vol_by_instrument: HashMap<String, PredictorEvalVolState> =
             HashMap::new();
         let mut predictor_metrics_by_scope: HashMap<String, OnlinePredictorMetrics> =
             HashMap::new();
@@ -2194,9 +2234,11 @@ async fn main() -> Result<()> {
                     let stride =
                         ((*horizon_ms).max(base_interval_ms) / base_interval_ms).max(1) as usize;
                     let sampled = stride_closes(&instrument_closes, stride);
-                    let metrics = backfill_predictor_metrics_from_closes(
+                    let metrics = backfill_predictor_metrics_from_closes_volnorm(
                         &sampled,
                         predictor_cfg.alpha_mean,
+                        predictor_cfg.alpha_var,
+                        predictor_cfg.min_sigma,
                         PREDICTOR_METRIC_WINDOW,
                     );
                     predictor_metrics_by_scope.insert(scope_key, metrics.clone());
@@ -2249,6 +2291,14 @@ async fn main() -> Result<()> {
                     for model in predictor_models.values_mut() {
                         model.observe_price(&tick_symbol, tick.price);
                     }
+                    let vol_state = predictor_vol_by_instrument
+                        .entry(tick_symbol.clone())
+                        .or_default();
+                    observe_predictor_eval_volatility(
+                        vol_state,
+                        tick.price,
+                        strat_config.ev.y_ewma_alpha_var,
+                    );
                     if tick.price > f64::EPSILON {
                         let (_, tick_market) = parse_instrument_label(&tick_symbol);
                         let fallback_sigma = if tick_market == MarketKind::Futures {
@@ -2269,11 +2319,17 @@ async fn main() -> Result<()> {
                                     predictor_id,
                                     horizon,
                                 );
+                                let predictor_min_sigma = predictor_cfg_by_id
+                                    .get(predictor_id)
+                                    .map(|c| c.min_sigma)
+                                    .unwrap_or(strat_config.ev.y_min_sigma);
+                                let norm_scale = predictor_eval_scale(vol_state, predictor_min_sigma);
                                 let queue = pending_predictor_eval.entry(scope_key).or_default();
                                 queue.push_back(PendingPrediction {
                                     due_ms: now_ms.saturating_add(*horizon_ms),
                                     base_price: tick.price,
                                     mu: y_for_predictor.mu,
+                                    norm_scale,
                                 });
                                 if queue.len() > PREDICTOR_WINDOW_MAX {
                                     let drop_n = queue.len() - PREDICTOR_WINDOW_MAX;
@@ -2323,11 +2379,16 @@ async fn main() -> Result<()> {
                             if item.base_price <= f64::EPSILON || tick.price <= f64::EPSILON {
                                 continue;
                             }
+                            if !item.norm_scale.is_finite() || item.norm_scale <= f64::EPSILON {
+                                continue;
+                            }
                             let y_real = (tick.price / item.base_price).ln();
+                            let y_real_norm = y_real / item.norm_scale;
+                            let y_pred_norm = item.mu / item.norm_scale;
                             let metric = predictor_metrics_by_scope
                                 .entry(scope_key.clone())
                                 .or_default();
-                            metric.observe(y_real, item.mu);
+                            metric.observe(y_real_norm, y_pred_norm);
                             resolved_any = true;
                         }
                         if resolved_any {
