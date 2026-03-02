@@ -1,3 +1,7 @@
+## v0.32.1 - 2026-03-02
+
+- chore(refactor): split main helpers and ui handlers modules (#186) (7d1df7e)
+
 ## v0.32.0 - 2026-03-02
 
 - feat(predictor): stabilize eval with vol normalization and horizon priority (#185) (546998a)
