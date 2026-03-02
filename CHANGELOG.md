@@ -1,3 +1,7 @@
+## v0.32.0 - 2026-03-02
+
+- feat(predictor): stabilize eval with vol normalization and horizon priority (#185) (546998a)
+
 ## v0.31.0 - 2026-03-01
 
 - feat: add predictor abstraction, routing, and evaluation metrics (fe8a2e7)
