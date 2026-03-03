@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
 use crate::event::{
-    AppEvent, AssetPnlEntry, EvSnapshotEntry, ExitPolicyEntry, LogDomain, LogLevel, LogRecord,
+    AppEvent, ExitPolicyEntry, LogDomain, LogLevel, LogRecord, PortfolioStateSnapshot,
     PredictorMetricEntry, WsConnectionStatus,
 };
 use crate::model::candle::{Candle, CandleBuilder};
@@ -115,9 +115,8 @@ pub struct AppState {
     pub history_win_count: u32,
     pub history_lose_count: u32,
     pub history_realized_pnl: f64,
-    pub asset_pnl_by_symbol: HashMap<String, AssetPnlEntry>,
+    pub portfolio_state: PortfolioStateSnapshot,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
-    pub ev_snapshot_by_scope: HashMap<String, EvSnapshotEntry>,
     pub exit_policy_by_scope: HashMap<String, ExitPolicyEntry>,
     pub predictor_metrics_by_scope: HashMap<String, PredictorMetricEntry>,
     pub history_fills: Vec<OrderHistoryFill>,
@@ -233,9 +232,8 @@ impl AppState {
             history_win_count: 0,
             history_lose_count: 0,
             history_realized_pnl: 0.0,
-            asset_pnl_by_symbol: HashMap::new(),
+            portfolio_state: PortfolioStateSnapshot::default(),
             strategy_stats: HashMap::new(),
-            ev_snapshot_by_scope: HashMap::new(),
             exit_policy_by_scope: HashMap::new(),
             predictor_metrics_by_scope: HashMap::new(),
             history_fills: Vec::new(),
@@ -1122,29 +1120,6 @@ impl AppState {
                 rebuild_projection = true;
                 self.strategy_stats = strategy_stats;
             }
-            AppEvent::EvSnapshotUpdate {
-                symbol,
-                source_tag,
-                ev,
-                entry_ev,
-                p_win,
-                gate_mode,
-                gate_blocked,
-            } => {
-                let key = strategy_stats_scope_key(&symbol, &source_tag);
-                let prev_entry_ev = self.ev_snapshot_by_scope.get(&key).and_then(|v| v.entry_ev);
-                self.ev_snapshot_by_scope.insert(
-                    key,
-                    EvSnapshotEntry {
-                        ev,
-                        entry_ev: entry_ev.or(prev_entry_ev),
-                        p_win,
-                        gate_mode,
-                        gate_blocked,
-                        updated_at_ms: chrono::Utc::now().timestamp_millis() as u64,
-                    },
-                );
-            }
             AppEvent::PredictorMetricsUpdate {
                 symbol,
                 market,
@@ -1190,9 +1165,9 @@ impl AppState {
                     },
                 );
             }
-            AppEvent::AssetPnlUpdate { by_symbol } => {
+            AppEvent::PortfolioStateUpdate { snapshot } => {
                 rebuild_projection = true;
-                self.asset_pnl_by_symbol = by_symbol;
+                self.portfolio_state = snapshot;
             }
             AppEvent::RiskRateSnapshot {
                 global,
@@ -1435,11 +1410,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.position,
             current_price,
             &state.last_applied_fee,
-            ev_snapshot_for_item(
-                &state.ev_snapshot_by_scope,
-                &state.strategy_label,
-                &state.symbol,
-            ),
             exit_policy_for_item(
                 &state.exit_policy_by_scope,
                 &state.strategy_label,
@@ -1608,7 +1578,6 @@ fn render_focus_popup(frame: &mut Frame, state: &AppState) {
             &state.position,
             state.last_price(),
             &state.last_applied_fee,
-            ev_snapshot_for_item(&state.ev_snapshot_by_scope, focus_strategy, focus_symbol),
             exit_policy_for_item(&state.exit_policy_by_scope, focus_strategy, focus_symbol),
         ),
         focus_right[0],
@@ -1935,6 +1904,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(2),
+                Constraint::Length(7),
                 Constraint::Length(4),
                 Constraint::Min(3),
                 Constraint::Length(1),
@@ -2011,6 +1981,77 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             ),
             chunks[1],
         );
+        let reserved_color = if state.portfolio_state.reserved_cash_usdt >= 0.0 {
+            Color::Cyan
+        } else {
+            Color::Red
+        };
+        let net_exp_color = if state.portfolio_state.net_exposure_usdt >= 0.0 {
+            Color::Green
+        } else {
+            Color::Yellow
+        };
+        let portfolio_lines = vec![
+            Line::from(vec![
+                Span::styled("OpenOrders ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}", state.portfolio_state.open_orders_count),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled("Reserved ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:.2} USDT", state.portfolio_state.reserved_cash_usdt),
+                    Style::default().fg(reserved_color),
+                ),
+                Span::raw("  "),
+                Span::styled("Gross ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:.2}", state.portfolio_state.gross_exposure_usdt),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::raw("  "),
+                Span::styled("Net ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:+.2}", state.portfolio_state.net_exposure_usdt),
+                    Style::default().fg(net_exp_color),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Total Rlz ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:+.4}", state.portfolio_state.total_realized_pnl_usdt),
+                    Style::default().fg(if state.portfolio_state.total_realized_pnl_usdt >= 0.0 {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    }),
+                ),
+                Span::raw("  "),
+                Span::styled("Total Unr ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:+.4}", state.portfolio_state.total_unrealized_pnl_usdt),
+                    Style::default().fg(
+                        if state.portfolio_state.total_unrealized_pnl_usdt >= 0.0 {
+                            Color::Green
+                        } else {
+                            Color::Red
+                        },
+                    ),
+                ),
+            ]),
+        ];
+        frame.render_widget(
+            Paragraph::new(portfolio_lines).block(
+                Block::default()
+                    .title(" Portfolio State ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[2],
+        );
         let recent_rejections: Vec<&String> = state
             .log_messages
             .iter()
@@ -2042,11 +2083,11 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::DarkGray)),
             ),
-            chunks[2],
+            chunks[3],
         );
         frame.render_widget(
             Paragraph::new("[1/2/3/4/5/6/7/8] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"),
-            chunks[3],
+            chunks[4],
         );
         return;
     }
@@ -2371,10 +2412,6 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             Cell::from("Entry"),
             Cell::from("Last"),
             Cell::from("Stop"),
-            Cell::from("LiveEV"),
-            Cell::from("EntryEV"),
-            Cell::from("Score"),
-            Cell::from("Gate"),
             Cell::from("StopType"),
             Cell::from("UnrPnL"),
         ])
@@ -2391,10 +2428,6 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     has_pos && (!state.hide_small_positions || (px * a.position_qty.abs()) >= 1.0)
                 })
                 .map(|a| {
-                    let ev_snapshot = latest_ev_snapshot_for_symbol_relaxed(
-                        &state.ev_snapshot_by_scope,
-                        &a.symbol,
-                    );
                     let exit_policy = latest_exit_policy_for_symbol_relaxed(
                         &state.exit_policy_by_scope,
                         &a.symbol,
@@ -2426,33 +2459,6 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                                 .map(|v| format!("{:.2}", v))
                                 .unwrap_or_else(|| "-".to_string()),
                         ),
-                        Cell::from(
-                            ev_snapshot
-                                .map(|v| format!("{:+.3}", v.ev))
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
-                        Cell::from(
-                            ev_snapshot
-                                .and_then(|v| v.entry_ev)
-                                .map(|v| format!("{:+.3}", v))
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
-                        Cell::from(
-                            ev_snapshot
-                                .map(|v| format!("{:.2}", v.p_win))
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
-                        Cell::from(
-                            ev_snapshot
-                                .map(|v| {
-                                    if v.gate_blocked {
-                                        "BLOCK".to_string()
-                                    } else {
-                                        v.gate_mode.to_ascii_uppercase()
-                                    }
-                                })
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
                         Cell::from(if exit_policy.and_then(|p| p.stop_price).is_none() {
                             "-".to_string()
                         } else if exit_policy.and_then(|p| p.protective_stop_ok) == Some(true) {
@@ -2465,21 +2471,17 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 })
                 .collect()
         } else {
-            open_orders
+            let mut rows: Vec<Row> = open_orders
                 .iter()
                 .map(|row| {
                     let symbol_view = display_symbol_for_storage(&row.symbol);
                     let market_is_fut = row.symbol.ends_with("#FUT");
+                    let symbol_key = normalize_symbol_for_scope(&row.symbol);
+                    let asset_entry = state.assets_view().iter().find(|a| {
+                        normalize_symbol_for_scope(&a.symbol) == symbol_key
+                            && a.is_futures == market_is_fut
+                    });
                     let asset_last = asset_last_price_for_symbol(state, &row.symbol);
-                    let ev_snapshot =
-                        ev_snapshot_for_symbol_and_tag(state, &row.symbol, &row.source_tag)
-                            .or_else(|| {
-                                latest_ev_snapshot_for_symbol_relaxed(
-                                    &state.ev_snapshot_by_scope,
-                                    &row.symbol,
-                                )
-                                .cloned()
-                            });
                     let exit_policy =
                         exit_policy_for_symbol_and_tag(state, &row.symbol, &row.source_tag)
                             .or_else(|| {
@@ -2491,7 +2493,11 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                             });
                     let unr = asset_last
                         .map(|px| (px - row.entry_price) * row.qty_open)
+                        .or_else(|| asset_entry.map(|a| a.unrealized_pnl_usdt))
                         .unwrap_or(0.0);
+                    let side_text = asset_entry
+                        .and_then(|a| a.side.clone())
+                        .unwrap_or_else(|| "BUY".to_string());
                     Row::new(vec![
                         Cell::from(symbol_view),
                         Cell::from(row.source_tag.to_ascii_uppercase()),
@@ -2501,7 +2507,7 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                                 .unwrap_or_else(|| "-".to_string()),
                         ),
                         Cell::from(if market_is_fut { "FUT" } else { "SPOT" }),
-                        Cell::from("BUY"),
+                        Cell::from(side_text),
                         Cell::from(format!("{:.5}", row.qty_open)),
                         Cell::from(format!("{:.2}", row.entry_price)),
                         Cell::from(
@@ -2514,37 +2520,6 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                                 .as_ref()
                                 .and_then(|p| p.stop_price)
                                 .map(|v| format!("{:.2}", v))
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
-                        Cell::from(
-                            ev_snapshot
-                                .as_ref()
-                                .map(|v| format!("{:+.3}", v.ev))
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
-                        Cell::from(
-                            ev_snapshot
-                                .as_ref()
-                                .and_then(|v| v.entry_ev)
-                                .map(|v| format!("{:+.3}", v))
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
-                        Cell::from(
-                            ev_snapshot
-                                .as_ref()
-                                .map(|v| format!("{:.2}", v.p_win))
-                                .unwrap_or_else(|| "-".to_string()),
-                        ),
-                        Cell::from(
-                            ev_snapshot
-                                .as_ref()
-                                .map(|v| {
-                                    if v.gate_blocked {
-                                        "BLOCK".to_string()
-                                    } else {
-                                        v.gate_mode.to_ascii_uppercase()
-                                    }
-                                })
                                 .unwrap_or_else(|| "-".to_string()),
                         ),
                         Cell::from(
@@ -2561,16 +2536,76 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                         Cell::from(format!("{:+.4}", unr)),
                     ])
                 })
-                .collect()
+                .collect();
+
+            let represented_symbols: std::collections::HashSet<String> = open_orders
+                .iter()
+                .map(|r| {
+                    let market = if r.symbol.ends_with("#FUT") {
+                        "FUT"
+                    } else {
+                        "SPOT"
+                    };
+                    format!("{}::{}", normalize_symbol_for_scope(&r.symbol), market)
+                })
+                .collect();
+            for a in state.assets_view().iter().filter(|a| {
+                let has_pos = a.position_qty.abs() > f64::EPSILON || a.entry_price.is_some();
+                let px = a.last_price.or(a.entry_price).unwrap_or(0.0);
+                let symbol_key = format!(
+                    "{}::{}",
+                    normalize_symbol_for_scope(&a.symbol),
+                    if a.is_futures { "FUT" } else { "SPOT" }
+                );
+                has_pos
+                    && !represented_symbols.contains(&symbol_key)
+                    && (!state.hide_small_positions || (px * a.position_qty.abs()) >= 1.0)
+            }) {
+                let exit_policy =
+                    latest_exit_policy_for_symbol_relaxed(&state.exit_policy_by_scope, &a.symbol);
+                rows.push(Row::new(vec![
+                    Cell::from(a.symbol.clone()),
+                    Cell::from("SYS"),
+                    Cell::from("-"),
+                    Cell::from(
+                        close_all_row_status_for_symbol(state, &a.symbol)
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                    Cell::from(if a.is_futures { "FUT" } else { "SPOT" }),
+                    Cell::from(a.side.clone().unwrap_or_else(|| "-".to_string())),
+                    Cell::from(format!("{:.5}", a.position_qty)),
+                    Cell::from(
+                        a.entry_price
+                            .map(|v| format!("{:.2}", v))
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                    Cell::from(
+                        a.last_price
+                            .map(|v| format!("{:.2}", v))
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                    Cell::from(
+                        exit_policy
+                            .and_then(|p| p.stop_price)
+                            .map(|v| format!("{:.2}", v))
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
+                    Cell::from(if exit_policy.and_then(|p| p.stop_price).is_none() {
+                        "-".to_string()
+                    } else if exit_policy.and_then(|p| p.protective_stop_ok) == Some(true) {
+                        "ORDER".to_string()
+                    } else {
+                        "CALC".to_string()
+                    }),
+                    Cell::from(format!("{:+.4}", a.unrealized_pnl_usdt)),
+                ]));
+            }
+            rows
         };
         if rows.is_empty() {
             rows.push(
                 Row::new(vec![
                     Cell::from("(no open positions)"),
-                    Cell::from("-"),
-                    Cell::from("-"),
-                    Cell::from("-"),
-                    Cell::from("-"),
                     Cell::from("-"),
                     Cell::from("-"),
                     Cell::from("-"),
@@ -2601,9 +2636,6 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     Constraint::Length(10),
                     Constraint::Length(10),
                     Constraint::Length(8),
-                    Constraint::Length(7),
-                    Constraint::Length(8),
-                    Constraint::Length(9),
                     Constraint::Length(11),
                 ],
             )
@@ -2907,6 +2939,20 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 } else {
                     Color::Cyan
                 }),
+            ),
+            Span::styled("  EXP ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{:+.0}", state.portfolio_state.net_exposure_usdt),
+                Style::default().fg(if state.portfolio_state.net_exposure_usdt >= 0.0 {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
+            ),
+            Span::styled("  RSV ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{:.0}", state.portfolio_state.reserved_cash_usdt),
+                Style::default().fg(Color::Cyan),
             ),
         ])),
         strategy_chunks[0],
@@ -3679,33 +3725,6 @@ fn parse_scope_key(scope_key: &str) -> Option<(String, String)> {
     }
 }
 
-fn ev_snapshot_for_symbol_and_tag(
-    state: &AppState,
-    symbol: &str,
-    source_tag: &str,
-) -> Option<EvSnapshotEntry> {
-    let tag = source_tag.trim().to_ascii_lowercase();
-    let candidates = symbol_scope_candidates(symbol);
-    state
-        .ev_snapshot_by_scope
-        .iter()
-        .filter_map(|(k, v)| {
-            let (scope_symbol, scope_tag) = parse_scope_key(k)?;
-            let symbol_ok = candidates.iter().any(|prefix| {
-                prefix
-                    .trim_end_matches("::")
-                    .eq_ignore_ascii_case(&scope_symbol)
-            });
-            if symbol_ok && scope_tag == tag {
-                Some(v)
-            } else {
-                None
-            }
-        })
-        .max_by_key(|v| v.updated_at_ms)
-        .cloned()
-}
-
 fn exit_policy_for_symbol_and_tag(
     state: &AppState,
     symbol: &str,
@@ -3786,19 +3805,6 @@ fn strategy_stats_for_item<'a>(
     })
 }
 
-fn ev_snapshot_for_item<'a>(
-    ev_map: &'a HashMap<String, EvSnapshotEntry>,
-    item: &str,
-    symbol: &str,
-) -> Option<&'a EvSnapshotEntry> {
-    if let Some(source_tag) = source_tag_for_strategy_item(item) {
-        if let Some(found) = ev_map.get(&strategy_stats_scope_key(symbol, &source_tag)) {
-            return Some(found);
-        }
-    }
-    latest_ev_snapshot_for_symbol(ev_map, symbol)
-}
-
 fn exit_policy_for_item<'a>(
     policy_map: &'a HashMap<String, ExitPolicyEntry>,
     item: &str,
@@ -3812,18 +3818,6 @@ fn exit_policy_for_item<'a>(
     latest_exit_policy_for_symbol(policy_map, symbol)
 }
 
-fn latest_ev_snapshot_for_symbol<'a>(
-    ev_map: &'a HashMap<String, EvSnapshotEntry>,
-    symbol: &str,
-) -> Option<&'a EvSnapshotEntry> {
-    let prefix = format!("{}::", symbol.trim().to_ascii_uppercase());
-    ev_map
-        .iter()
-        .filter(|(k, _)| k.starts_with(&prefix))
-        .max_by_key(|(_, v)| v.updated_at_ms)
-        .map(|(_, v)| v)
-}
-
 fn latest_exit_policy_for_symbol<'a>(
     policy_map: &'a HashMap<String, ExitPolicyEntry>,
     symbol: &str,
@@ -3832,18 +3826,6 @@ fn latest_exit_policy_for_symbol<'a>(
     policy_map
         .iter()
         .filter(|(k, _)| k.starts_with(&prefix))
-        .max_by_key(|(_, v)| v.updated_at_ms)
-        .map(|(_, v)| v)
-}
-
-fn latest_ev_snapshot_for_symbol_relaxed<'a>(
-    ev_map: &'a HashMap<String, EvSnapshotEntry>,
-    symbol: &str,
-) -> Option<&'a EvSnapshotEntry> {
-    let candidates = symbol_scope_candidates(symbol);
-    ev_map
-        .iter()
-        .filter(|(k, _)| candidates.iter().any(|prefix| k.starts_with(prefix)))
         .max_by_key(|(_, v)| v.updated_at_ms)
         .map(|(_, v)| v)
 }

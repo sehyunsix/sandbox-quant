@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
-use crate::event::{EvSnapshotEntry, ExitPolicyEntry};
+use crate::event::ExitPolicyEntry;
 use crate::model::order::OrderSide;
 use crate::model::position::Position;
 use crate::model::signal::Signal;
@@ -17,7 +17,6 @@ pub struct PositionPanel<'a> {
     position: &'a Position,
     current_price: Option<f64>,
     last_applied_fee: &'a str,
-    ev_snapshot: Option<&'a EvSnapshotEntry>,
     exit_policy: Option<&'a ExitPolicyEntry>,
 }
 
@@ -26,14 +25,12 @@ impl<'a> PositionPanel<'a> {
         position: &'a Position,
         current_price: Option<f64>,
         last_applied_fee: &'a str,
-        ev_snapshot: Option<&'a EvSnapshotEntry>,
         exit_policy: Option<&'a ExitPolicyEntry>,
     ) -> Self {
         Self {
             position,
             current_price,
             last_applied_fee,
-            ev_snapshot,
             exit_policy,
         }
     }
@@ -108,53 +105,6 @@ impl Widget for PositionPanel<'_> {
             Line::from(vec![
                 Span::styled("Fee:  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(self.last_applied_fee, Style::default().fg(Color::LightBlue)),
-            ]),
-            Line::from(vec![
-                Span::styled("EV@entry: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    self.ev_snapshot
-                        .map(|e| format!("{:+.4}", e.ev))
-                        .unwrap_or_else(|| "--".to_string()),
-                    Style::default().fg(self.ev_snapshot.map_or(Color::DarkGray, |e| {
-                        if e.ev > 0.0 {
-                            Color::Green
-                        } else if e.ev < 0.0 {
-                            Color::Red
-                        } else {
-                            Color::White
-                        }
-                    })),
-                ),
-                Span::styled("  pW@entry:", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    self.ev_snapshot
-                        .map(|e| format!("{:.2}", e.p_win))
-                        .unwrap_or_else(|| "--".to_string()),
-                    Style::default().fg(Color::Cyan),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Gate: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    self.ev_snapshot
-                        .map(|e| {
-                            if e.gate_blocked {
-                                format!("{} (BLOCK)", e.gate_mode)
-                            } else {
-                                e.gate_mode.clone()
-                            }
-                        })
-                        .unwrap_or_else(|| "--".to_string()),
-                    Style::default().fg(self.ev_snapshot.map_or(Color::DarkGray, |e| {
-                        if e.gate_blocked {
-                            Color::Red
-                        } else if e.gate_mode.eq_ignore_ascii_case("soft") {
-                            Color::Yellow
-                        } else {
-                            Color::White
-                        }
-                    })),
-                ),
             ]),
             Line::from(vec![
                 Span::styled("Stop: ", Style::default().fg(Color::DarkGray)),

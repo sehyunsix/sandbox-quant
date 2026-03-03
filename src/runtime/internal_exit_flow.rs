@@ -29,7 +29,9 @@ pub struct CloseAttemptOutcome {
 pub fn classify_close_update(update: &OrderUpdate) -> CloseAttemptOutcome {
     match update {
         OrderUpdate::Rejected {
-            reason_code, reason, ..
+            reason_code,
+            reason,
+            ..
         } => CloseAttemptOutcome {
             close_failed_reason: Some(reason.clone()),
             close_reject_code: Some(reason_code.clone()),
@@ -95,7 +97,10 @@ pub async fn process_internal_exit_for_instrument(
     let mut close_reject_code: Option<String> = None;
     let mut result = InternalExitProcessResult::default();
 
-    match mgr.emergency_close_position(source_tag_lc, reason_code).await {
+    match mgr
+        .emergency_close_position(source_tag_lc, reason_code)
+        .await
+    {
         Ok(Some(ref update)) => {
             let outcome = classify_close_update(update);
             close_reject_code = outcome.close_reject_code;

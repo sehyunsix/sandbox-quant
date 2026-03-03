@@ -10,8 +10,8 @@ use crate::model::order::OrderSide;
 
 use super::types::{
     AccountInfo, BinanceAllOrder, BinanceFuturesAccountInfo, BinanceFuturesAllOrder,
-    BinanceFuturesOrderResponse, BinanceFuturesUserTrade, BinanceMyTrade, BinanceOrderResponse,
-    ServerTimeResponse,
+    BinanceFuturesOrderResponse, BinanceFuturesPositionRisk, BinanceFuturesUserTrade,
+    BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -203,6 +203,46 @@ impl BinanceRestClient {
         }
 
         Ok(resp.json().await?)
+    }
+
+    pub async fn get_futures_position_risk(&self) -> Result<Vec<BinanceFuturesPositionRisk>> {
+        self.check_rate_limit();
+        for attempt in 0..=1 {
+            let signed = self.sign_futures("");
+            let url = format!("{}/fapi/v2/positionRisk?{}", self.futures_base_url, signed);
+            let resp = self
+                .http
+                .get(&url)
+                .header("X-MBX-APIKEY", &self.futures_api_key)
+                .send()
+                .await
+                .context("get_futures_position_risk HTTP failed")?;
+            if resp.status().is_success() {
+                return Ok(resp.json().await?);
+            }
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                if err.code == -1021 && attempt == 0 {
+                    tracing::warn!(
+                        "futures positionRisk got -1021; syncing server time and retrying once"
+                    );
+                    self.sync_time_offset().await?;
+                    continue;
+                }
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Futures positionRisk request failed: {}",
+                body
+            ));
+        }
+        Err(anyhow::anyhow!(
+            "Futures positionRisk request failed after retry"
+        ))
     }
 
     pub async fn place_market_order(

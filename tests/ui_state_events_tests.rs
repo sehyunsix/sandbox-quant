@@ -191,9 +191,9 @@ fn app_state_applies_strategy_stats_update_event() {
 }
 
 #[test]
-/// Verifies asset pnl event propagation:
-/// asset table backing map should update on AssetPnlUpdate events.
-fn app_state_applies_asset_pnl_update_event() {
+/// Verifies portfolio snapshot propagation:
+/// asset table backing map should update from PortfolioStateUpdate.by_symbol.
+fn app_state_applies_portfolio_state_update_event() {
     let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
     let mut by_symbol = std::collections::HashMap::new();
     by_symbol.insert(
@@ -207,9 +207,15 @@ fn app_state_applies_asset_pnl_update_event() {
             unrealized_pnl_usdt: 0.9,
         },
     );
-    s.apply(AppEvent::AssetPnlUpdate { by_symbol });
+    s.apply(AppEvent::PortfolioStateUpdate {
+        snapshot: sandbox_quant::event::PortfolioStateSnapshot {
+            by_symbol,
+            ..Default::default()
+        },
+    });
     let eth = s
-        .asset_pnl_by_symbol
+        .portfolio_state
+        .by_symbol
         .get("ETHUSDT")
         .expect("ETHUSDT pnl should be present");
     assert!((eth.realized_pnl_usdt - 3.0).abs() < f64::EPSILON);
@@ -238,28 +244,10 @@ fn app_state_accepts_log_record_event() {
 }
 
 #[test]
-/// Verifies EV/exit policy event propagation:
-/// main runtime EV and stop-policy events should be stored by strategy scope key.
-fn app_state_applies_ev_and_exit_policy_events() {
+/// Verifies exit policy event propagation:
+/// stop-policy events should be stored by strategy scope key.
+fn app_state_applies_exit_policy_events() {
     let mut s = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
-    s.apply(AppEvent::EvSnapshotUpdate {
-        symbol: "BTCUSDT".to_string(),
-        source_tag: "cfg".to_string(),
-        ev: 1.23,
-        entry_ev: Some(0.91),
-        p_win: 0.57,
-        gate_mode: "soft".to_string(),
-        gate_blocked: false,
-    });
-    s.apply(AppEvent::EvSnapshotUpdate {
-        symbol: "BTCUSDT".to_string(),
-        source_tag: "cfg".to_string(),
-        ev: 1.11,
-        entry_ev: None,
-        p_win: 0.55,
-        gate_mode: "soft".to_string(),
-        gate_blocked: false,
-    });
     s.apply(AppEvent::ExitPolicyUpdate {
         symbol: "BTCUSDT".to_string(),
         source_tag: "cfg".to_string(),
@@ -269,16 +257,6 @@ fn app_state_applies_ev_and_exit_policy_events() {
     });
 
     let key = "BTCUSDT::cfg";
-    let ev = s
-        .ev_snapshot_by_scope
-        .get(key)
-        .expect("expected scoped ev snapshot");
-    assert!((ev.ev - 1.11).abs() < f64::EPSILON);
-    assert_eq!(ev.entry_ev, Some(0.91));
-    assert!((ev.p_win - 0.55).abs() < f64::EPSILON);
-    assert_eq!(ev.gate_mode, "soft");
-    assert!(!ev.gate_blocked);
-
     let exit = s
         .exit_policy_by_scope
         .get(key)

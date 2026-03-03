@@ -231,6 +231,26 @@ pub struct BinanceFuturesAssetBalance {
     pub available_balance: f64,
 }
 
+/// Binance futures position risk row (GET /fapi/v2/positionRisk).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BinanceFuturesPositionRisk {
+    pub symbol: String,
+    #[serde(default, deserialize_with = "string_or_number_to_f64_default")]
+    pub position_amt: f64,
+    #[serde(default, deserialize_with = "string_or_number_to_f64_default")]
+    pub entry_price: f64,
+    #[serde(default, deserialize_with = "string_or_number_to_f64_default")]
+    pub mark_price: f64,
+    #[serde(
+        default,
+        rename = "unRealizedProfit",
+        alias = "unrealizedProfit",
+        deserialize_with = "string_or_number_to_f64_default"
+    )]
+    pub unrealized_profit: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

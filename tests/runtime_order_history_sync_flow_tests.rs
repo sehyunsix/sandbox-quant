@@ -7,7 +7,10 @@ use sandbox_quant::runtime::order_history_sync_flow::{
 
 #[test]
 fn detects_market_kind_from_label_suffix() {
-    assert_eq!(market_kind_from_instrument_label("BTCUSDT"), MarketKind::Spot);
+    assert_eq!(
+        market_kind_from_instrument_label("BTCUSDT"),
+        MarketKind::Spot
+    );
     assert_eq!(
         market_kind_from_instrument_label("BTCUSDT (FUT)"),
         MarketKind::Futures

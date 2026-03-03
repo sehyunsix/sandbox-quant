@@ -5,7 +5,11 @@ pub struct PredictorEvalVolState {
     pub ready: bool,
 }
 
-pub fn observe_predictor_eval_volatility(st: &mut PredictorEvalVolState, price: f64, alpha_var: f64) {
+pub fn observe_predictor_eval_volatility(
+    st: &mut PredictorEvalVolState,
+    price: f64,
+    alpha_var: f64,
+) {
     if price <= f64::EPSILON {
         return;
     }

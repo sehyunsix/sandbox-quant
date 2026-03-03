@@ -1,7 +1,7 @@
 pub mod binance;
 pub mod config;
+pub mod doctor;
 pub mod error;
-pub mod ev;
 pub mod event;
 pub mod indicator;
 pub mod input;

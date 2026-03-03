@@ -121,15 +121,15 @@ fn render_grid_popup_positions_tab() {
     assert!(text.contains("Close"));
     assert!(text.contains("Stop"));
     assert!(text.contains("StopType"));
-    assert!(text.contains("LiveEV"));
-    assert!(text.contains("EntryEV"));
-    assert!(text.contains("Score"));
-    assert!(text.contains("Gate"));
+    assert!(!text.contains("LiveEV"));
+    assert!(!text.contains("EntryEV"));
+    assert!(!text.contains("Score"));
+    assert!(!text.contains("Gate"));
 }
 
 #[test]
-/// Verifies positions EV columns still render concrete values after layout changes.
-fn render_grid_popup_positions_tab_shows_ev_values() {
+/// Verifies positions table renders without EV columns.
+fn render_grid_popup_positions_tab_without_ev_columns() {
     let backend = TestBackend::new(140, 40);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
@@ -148,15 +148,18 @@ fn render_grid_popup_positions_tab_shows_ev_values() {
             unrealized_pnl_usdt: 2.0,
         },
     );
-    state.apply(AppEvent::AssetPnlUpdate { by_symbol: pnl });
-    state.apply(AppEvent::EvSnapshotUpdate {
+    state.apply(AppEvent::PortfolioStateUpdate {
+        snapshot: sandbox_quant::event::PortfolioStateSnapshot {
+            by_symbol: pnl,
+            ..Default::default()
+        },
+    });
+    state.apply(AppEvent::ExitPolicyUpdate {
         symbol: "BTCUSDT".to_string(),
         source_tag: "c01".to_string(),
-        ev: 1.234,
-        entry_ev: Some(0.777),
-        p_win: 0.77,
-        gate_mode: "soft".to_string(),
-        gate_blocked: false,
+        stop_price: Some(62500.0),
+        expected_holding_ms: None,
+        protective_stop_ok: Some(true),
     });
 
     terminal
@@ -164,15 +167,13 @@ fn render_grid_popup_positions_tab_shows_ev_values() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("+1.234"));
-    assert!(text.contains("+0.777"));
-    assert!(text.contains("0.77"));
-    assert!(text.contains("SOFT"));
+    assert!(text.contains("ORDER"));
+    assert!(text.contains("+2.0000"));
 }
 
 #[test]
-/// Verifies periodic SYS-scope EV snapshots are rendered in positions table.
-fn render_grid_popup_positions_tab_shows_sys_ev_values() {
+/// Verifies periodic SYS-scope stop policy is rendered in positions table.
+fn render_grid_popup_positions_tab_shows_sys_stop_values() {
     let backend = TestBackend::new(140, 40);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let mut state = AppState::new("BTCUSDT (FUT)", "MA(Config)", 120, 60_000, "1m");
@@ -191,15 +192,18 @@ fn render_grid_popup_positions_tab_shows_sys_ev_values() {
             unrealized_pnl_usdt: 3.0,
         },
     );
-    state.apply(AppEvent::AssetPnlUpdate { by_symbol: pnl });
-    state.apply(AppEvent::EvSnapshotUpdate {
+    state.apply(AppEvent::PortfolioStateUpdate {
+        snapshot: sandbox_quant::event::PortfolioStateSnapshot {
+            by_symbol: pnl,
+            ..Default::default()
+        },
+    });
+    state.apply(AppEvent::ExitPolicyUpdate {
         symbol: "BTCUSDT (FUT)".to_string(),
         source_tag: "sys".to_string(),
-        ev: 0.5,
-        entry_ev: None,
-        p_win: 0.55,
-        gate_mode: "shadow".to_string(),
-        gate_blocked: false,
+        stop_price: Some(66000.0),
+        expected_holding_ms: None,
+        protective_stop_ok: Some(false),
     });
 
     terminal
@@ -207,9 +211,8 @@ fn render_grid_popup_positions_tab_shows_sys_ev_values() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("+0.500"));
-    assert!(text.contains("0.55"));
-    assert!(text.contains("SHADOW"));
+    assert!(text.contains("CALC"));
+    assert!(text.contains("+3.0000"));
 }
 
 #[test]

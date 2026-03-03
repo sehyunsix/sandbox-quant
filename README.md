@@ -39,6 +39,33 @@ BINANCE_API_SECRET=your_testnet_api_secret_here
 cargo run --bin sandbox-quant
 ```
 
+## Diagnostics CLI (Headless)
+
+Use `doctor` commands when TUI-based verification is inconvenient (CI, remote shell, or rapid triage).
+
+```bash
+# Auth and endpoint alignment checks (signed endpoints)
+cargo run --bin sandbox-quant -- doctor auth
+
+# JSON output for automation
+cargo run --bin sandbox-quant -- doctor auth --json
+
+# Live futures positions from exchange
+cargo run --bin sandbox-quant -- doctor positions --market futures --json
+
+# PnL derivation breakdown (API value vs fallback recomputation)
+cargo run --bin sandbox-quant -- doctor pnl --market futures --symbol BTCUSDT --json
+
+# Order/trade history health for one symbol
+cargo run --bin sandbox-quant -- doctor history --market futures --symbol BTCUSDT --json
+
+# One-shot headless sync summary
+cargo run --bin sandbox-quant -- doctor sync --once --market futures --symbol BTCUSDT --json
+
+# Help
+cargo run --bin sandbox-quant -- doctor help
+```
+
 ## Key Controls
 
 | Area | Keys | Description |

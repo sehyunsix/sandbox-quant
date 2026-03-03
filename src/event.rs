@@ -40,15 +40,6 @@ pub enum AppEvent {
     StrategyStatsUpdate {
         strategy_stats: HashMap<String, OrderHistoryStats>,
     },
-    EvSnapshotUpdate {
-        symbol: String,
-        source_tag: String,
-        ev: f64,
-        entry_ev: Option<f64>,
-        p_win: f64,
-        gate_mode: String,
-        gate_blocked: bool,
-    },
     PredictorMetricsUpdate {
         symbol: String,
         market: String,
@@ -67,8 +58,8 @@ pub enum AppEvent {
         expected_holding_ms: Option<u64>,
         protective_stop_ok: Option<bool>,
     },
-    AssetPnlUpdate {
-        by_symbol: HashMap<String, AssetPnlEntry>,
+    PortfolioStateUpdate {
+        snapshot: PortfolioStateSnapshot,
     },
     RiskRateSnapshot {
         global: RateBudgetSnapshot,
@@ -102,16 +93,6 @@ pub enum AppEvent {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct EvSnapshotEntry {
-    pub ev: f64,
-    pub entry_ev: Option<f64>,
-    pub p_win: f64,
-    pub gate_mode: String,
-    pub gate_blocked: bool,
-    pub updated_at_ms: u64,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct PredictorMetricEntry {
     pub symbol: String,
     pub market: String,
@@ -140,6 +121,17 @@ pub struct AssetPnlEntry {
     pub entry_price: f64,
     pub realized_pnl_usdt: f64,
     pub unrealized_pnl_usdt: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PortfolioStateSnapshot {
+    pub by_symbol: HashMap<String, AssetPnlEntry>,
+    pub total_realized_pnl_usdt: f64,
+    pub total_unrealized_pnl_usdt: f64,
+    pub open_orders_count: usize,
+    pub reserved_cash_usdt: f64,
+    pub gross_exposure_usdt: f64,
+    pub net_exposure_usdt: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

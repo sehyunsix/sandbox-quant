@@ -89,7 +89,7 @@ fn ui_projection_uses_asset_pnl_snapshot_for_asset_rows() {
     let mut legacy = sample_app_state();
     legacy.symbol_items = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
     legacy.strategy_item_symbols = vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()];
-    legacy.asset_pnl_by_symbol.insert(
+    legacy.portfolio_state.by_symbol.insert(
         "ETHUSDT".to_string(),
         AssetPnlEntry {
             is_futures: false,

@@ -99,7 +99,7 @@ impl UiProjection {
         let assets = asset_symbols
             .into_iter()
             .map(|symbol| {
-                let pnl = state.asset_pnl_by_symbol.get(&symbol);
+                let pnl = state.portfolio_state.by_symbol.get(&symbol);
                 let inferred_qty = state
                     .balances
                     .get(&symbol)

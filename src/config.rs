@@ -8,8 +8,8 @@ pub struct Config {
     pub strategy: StrategyConfig,
     #[serde(default)]
     pub risk: RiskConfig,
-    #[serde(default)]
-    pub ev: EvConfig,
+    #[serde(default, alias = "ev")]
+    pub alpha: AlphaConfig,
     #[serde(default)]
     pub exit: ExitConfig,
     pub ui: UiConfig,
@@ -92,78 +92,87 @@ pub struct EndpointRateLimitConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct EvConfig {
-    #[serde(default = "default_ev_enabled")]
+pub struct AlphaConfig {
+    #[serde(default = "default_alpha_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_ev_mode")]
+    #[serde(default = "default_alpha_mode")]
     pub mode: String,
-    #[serde(default = "default_ev_lookback_trades")]
+    #[serde(default = "default_alpha_lookback_trades")]
     pub lookback_trades: usize,
-    #[serde(default = "default_ev_prior_a")]
+    #[serde(default = "default_alpha_prior_a")]
     pub prior_a: f64,
-    #[serde(default = "default_ev_prior_b")]
+    #[serde(default = "default_alpha_prior_b")]
     pub prior_b: f64,
-    #[serde(default = "default_ev_tail_prior_a")]
+    #[serde(default = "default_alpha_tail_prior_a")]
     pub tail_prior_a: f64,
-    #[serde(default = "default_ev_tail_prior_b")]
+    #[serde(default = "default_alpha_tail_prior_b")]
     pub tail_prior_b: f64,
-    #[serde(default = "default_ev_recency_lambda")]
+    #[serde(default = "default_alpha_recency_lambda")]
     pub recency_lambda: f64,
-    #[serde(default = "default_ev_shrink_k")]
+    #[serde(default = "default_alpha_shrink_k")]
     pub shrink_k: f64,
-    #[serde(default = "default_ev_loss_threshold_usdt")]
+    #[serde(default = "default_alpha_loss_threshold_usdt")]
     pub loss_threshold_usdt: f64,
-    #[serde(default = "default_ev_gamma_tail_penalty")]
+    #[serde(default = "default_alpha_gamma_tail_penalty")]
     pub gamma_tail_penalty: f64,
-    #[serde(default = "default_ev_fee_slippage_penalty_usdt")]
+    #[serde(default = "default_alpha_fee_slippage_penalty_usdt")]
     pub fee_slippage_penalty_usdt: f64,
-    #[serde(default = "default_ev_entry_gate_min_ev_usdt")]
-    pub entry_gate_min_ev_usdt: f64,
-    #[serde(default = "default_ev_forward_p_win")]
+    #[serde(
+        default = "default_alpha_entry_gate_min_alpha_usdt",
+        alias = "entry_gate_min_ev_usdt"
+    )]
+    pub entry_gate_min_alpha_usdt: f64,
+    #[serde(default = "default_alpha_forward_p_win")]
     pub forward_p_win: f64,
-    #[serde(default = "default_ev_forward_target_rr")]
+    #[serde(default = "default_alpha_forward_target_rr")]
     pub forward_target_rr: f64,
-    #[serde(default = "default_ev_y_mu")]
-    pub y_mu: f64,
-    #[serde(default = "default_ev_y_sigma_spot")]
-    pub y_sigma_spot: f64,
-    #[serde(default = "default_ev_y_sigma_futures")]
-    pub y_sigma_futures: f64,
-    #[serde(default = "default_ev_futures_multiplier")]
+    #[serde(default = "default_alpha_predictor_mu", alias = "y_mu")]
+    pub predictor_mu: f64,
+    #[serde(default = "default_alpha_predictor_sigma_spot", alias = "y_sigma_spot")]
+    pub predictor_sigma_spot: f64,
+    #[serde(default = "default_alpha_predictor_sigma_futures", alias = "y_sigma_futures")]
+    pub predictor_sigma_futures: f64,
+    #[serde(default = "default_alpha_futures_multiplier")]
     pub futures_multiplier: f64,
-    #[serde(default = "default_ev_y_ewma_alpha_mean")]
-    pub y_ewma_alpha_mean: f64,
-    #[serde(default = "default_ev_y_ewma_alpha_var")]
-    pub y_ewma_alpha_var: f64,
-    #[serde(default = "default_ev_y_min_sigma")]
-    pub y_min_sigma: f64,
+    #[serde(
+        default = "default_alpha_predictor_ewma_alpha_mean",
+        alias = "y_ewma_alpha_mean"
+    )]
+    pub predictor_ewma_alpha_mean: f64,
+    #[serde(
+        default = "default_alpha_predictor_ewma_alpha_var",
+        alias = "y_ewma_alpha_var"
+    )]
+    pub predictor_ewma_alpha_var: f64,
+    #[serde(default = "default_alpha_predictor_min_sigma", alias = "y_min_sigma")]
+    pub predictor_min_sigma: f64,
 }
 
-impl Default for EvConfig {
+impl Default for AlphaConfig {
     fn default() -> Self {
         Self {
-            enabled: default_ev_enabled(),
-            mode: default_ev_mode(),
-            lookback_trades: default_ev_lookback_trades(),
-            prior_a: default_ev_prior_a(),
-            prior_b: default_ev_prior_b(),
-            tail_prior_a: default_ev_tail_prior_a(),
-            tail_prior_b: default_ev_tail_prior_b(),
-            recency_lambda: default_ev_recency_lambda(),
-            shrink_k: default_ev_shrink_k(),
-            loss_threshold_usdt: default_ev_loss_threshold_usdt(),
-            gamma_tail_penalty: default_ev_gamma_tail_penalty(),
-            fee_slippage_penalty_usdt: default_ev_fee_slippage_penalty_usdt(),
-            entry_gate_min_ev_usdt: default_ev_entry_gate_min_ev_usdt(),
-            forward_p_win: default_ev_forward_p_win(),
-            forward_target_rr: default_ev_forward_target_rr(),
-            y_mu: default_ev_y_mu(),
-            y_sigma_spot: default_ev_y_sigma_spot(),
-            y_sigma_futures: default_ev_y_sigma_futures(),
-            futures_multiplier: default_ev_futures_multiplier(),
-            y_ewma_alpha_mean: default_ev_y_ewma_alpha_mean(),
-            y_ewma_alpha_var: default_ev_y_ewma_alpha_var(),
-            y_min_sigma: default_ev_y_min_sigma(),
+            enabled: default_alpha_enabled(),
+            mode: default_alpha_mode(),
+            lookback_trades: default_alpha_lookback_trades(),
+            prior_a: default_alpha_prior_a(),
+            prior_b: default_alpha_prior_b(),
+            tail_prior_a: default_alpha_tail_prior_a(),
+            tail_prior_b: default_alpha_tail_prior_b(),
+            recency_lambda: default_alpha_recency_lambda(),
+            shrink_k: default_alpha_shrink_k(),
+            loss_threshold_usdt: default_alpha_loss_threshold_usdt(),
+            gamma_tail_penalty: default_alpha_gamma_tail_penalty(),
+            fee_slippage_penalty_usdt: default_alpha_fee_slippage_penalty_usdt(),
+            entry_gate_min_alpha_usdt: default_alpha_entry_gate_min_alpha_usdt(),
+            forward_p_win: default_alpha_forward_p_win(),
+            forward_target_rr: default_alpha_forward_target_rr(),
+            predictor_mu: default_alpha_predictor_mu(),
+            predictor_sigma_spot: default_alpha_predictor_sigma_spot(),
+            predictor_sigma_futures: default_alpha_predictor_sigma_futures(),
+            futures_multiplier: default_alpha_futures_multiplier(),
+            predictor_ewma_alpha_mean: default_alpha_predictor_ewma_alpha_mean(),
+            predictor_ewma_alpha_var: default_alpha_predictor_ewma_alpha_var(),
+            predictor_min_sigma: default_alpha_predictor_min_sigma(),
         }
     }
 }
@@ -259,91 +268,91 @@ fn default_endpoint_market_data_limit_per_minute() -> u32 {
     360
 }
 
-fn default_ev_enabled() -> bool {
+fn default_alpha_enabled() -> bool {
     true
 }
 
-fn default_ev_mode() -> String {
+fn default_alpha_mode() -> String {
     "shadow".to_string()
 }
 
-fn default_ev_lookback_trades() -> usize {
+fn default_alpha_lookback_trades() -> usize {
     200
 }
 
-fn default_ev_prior_a() -> f64 {
+fn default_alpha_prior_a() -> f64 {
     6.0
 }
 
-fn default_ev_prior_b() -> f64 {
+fn default_alpha_prior_b() -> f64 {
     6.0
 }
 
-fn default_ev_tail_prior_a() -> f64 {
+fn default_alpha_tail_prior_a() -> f64 {
     3.0
 }
 
-fn default_ev_tail_prior_b() -> f64 {
+fn default_alpha_tail_prior_b() -> f64 {
     7.0
 }
 
-fn default_ev_recency_lambda() -> f64 {
+fn default_alpha_recency_lambda() -> f64 {
     0.08
 }
 
-fn default_ev_shrink_k() -> f64 {
+fn default_alpha_shrink_k() -> f64 {
     40.0
 }
 
-fn default_ev_loss_threshold_usdt() -> f64 {
+fn default_alpha_loss_threshold_usdt() -> f64 {
     15.0
 }
 
-fn default_ev_gamma_tail_penalty() -> f64 {
+fn default_alpha_gamma_tail_penalty() -> f64 {
     0.8
 }
 
-fn default_ev_fee_slippage_penalty_usdt() -> f64 {
+fn default_alpha_fee_slippage_penalty_usdt() -> f64 {
     0.0
 }
 
-fn default_ev_entry_gate_min_ev_usdt() -> f64 {
+fn default_alpha_entry_gate_min_alpha_usdt() -> f64 {
     0.0
 }
 
-fn default_ev_forward_p_win() -> f64 {
+fn default_alpha_forward_p_win() -> f64 {
     0.5
 }
 
-fn default_ev_forward_target_rr() -> f64 {
+fn default_alpha_forward_target_rr() -> f64 {
     1.5
 }
 
-fn default_ev_y_mu() -> f64 {
+fn default_alpha_predictor_mu() -> f64 {
     0.0
 }
 
-fn default_ev_y_sigma_spot() -> f64 {
+fn default_alpha_predictor_sigma_spot() -> f64 {
     0.01
 }
 
-fn default_ev_y_sigma_futures() -> f64 {
+fn default_alpha_predictor_sigma_futures() -> f64 {
     0.015
 }
 
-fn default_ev_futures_multiplier() -> f64 {
+fn default_alpha_futures_multiplier() -> f64 {
     1.0
 }
 
-fn default_ev_y_ewma_alpha_mean() -> f64 {
+fn default_alpha_predictor_ewma_alpha_mean() -> f64 {
     0.08
 }
 
-fn default_ev_y_ewma_alpha_var() -> f64 {
+fn default_alpha_predictor_ewma_alpha_var() -> f64 {
     0.08
 }
 
-fn default_ev_y_min_sigma() -> f64 {
+fn default_alpha_predictor_min_sigma() -> f64 {
     0.001
 }
 
@@ -439,14 +448,12 @@ impl Config {
         let mut config: Config =
             toml::from_str(&config_str).context("failed to parse config/default.toml")?;
 
-        config.binance.api_key = std::env::var("BINANCE_API_KEY")
-            .context("BINANCE_API_KEY not set in .env or environment")?;
-        config.binance.api_secret = std::env::var("BINANCE_API_SECRET")
-            .context("BINANCE_API_SECRET not set in .env or environment")?;
-        config.binance.futures_api_key = std::env::var("BINANCE_FUTURES_API_KEY")
-            .unwrap_or_else(|_| config.binance.api_key.clone());
-        config.binance.futures_api_secret = std::env::var("BINANCE_FUTURES_API_SECRET")
-            .unwrap_or_else(|_| config.binance.api_secret.clone());
+        config.binance.api_key = load_required_credential("BINANCE_API_KEY")?;
+        config.binance.api_secret = load_required_credential("BINANCE_API_SECRET")?;
+        config.binance.futures_api_key = load_optional_credential("BINANCE_FUTURES_API_KEY")
+            .unwrap_or_else(|| config.binance.api_key.clone());
+        config.binance.futures_api_secret = load_optional_credential("BINANCE_FUTURES_API_SECRET")
+            .unwrap_or_else(|| config.binance.api_secret.clone());
 
         config
             .binance
@@ -454,5 +461,41 @@ impl Config {
             .context("binance.kline_interval is invalid")?;
 
         Ok(config)
+    }
+}
+
+fn sanitize_credential(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let unquoted = if trimmed.len() >= 2 {
+        let starts = trimmed.as_bytes()[0];
+        let ends = trimmed.as_bytes()[trimmed.len() - 1];
+        if (starts == b'"' && ends == b'"') || (starts == b'\'' && ends == b'\'') {
+            &trimmed[1..trimmed.len() - 1]
+        } else {
+            trimmed
+        }
+    } else {
+        trimmed
+    };
+    unquoted.trim().to_string()
+}
+
+fn load_required_credential(name: &str) -> Result<String> {
+    let raw =
+        std::env::var(name).with_context(|| format!("{} not set in .env or environment", name))?;
+    let sanitized = sanitize_credential(&raw);
+    if sanitized.is_empty() {
+        bail!("{} is empty after trimming whitespace/quotes", name);
+    }
+    Ok(sanitized)
+}
+
+fn load_optional_credential(name: &str) -> Option<String> {
+    let raw = std::env::var(name).ok()?;
+    let sanitized = sanitize_credential(&raw);
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
     }
 }
