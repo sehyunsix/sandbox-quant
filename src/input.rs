@@ -86,14 +86,11 @@ pub fn parse_main_command(key_code: &KeyCode) -> Option<UiCommand> {
 
 pub fn parse_grid_command(key_code: &KeyCode) -> Option<GridCommand> {
     match key_code {
-        KeyCode::Char('1') => Some(GridCommand::TabAssets),
-        KeyCode::Char('2') => Some(GridCommand::TabStrategies),
-        KeyCode::Char('3') => Some(GridCommand::TabPositions),
-        KeyCode::Char('4') => Some(GridCommand::TabRisk),
-        KeyCode::Char('5') => Some(GridCommand::TabNetwork),
-        KeyCode::Char('6') => Some(GridCommand::TabHistory),
-        KeyCode::Char('7') => Some(GridCommand::TabPredictors),
-        KeyCode::Char('8') => Some(GridCommand::TabSystemLog),
+        KeyCode::Char('1') => Some(GridCommand::TabRisk),
+        KeyCode::Char('2') => Some(GridCommand::TabNetwork),
+        KeyCode::Char('3') => Some(GridCommand::TabHistory),
+        KeyCode::Char('4') => Some(GridCommand::TabPredictors),
+        KeyCode::Char('5') => Some(GridCommand::TabSystemLog),
         KeyCode::Tab => Some(GridCommand::ToggleOnOffPanel),
         KeyCode::Up => Some(GridCommand::StrategyUp),
         KeyCode::Down => Some(GridCommand::StrategyDown),

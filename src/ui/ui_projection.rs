@@ -89,6 +89,7 @@ impl UiProjection {
             .cloned()
             .chain(state.strategy_item_symbols.iter().cloned())
             .chain(state.balances.keys().cloned())
+            .chain(state.portfolio_state.by_symbol.keys().cloned())
             .filter(|s| !s.trim().is_empty())
             .collect();
         asset_symbols.sort();
@@ -159,8 +160,8 @@ impl UiProjection {
         Self {
             portfolio: PortfolioSummary {
                 total_equity_usdt: state.current_equity_usdt,
-                total_realized_pnl_usdt: state.history_realized_pnl,
-                total_unrealized_pnl_usdt: state.position.unrealized_pnl,
+                total_realized_pnl_usdt: state.portfolio_state.total_realized_pnl_usdt,
+                total_unrealized_pnl_usdt: state.portfolio_state.total_unrealized_pnl_usdt,
                 ws_connected: state.ws_connected,
             },
             assets,

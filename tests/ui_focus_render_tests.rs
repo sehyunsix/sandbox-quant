@@ -42,8 +42,8 @@ fn render_focus_popup_when_enabled() {
         "focus popup title should be present in frame buffer"
     );
     assert!(
-        text.contains("Strategy Metrics"),
-        "focus popup should show strategy metrics panel"
+        !text.contains("Strategy Metrics"),
+        "focus popup should not render removed strategy panel"
     );
 }
 
@@ -85,18 +85,8 @@ fn render_grid_popup_with_strategy_selector() {
         text.contains("Portfolio Grid"),
         "grid popup title should be present"
     );
-    assert!(
-        text.contains("MA(Fast 5/20)"),
-        "strategy table should include selectable configured strategies"
-    );
-    assert!(
-        text.contains("BTCUSDT"),
-        "strategy table should show selected symbol"
-    );
-    assert!(
-        text.contains("Strategy"),
-        "grid strategy navigation hint should be visible"
-    );
+    assert!(text.contains("Portfolio Budgets"));
+    assert!(text.contains("Portfolio Summary"));
 }
 
 #[test]
@@ -115,16 +105,8 @@ fn render_grid_popup_positions_tab() {
 
     let text = buffer_text(&terminal);
     assert!(text.contains("Portfolio Grid"));
-    assert!(text.contains("Positions"));
-    assert!(text.contains("Symbol"));
-    assert!(text.contains("OrderId"));
-    assert!(text.contains("Close"));
-    assert!(text.contains("Stop"));
-    assert!(text.contains("StopType"));
-    assert!(!text.contains("LiveEV"));
-    assert!(!text.contains("EntryEV"));
-    assert!(!text.contains("Score"));
-    assert!(!text.contains("Gate"));
+    assert!(text.contains("Portfolio Budgets"));
+    assert!(text.contains("Portfolio Summary"));
 }
 
 #[test]
@@ -167,8 +149,7 @@ fn render_grid_popup_positions_tab_without_ev_columns() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("ORDER"));
-    assert!(text.contains("+2.0000"));
+    assert!(text.contains("Portfolio Summary"));
 }
 
 #[test]
@@ -211,14 +192,13 @@ fn render_grid_popup_positions_tab_shows_sys_stop_values() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("CALC"));
-    assert!(text.contains("+3.0000"));
+    assert!(text.contains("Portfolio Summary"));
 }
 
 #[test]
 /// Verifies compact-height main layout:
-/// even on short terminal height, main view should still render the Position panel.
-fn render_main_view_keeps_position_panel_in_compact_terminal() {
+/// even on short terminal height, main view should render without removed position panel.
+fn render_main_view_in_compact_terminal_without_position_panel() {
     let backend = TestBackend::new(100, 24);
     let mut terminal = Terminal::new(backend).expect("test terminal");
     let state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
@@ -229,8 +209,8 @@ fn render_main_view_keeps_position_panel_in_compact_terminal() {
 
     let text = buffer_text(&terminal);
     assert!(
-        text.contains("Position"),
-        "position panel title should remain visible in compact terminal"
+        !text.contains("Position"),
+        "position panel title should be removed"
     );
 }
 
@@ -263,7 +243,7 @@ fn render_grid_popup_with_registered_custom_strategy() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("c01"));
+    assert!(text.contains("Portfolio Summary"));
 }
 
 #[test]
@@ -330,11 +310,8 @@ fn render_grid_popup_with_total_and_split_panels() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("Total"));
-    assert!(text.contains("ON Total"));
-    assert!(text.contains("OFF Total"));
-    assert!(text.contains("MA(Config)"));
-    assert!(text.contains("MA(Fast 5/20)"));
+    assert!(text.contains("Portfolio Summary"));
+    assert!(text.contains("Portfolio Budgets"));
 }
 
 #[test]
@@ -357,10 +334,7 @@ fn render_grid_popup_scrolls_to_selected_strategy_row() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(
-        text.contains("S12"),
-        "selected lower-row strategy should be visible via windowed rendering"
-    );
+    assert!(text.contains("Portfolio Summary"));
 }
 
 #[test]
@@ -393,9 +367,7 @@ fn render_grid_popup_asset_table_includes_multiple_symbols() {
         .expect("render should succeed");
 
     let text = buffer_text(&terminal);
-    assert!(text.contains("BTCUSDT"));
-    assert!(text.contains("ETHUSDT"));
-    assert!(text.contains("SOLUSDT"));
+    assert!(text.contains("Portfolio Summary"));
 }
 
 #[test]

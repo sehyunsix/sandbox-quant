@@ -97,34 +97,22 @@ fn parse_main_command_maps_popup_and_grid_keys() {
 fn parse_grid_command_maps_navigation_and_actions() {
     assert_eq!(
         parse_grid_command(&KeyCode::Char('1')),
-        Some(GridCommand::TabAssets)
-    );
-    assert_eq!(
-        parse_grid_command(&KeyCode::Char('2')),
-        Some(GridCommand::TabStrategies)
-    );
-    assert_eq!(
-        parse_grid_command(&KeyCode::Char('3')),
-        Some(GridCommand::TabPositions)
-    );
-    assert_eq!(
-        parse_grid_command(&KeyCode::Char('4')),
         Some(GridCommand::TabRisk)
     );
     assert_eq!(
-        parse_grid_command(&KeyCode::Char('5')),
+        parse_grid_command(&KeyCode::Char('2')),
         Some(GridCommand::TabNetwork)
     );
     assert_eq!(
-        parse_grid_command(&KeyCode::Char('6')),
+        parse_grid_command(&KeyCode::Char('3')),
         Some(GridCommand::TabHistory)
     );
     assert_eq!(
-        parse_grid_command(&KeyCode::Char('7')),
+        parse_grid_command(&KeyCode::Char('4')),
         Some(GridCommand::TabPredictors)
     );
     assert_eq!(
-        parse_grid_command(&KeyCode::Char('8')),
+        parse_grid_command(&KeyCode::Char('5')),
         Some(GridCommand::TabSystemLog)
     );
     assert_eq!(

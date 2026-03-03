@@ -7,9 +7,9 @@ fn sample_app_state() -> AppState {
     let mut state = AppState::new("BTCUSDT", "MA(Config)", 120, 60_000, "1m");
     state.ws_connected = true;
     state.current_equity_usdt = Some(1200.0);
-    state.history_realized_pnl = 42.5;
+    state.portfolio_state.total_realized_pnl_usdt = 42.5;
     state.position.qty = 0.2;
-    state.position.unrealized_pnl = 8.0;
+    state.portfolio_state.total_unrealized_pnl_usdt = 8.0;
     state.strategy_stats.insert(
         "MA(Config)".to_string(),
         OrderHistoryStats {
@@ -110,4 +110,31 @@ fn ui_projection_uses_asset_pnl_snapshot_for_asset_rows() {
     assert!((eth.position_qty - 0.5).abs() < f64::EPSILON);
     assert!((eth.realized_pnl_usdt - 4.2).abs() < f64::EPSILON);
     assert!((eth.unrealized_pnl_usdt - 1.1).abs() < f64::EPSILON);
+}
+
+#[test]
+fn ui_projection_includes_symbols_from_portfolio_snapshot() {
+    let mut legacy = sample_app_state();
+    legacy.symbol_items.clear();
+    legacy.strategy_item_symbols.clear();
+    legacy.portfolio_state.by_symbol.insert(
+        "XRPUSDT".to_string(),
+        AssetPnlEntry {
+            is_futures: false,
+            side: None,
+            position_qty: 120.0,
+            entry_price: 0.5,
+            realized_pnl_usdt: 2.0,
+            unrealized_pnl_usdt: 1.0,
+        },
+    );
+
+    let projection = UiProjection::from_legacy(&legacy);
+    let xrp = projection
+        .assets
+        .iter()
+        .find(|a| a.symbol == "XRPUSDT")
+        .expect("XRPUSDT asset row missing");
+    assert!((xrp.position_qty - 120.0).abs() < f64::EPSILON);
+    assert!((xrp.realized_pnl_usdt - 2.0).abs() < f64::EPSILON);
 }
