@@ -1,7 +1,6 @@
 [book]
 authors = ["sandbox-quant"]
 language = "ko"
-multilingual = false
 src = "src"
 title = "sandbox-quant Docs"
 

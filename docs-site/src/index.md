@@ -5,6 +5,7 @@
 - Release 계획
 - 아키텍처 RFC
 - UI 전환 RFC
+- [RFC 0045: Alpha-Portfolio-Execution-Manage](./rfc-0045.md)
 
 ## 로컬 실행
 
