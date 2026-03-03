@@ -652,6 +652,10 @@ pub(super) fn handle_grid_key(
                     app_state.set_predictor_scroll_offset(
                         app_state.predictor_scroll_offset().saturating_sub(1),
                     );
+                } else if app_state.grid_tab() == GridTab::History {
+                    app_state.set_history_scroll_offset(
+                        app_state.history_scroll_offset().saturating_sub(1),
+                    );
                 }
             }
             GridCommand::StrategyDown => {
@@ -670,6 +674,8 @@ pub(super) fn handle_grid_key(
                     } else {
                         app_state.set_predictor_scroll_offset(0);
                     }
+                } else if app_state.grid_tab() == GridTab::History {
+                    app_state.set_history_scroll_offset(app_state.history_scroll_offset() + 1);
                 }
             }
             GridCommand::SymbolLeft => {

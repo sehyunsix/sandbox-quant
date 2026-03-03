@@ -11,7 +11,7 @@ use crate::model::order::OrderSide;
 use super::types::{
     AccountInfo, BinanceAllOrder, BinanceFuturesAccountInfo, BinanceFuturesAllOrder,
     BinanceFuturesOrderResponse, BinanceFuturesPositionRisk, BinanceFuturesUserTrade,
-    BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
+    BinanceListenKeyResponse, BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -243,6 +243,174 @@ impl BinanceRestClient {
         Err(anyhow::anyhow!(
             "Futures positionRisk request failed after retry"
         ))
+    }
+
+    pub async fn start_futures_user_data_stream(&self) -> Result<String> {
+        self.check_rate_limit();
+        let url = format!("{}/fapi/v1/listenKey", self.futures_base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .header("X-MBX-APIKEY", &self.futures_api_key)
+            .send()
+            .await
+            .context("start_futures_user_data_stream HTTP failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Futures listenKey create request failed: {}",
+                body
+            ));
+        }
+        let payload: BinanceListenKeyResponse = resp.json().await?;
+        Ok(payload.listen_key)
+    }
+
+    pub async fn keepalive_futures_user_data_stream(&self, listen_key: &str) -> Result<()> {
+        self.check_rate_limit();
+        let url = format!("{}/fapi/v1/listenKey", self.futures_base_url);
+        let resp = self
+            .http
+            .put(&url)
+            .header("X-MBX-APIKEY", &self.futures_api_key)
+            .query(&[("listenKey", listen_key)])
+            .send()
+            .await
+            .context("keepalive_futures_user_data_stream HTTP failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Futures listenKey keepalive request failed: {}",
+                body
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn close_futures_user_data_stream(&self, listen_key: &str) -> Result<()> {
+        self.check_rate_limit();
+        let url = format!("{}/fapi/v1/listenKey", self.futures_base_url);
+        let resp = self
+            .http
+            .delete(&url)
+            .header("X-MBX-APIKEY", &self.futures_api_key)
+            .query(&[("listenKey", listen_key)])
+            .send()
+            .await
+            .context("close_futures_user_data_stream HTTP failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Futures listenKey close request failed: {}",
+                body
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn start_spot_user_data_stream(&self) -> Result<String> {
+        self.check_rate_limit();
+        let url = format!("{}/api/v3/userDataStream", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .send()
+            .await
+            .context("start_spot_user_data_stream HTTP failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Spot listenKey create request failed: {}",
+                body
+            ));
+        }
+        let payload: BinanceListenKeyResponse = resp.json().await?;
+        Ok(payload.listen_key)
+    }
+
+    pub async fn keepalive_spot_user_data_stream(&self, listen_key: &str) -> Result<()> {
+        self.check_rate_limit();
+        let url = format!("{}/api/v3/userDataStream", self.base_url);
+        let resp = self
+            .http
+            .put(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .query(&[("listenKey", listen_key)])
+            .send()
+            .await
+            .context("keepalive_spot_user_data_stream HTTP failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Spot listenKey keepalive request failed: {}",
+                body
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn close_spot_user_data_stream(&self, listen_key: &str) -> Result<()> {
+        self.check_rate_limit();
+        let url = format!("{}/api/v3/userDataStream", self.base_url);
+        let resp = self
+            .http
+            .delete(&url)
+            .header("X-MBX-APIKEY", &self.api_key)
+            .query(&[("listenKey", listen_key)])
+            .send()
+            .await
+            .context("close_spot_user_data_stream HTTP failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if let Some(err) = Self::parse_binance_api_error(&body) {
+                return Err(AppError::BinanceApi {
+                    code: err.code,
+                    msg: err.msg,
+                }
+                .into());
+            }
+            return Err(anyhow::anyhow!(
+                "Spot listenKey close request failed: {}",
+                body
+            ));
+        }
+        Ok(())
     }
 
     pub async fn place_market_order(

@@ -251,6 +251,67 @@ pub struct BinanceFuturesPositionRisk {
     pub unrealized_profit: f64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BinanceListenKeyResponse {
+    #[serde(rename = "listenKey")]
+    pub listen_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "e")]
+pub enum BinanceFuturesUserDataEvent {
+    #[serde(rename = "ACCOUNT_UPDATE")]
+    AccountUpdate(BinanceFuturesAccountUpdateEvent),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BinanceFuturesAccountUpdateEvent {
+    #[serde(rename = "E")]
+    pub event_time: u64,
+    #[serde(rename = "a")]
+    pub account: BinanceFuturesAccountUpdateData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BinanceFuturesAccountUpdateData {
+    #[serde(rename = "P", default)]
+    pub positions: Vec<BinanceFuturesAccountUpdatePosition>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct BinanceFuturesAccountUpdatePosition {
+    #[serde(rename = "s")]
+    pub symbol: String,
+    #[serde(rename = "pa", deserialize_with = "string_or_number_to_f64_default")]
+    pub position_amt: f64,
+    #[serde(rename = "ep", deserialize_with = "string_or_number_to_f64_default")]
+    pub entry_price: f64,
+    #[serde(rename = "up", deserialize_with = "string_or_number_to_f64_default")]
+    pub unrealized_pnl: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "e")]
+pub enum BinanceSpotUserDataEvent {
+    #[serde(rename = "executionReport")]
+    ExecutionReport(BinanceSpotExecutionReportEvent),
+    #[serde(rename = "outboundAccountPosition")]
+    OutboundAccountPosition(BinanceSpotOutboundAccountPositionEvent),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BinanceSpotExecutionReportEvent {
+    #[serde(rename = "s")]
+    pub symbol: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BinanceSpotOutboundAccountPositionEvent {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,10 +4,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{Event, KeyCode};
+use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
+use tokio_tungstenite::tungstenite;
 
 use app_helpers::*;
 use sandbox_quant::binance::rest::BinanceRestClient;
+use sandbox_quant::binance::types::{BinanceFuturesUserDataEvent, BinanceSpotUserDataEvent};
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
 use sandbox_quant::doctor::maybe_run_doctor_from_args;
@@ -36,7 +39,9 @@ use sandbox_quant::runtime::execution_intent_flow::process_execution_intent_for_
 use sandbox_quant::runtime::internal_exit_flow::process_internal_exit_for_instrument;
 use sandbox_quant::runtime::manage_state_flow::emit_portfolio_state_updates;
 use sandbox_quant::runtime::order_history_sync_flow::process_periodic_sync_basic_for_instrument;
-use sandbox_quant::runtime::portfolio_sync::build_live_futures_positions;
+use sandbox_quant::runtime::portfolio_sync::{
+    build_live_futures_position_deltas_from_account_update, build_live_futures_positions,
+};
 use sandbox_quant::runtime::predictor_eval::{
     observe_predictor_eval_volatility, predictor_eval_scale, PredictorEvalVolState,
 };
@@ -56,8 +61,19 @@ mod app_helpers;
 mod ui_handlers;
 
 const ORDER_HISTORY_LIMIT: usize = 20000;
+const ORDER_HISTORY_PERIODIC_LIMIT: usize = 500;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
+const ORDER_HISTORY_BACKGROUND_SYNC_SECS: u64 = 30;
+const ORDER_HISTORY_BACKGROUND_SYNC_PER_TICK: usize = 1;
+const FUTURES_POSITION_REST_FALLBACK_SECS: u64 = 90;
+const FUTURES_USER_STREAM_KEEPALIVE_SECS: u64 = 30 * 60;
+const SPOT_USER_STREAM_KEEPALIVE_SECS: u64 = 30 * 60;
 const PORTFOLIO_REBALANCE_MIN_DELTA: f64 = 0.05;
+
+enum SpotUserDataHint {
+    Execution { instrument: String },
+    AccountUpdate,
+}
 
 fn fallback_sigma_for_market(market: MarketKind, sigma_spot: f64, sigma_futures: f64) -> f64 {
     if market == MarketKind::Futures {
@@ -409,6 +425,244 @@ async fn main() -> Result<()> {
         }
     });
 
+    let (futures_position_delta_tx, mut futures_position_delta_rx) =
+        mpsc::channel::<Vec<(String, Option<AssetPnlEntry>)>>(64);
+    let futures_stream_rest = rest_client.clone();
+    let futures_stream_app_tx = app_tx.clone();
+    let futures_stream_ws_base = config.binance.futures_ws_base_url.clone();
+    let mut futures_stream_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        let mut reconnect_delay_secs = 1u64;
+        loop {
+            if *futures_stream_shutdown.borrow() {
+                break;
+            }
+            let listen_key = match futures_stream_rest.start_futures_user_data_stream().await {
+                Ok(key) => key,
+                Err(e) => {
+                    let _ = futures_stream_app_tx
+                        .send(app_log(
+                            LogLevel::Warn,
+                            LogDomain::Ws,
+                            "futures.user_stream.listen_key.fail",
+                            format!("Failed to start futures user stream: {}", e),
+                        ))
+                        .await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                        _ = futures_stream_shutdown.changed() => break,
+                    }
+                    reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
+                    continue;
+                }
+            };
+            reconnect_delay_secs = 1;
+            let ws_url = format!(
+                "{}/{}",
+                futures_stream_ws_base.trim_end_matches('/'),
+                listen_key
+            );
+            let _ = futures_stream_app_tx
+                .send(app_log(
+                    LogLevel::Info,
+                    LogDomain::Ws,
+                    "futures.user_stream.connect",
+                    format!("Connecting futures user stream: {}", ws_url),
+                ))
+                .await;
+
+            let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = futures_stream_rest.close_futures_user_data_stream(&listen_key).await;
+                    let _ = futures_stream_app_tx
+                        .send(app_log(
+                            LogLevel::Warn,
+                            LogDomain::Ws,
+                            "futures.user_stream.connect.fail",
+                            format!("Futures user stream connect failed: {}", e),
+                        ))
+                        .await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                        _ = futures_stream_shutdown.changed() => break,
+                    }
+                    reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
+                    continue;
+                }
+            };
+
+            let (_write, mut read) = ws_stream.split();
+            let mut keepalive = tokio::time::interval(Duration::from_secs(
+                FUTURES_USER_STREAM_KEEPALIVE_SECS,
+            ));
+            loop {
+                tokio::select! {
+                    msg = read.next() => {
+                        match msg {
+                            Some(Ok(tungstenite::Message::Text(text))) => {
+                                if let Ok(BinanceFuturesUserDataEvent::AccountUpdate(evt)) =
+                                    serde_json::from_str::<BinanceFuturesUserDataEvent>(&text)
+                                {
+                                    let deltas = build_live_futures_position_deltas_from_account_update(
+                                        &evt.account.positions,
+                                        |symbol| normalize_instrument_label(&format!("{} (FUT)", symbol)),
+                                    );
+                                    if !deltas.is_empty() {
+                                        let _ = futures_position_delta_tx.send(deltas).await;
+                                    }
+                                }
+                            }
+                            Some(Ok(tungstenite::Message::Ping(_))) => {}
+                            Some(Ok(tungstenite::Message::Pong(_))) => {}
+                            Some(Ok(tungstenite::Message::Close(_))) | Some(Err(_)) | None => {
+                                break;
+                            }
+                            Some(Ok(_)) => {}
+                        }
+                    }
+                    _ = keepalive.tick() => {
+                        if let Err(e) = futures_stream_rest.keepalive_futures_user_data_stream(&listen_key).await {
+                            let _ = futures_stream_app_tx
+                                .send(app_log(
+                                    LogLevel::Warn,
+                                    LogDomain::Ws,
+                                    "futures.user_stream.keepalive.fail",
+                                    format!("Futures user stream keepalive failed: {}", e),
+                                ))
+                                .await;
+                            break;
+                        }
+                    }
+                    _ = futures_stream_shutdown.changed() => {
+                        let _ = futures_stream_rest.close_futures_user_data_stream(&listen_key).await;
+                        return;
+                    }
+                }
+            }
+
+            let _ = futures_stream_rest.close_futures_user_data_stream(&listen_key).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                _ = futures_stream_shutdown.changed() => break,
+            }
+            reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
+        }
+    });
+
+    let (spot_user_hint_tx, mut spot_user_hint_rx) = mpsc::channel::<SpotUserDataHint>(64);
+    let spot_stream_rest = rest_client.clone();
+    let spot_stream_app_tx = app_tx.clone();
+    let spot_stream_ws_base = config.binance.ws_base_url.clone();
+    let mut spot_stream_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        let mut reconnect_delay_secs = 1u64;
+        loop {
+            if *spot_stream_shutdown.borrow() {
+                break;
+            }
+            let listen_key = match spot_stream_rest.start_spot_user_data_stream().await {
+                Ok(key) => key,
+                Err(e) => {
+                    let _ = spot_stream_app_tx
+                        .send(app_log(
+                            LogLevel::Warn,
+                            LogDomain::Ws,
+                            "spot.user_stream.listen_key.fail",
+                            format!("Failed to start spot user stream: {}", e),
+                        ))
+                        .await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                        _ = spot_stream_shutdown.changed() => break,
+                    }
+                    reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
+                    continue;
+                }
+            };
+            reconnect_delay_secs = 1;
+            let ws_url = format!("{}/{}", spot_stream_ws_base.trim_end_matches('/'), listen_key);
+            let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = spot_stream_rest.close_spot_user_data_stream(&listen_key).await;
+                    let _ = spot_stream_app_tx
+                        .send(app_log(
+                            LogLevel::Warn,
+                            LogDomain::Ws,
+                            "spot.user_stream.connect.fail",
+                            format!("Spot user stream connect failed: {}", e),
+                        ))
+                        .await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                        _ = spot_stream_shutdown.changed() => break,
+                    }
+                    reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
+                    continue;
+                }
+            };
+
+            let (_write, mut read) = ws_stream.split();
+            let mut keepalive =
+                tokio::time::interval(Duration::from_secs(SPOT_USER_STREAM_KEEPALIVE_SECS));
+            loop {
+                tokio::select! {
+                    msg = read.next() => {
+                        match msg {
+                            Some(Ok(tungstenite::Message::Text(text))) => {
+                                if let Ok(event) = serde_json::from_str::<BinanceSpotUserDataEvent>(&text) {
+                                    match event {
+                                        BinanceSpotUserDataEvent::ExecutionReport(evt) => {
+                                            let _ = spot_user_hint_tx
+                                                .send(SpotUserDataHint::Execution {
+                                                    instrument: normalize_instrument_label(&evt.symbol),
+                                                })
+                                                .await;
+                                        }
+                                        BinanceSpotUserDataEvent::OutboundAccountPosition(_) => {
+                                            let _ = spot_user_hint_tx.send(SpotUserDataHint::AccountUpdate).await;
+                                        }
+                                        BinanceSpotUserDataEvent::Unknown => {}
+                                    }
+                                }
+                            }
+                            Some(Ok(tungstenite::Message::Ping(_))) => {}
+                            Some(Ok(tungstenite::Message::Pong(_))) => {}
+                            Some(Ok(tungstenite::Message::Close(_))) | Some(Err(_)) | None => {
+                                break;
+                            }
+                            Some(Ok(_)) => {}
+                        }
+                    }
+                    _ = keepalive.tick() => {
+                        if let Err(e) = spot_stream_rest.keepalive_spot_user_data_stream(&listen_key).await {
+                            let _ = spot_stream_app_tx
+                                .send(app_log(
+                                    LogLevel::Warn,
+                                    LogDomain::Ws,
+                                    "spot.user_stream.keepalive.fail",
+                                    format!("Spot user stream keepalive failed: {}", e),
+                                ))
+                                .await;
+                            break;
+                        }
+                    }
+                    _ = spot_stream_shutdown.changed() => {
+                        let _ = spot_stream_rest.close_spot_user_data_stream(&listen_key).await;
+                        return;
+                    }
+                }
+            }
+            let _ = spot_stream_rest.close_spot_user_data_stream(&listen_key).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                _ = spot_stream_shutdown.changed() => break,
+            }
+            reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
+        }
+    });
+
     // Spawn strategy + order manager task
     let strat_app_tx = app_tx.clone();
     let strat_rest = rest_client.clone();
@@ -458,6 +712,15 @@ async fn main() -> Result<()> {
         let (internal_exit_tx, mut internal_exit_rx) = mpsc::channel::<(String, String)>(64);
         let mut order_history_sync =
             tokio::time::interval(Duration::from_secs(ORDER_HISTORY_SYNC_SECS));
+        let mut last_history_sync_ms_by_instrument: HashMap<String, u64> = HashMap::new();
+        let tradable_instruments: Vec<String> = strat_config
+            .binance
+            .tradable_instruments()
+            .into_iter()
+            .map(|item| normalize_instrument_label(&item))
+            .collect();
+        let mut background_history_sync_cursor: usize = 0;
+        let mut last_futures_stream_update_ms: Option<u64> = None;
         let mut last_asset_pnl_emit_ms: u64 = 0;
 
         let emit_rate_snapshot = |tx: &mpsc::Sender<AppEvent>, mgr: &OrderManager| {
@@ -615,7 +878,6 @@ async fn main() -> Result<()> {
         let base_interval_ms =
             parse_interval_ms(&strat_config.binance.kline_interval).unwrap_or(60_000);
         let predictor_bootstrap_limit = strat_config.ui.price_history_len.max(1200);
-        let tradable_instruments = strat_config.binance.tradable_instruments();
         let mut predictor_history_by_instrument: HashMap<String, Vec<f64>> = HashMap::new();
         predictor_history_by_instrument
             .insert(selected_symbol.clone(), strat_historical_closes.clone());
@@ -653,7 +915,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        for instrument in tradable_instruments {
+        for instrument in &tradable_instruments {
             let (_api_symbol, market) = parse_instrument_label(&instrument);
             let market_label = if market == MarketKind::Futures {
                 "futures".to_string()
@@ -661,7 +923,7 @@ async fn main() -> Result<()> {
                 "spot".to_string()
             };
             let instrument_closes = predictor_history_by_instrument
-                .get(&instrument)
+                .get(instrument)
                 .cloned()
                 .unwrap_or_default();
             for (predictor_id, predictor_cfg) in &predictor_specs {
@@ -1292,37 +1554,227 @@ async fn main() -> Result<()> {
                         .await;
                     }
                 }
-                _ = order_history_sync.tick() => {
-                    match strat_rest.get_futures_position_risk().await {
-                        Ok(rows) => {
-                            live_futures_positions = build_live_futures_positions(&rows, |symbol| {
-                                normalize_instrument_label(&format!("{} (FUT)", symbol))
-                            });
-                        }
-                        Err(e) => {
-                            let _ = strat_app_tx
-                                .send(app_log(
-                                    LogLevel::Warn,
-                                    LogDomain::Portfolio,
-                                    "futures.positions.sync.fail",
-                                    format!("Futures position sync failed: {}", e),
-                                ))
-                                .await;
+                Some(deltas) = futures_position_delta_rx.recv() => {
+                    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    for (instrument, entry) in deltas {
+                        if let Some(snapshot) = entry {
+                            live_futures_positions.insert(instrument, snapshot);
+                        } else {
+                            live_futures_positions.remove(&instrument);
                         }
                     }
-                    for (instrument, mgr) in order_managers.iter_mut() {
-                        process_periodic_sync_basic_for_instrument(
-                            &strat_app_tx,
-                            mgr,
-                            instrument,
-                            &selected_symbol,
-                            ORDER_HISTORY_LIMIT,
-                            &mut strategy_stats_by_instrument,
-                            &mut realized_pnl_by_symbol,
-                            strat_config.exit.stop_loss_pct,
-                        )
-                        .await;
-                        emit_rate_snapshot(&strat_app_tx, mgr);
+                    last_futures_stream_update_ms = Some(now_ms);
+                    emit_portfolio_state_updates(
+                        &strat_app_tx,
+                        &order_managers,
+                        &realized_pnl_by_symbol,
+                        &live_futures_positions,
+                    )
+                    .await;
+                }
+                Some(hint) = spot_user_hint_rx.recv() => {
+                    match hint {
+                        SpotUserDataHint::Execution { instrument } => {
+                            if !order_managers.contains_key(&instrument) {
+                                let (api_symbol, market) = parse_instrument_label(&instrument);
+                                order_managers.insert(
+                                    instrument.clone(),
+                                    OrderManager::new(
+                                        strat_rest.clone(),
+                                        &api_symbol,
+                                        market,
+                                        strat_config.strategy.order_amount_usdt,
+                                        &strat_config.risk,
+                                    ),
+                                );
+                            }
+                            let mut emit_asset_snapshot = false;
+                            if let Some(mgr) = order_managers.get_mut(&instrument) {
+                                let last_sync_ms = last_history_sync_ms_by_instrument
+                                    .get(&instrument)
+                                    .copied()
+                                    .unwrap_or(0);
+                                let history_limit = if last_sync_ms == 0 {
+                                    ORDER_HISTORY_LIMIT
+                                } else {
+                                    ORDER_HISTORY_PERIODIC_LIMIT
+                                };
+                                if let Ok(history) = mgr.refresh_order_history(history_limit).await {
+                                    strategy_stats_by_instrument
+                                        .insert(instrument.clone(), history.strategy_stats.clone());
+                                    realized_pnl_by_symbol
+                                        .insert(instrument.clone(), history.stats.realized_pnl);
+                                    last_history_sync_ms_by_instrument.insert(
+                                        instrument.clone(),
+                                        chrono::Utc::now().timestamp_millis() as u64,
+                                    );
+                                    if instrument == selected_symbol {
+                                        let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                                        if let Ok(balances) = mgr.refresh_balances().await {
+                                            let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                                        }
+                                    }
+                                    emit_asset_snapshot = true;
+                                }
+                                emit_rate_snapshot(&strat_app_tx, mgr);
+                            }
+                            if emit_asset_snapshot {
+                                let _ = strat_app_tx
+                                    .send(AppEvent::StrategyStatsUpdate {
+                                        strategy_stats: build_scoped_strategy_stats(&strategy_stats_by_instrument),
+                                    })
+                                    .await;
+                                emit_portfolio_state_updates(
+                                    &strat_app_tx,
+                                    &order_managers,
+                                    &realized_pnl_by_symbol,
+                                    &live_futures_positions,
+                                )
+                                .await;
+                            }
+                        }
+                        SpotUserDataHint::AccountUpdate => {
+                            let (_, selected_market) = parse_instrument_label(&selected_symbol);
+                            if selected_market == MarketKind::Spot {
+                                if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
+                                    if let Ok(balances) = mgr.refresh_balances().await {
+                                        let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
+                                        emit_portfolio_state_updates(
+                                            &strat_app_tx,
+                                            &order_managers,
+                                            &realized_pnl_by_symbol,
+                                            &live_futures_positions,
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ = order_history_sync.tick() => {
+                    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    let stream_stale = last_futures_stream_update_ms
+                        .map(|ts| now_ms.saturating_sub(ts) >= FUTURES_POSITION_REST_FALLBACK_SECS * 1000)
+                        .unwrap_or(true);
+                    if stream_stale {
+                        match strat_rest.get_futures_position_risk().await {
+                            Ok(rows) => {
+                                live_futures_positions =
+                                    build_live_futures_positions(&rows, |symbol| {
+                                        normalize_instrument_label(&format!("{} (FUT)", symbol))
+                                    });
+                            }
+                            Err(e) => {
+                                let _ = strat_app_tx
+                                    .send(app_log(
+                                        LogLevel::Warn,
+                                        LogDomain::Portfolio,
+                                        "futures.positions.sync.fail",
+                                        format!("Futures position sync failed: {}", e),
+                                    ))
+                                    .await;
+                            }
+                        }
+                    }
+                    if !order_managers.contains_key(&selected_symbol) {
+                        let (api_symbol, market) = parse_instrument_label(&selected_symbol);
+                        order_managers.insert(
+                            selected_symbol.clone(),
+                            OrderManager::new(
+                                strat_rest.clone(),
+                                &api_symbol,
+                                market,
+                                strat_config.strategy.order_amount_usdt,
+                                &strat_config.risk,
+                            ),
+                        );
+                    }
+                    if let Some(mgr) = order_managers.get_mut(&selected_symbol) {
+                        let last_sync_ms = last_history_sync_ms_by_instrument
+                            .get(&selected_symbol)
+                            .copied()
+                            .unwrap_or(0);
+                        if now_ms.saturating_sub(last_sync_ms) >= ORDER_HISTORY_SYNC_SECS * 1000 {
+                            let history_limit = if last_sync_ms == 0 {
+                                ORDER_HISTORY_LIMIT
+                            } else {
+                                ORDER_HISTORY_PERIODIC_LIMIT
+                            };
+                            process_periodic_sync_basic_for_instrument(
+                                &strat_app_tx,
+                                mgr,
+                                &selected_symbol,
+                                &selected_symbol,
+                                history_limit,
+                                &mut strategy_stats_by_instrument,
+                                &mut realized_pnl_by_symbol,
+                                strat_config.exit.stop_loss_pct,
+                            )
+                            .await;
+                            last_history_sync_ms_by_instrument
+                                .insert(selected_symbol.clone(), now_ms);
+                            emit_rate_snapshot(&strat_app_tx, mgr);
+                        }
+                    }
+
+                    if !tradable_instruments.is_empty() {
+                        let total = tradable_instruments.len();
+                        let mut synced_count = 0usize;
+                        for _ in 0..total {
+                            if synced_count >= ORDER_HISTORY_BACKGROUND_SYNC_PER_TICK {
+                                break;
+                            }
+                            let idx = background_history_sync_cursor % total;
+                            background_history_sync_cursor = (background_history_sync_cursor + 1) % total;
+                            let instrument = tradable_instruments[idx].clone();
+                            if instrument == selected_symbol {
+                                continue;
+                            }
+                            let last_sync_ms = last_history_sync_ms_by_instrument
+                                .get(&instrument)
+                                .copied()
+                                .unwrap_or(0);
+                            if now_ms.saturating_sub(last_sync_ms)
+                                < ORDER_HISTORY_BACKGROUND_SYNC_SECS * 1000
+                            {
+                                continue;
+                            }
+                            if !order_managers.contains_key(&instrument) {
+                                let (api_symbol, market) = parse_instrument_label(&instrument);
+                                order_managers.insert(
+                                    instrument.clone(),
+                                    OrderManager::new(
+                                        strat_rest.clone(),
+                                        &api_symbol,
+                                        market,
+                                        strat_config.strategy.order_amount_usdt,
+                                        &strat_config.risk,
+                                    ),
+                                );
+                            }
+                            let history_limit = if last_sync_ms == 0 {
+                                ORDER_HISTORY_LIMIT
+                            } else {
+                                ORDER_HISTORY_PERIODIC_LIMIT
+                            };
+                            if let Some(mgr) = order_managers.get_mut(&instrument) {
+                                process_periodic_sync_basic_for_instrument(
+                                    &strat_app_tx,
+                                    mgr,
+                                    &instrument,
+                                    &selected_symbol,
+                                    history_limit,
+                                    &mut strategy_stats_by_instrument,
+                                    &mut realized_pnl_by_symbol,
+                                    strat_config.exit.stop_loss_pct,
+                                )
+                                .await;
+                                last_history_sync_ms_by_instrument.insert(instrument, now_ms);
+                                emit_rate_snapshot(&strat_app_tx, mgr);
+                                synced_count += 1;
+                            }
+                        }
                     }
                     let _ = strat_app_tx
                         .send(AppEvent::StrategyStatsUpdate {

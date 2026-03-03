@@ -6,6 +6,7 @@ pub mod ui_projection;
 
 use std::collections::HashMap;
 
+use chrono::TimeZone;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -123,6 +124,7 @@ pub struct AppState {
     pub last_price_event_ms: Option<u64>,
     pub last_price_latency_ms: Option<u64>,
     pub last_order_history_update_ms: Option<u64>,
+    pub last_portfolio_update_ms: Option<u64>,
     pub last_order_history_event_ms: Option<u64>,
     pub last_order_history_latency_ms: Option<u64>,
     pub trade_stats_reset_warned: bool,
@@ -173,6 +175,8 @@ pub struct AppState {
     pub network_last_fill_ms: Option<u64>,
     pub network_pending_submit_ms_by_intent: HashMap<String, u64>,
     pub history_rows: Vec<String>,
+    pub history_ledger_rows: Vec<order_store::PersistedTrade>,
+    pub history_ledger_dirty: bool,
     pub history_bucket: order_store::HistoryBucket,
     pub last_applied_fee: String,
     pub grid_open: bool,
@@ -192,6 +196,7 @@ pub struct AppState {
     pub hide_small_positions: bool,
     pub hide_empty_predictor_rows: bool,
     pub predictor_scroll_offset: usize,
+    pub history_scroll_offset: usize,
 }
 
 impl AppState {
@@ -240,6 +245,7 @@ impl AppState {
             last_price_event_ms: None,
             last_price_latency_ms: None,
             last_order_history_update_ms: None,
+            last_portfolio_update_ms: None,
             last_order_history_event_ms: None,
             last_order_history_latency_ms: None,
             trade_stats_reset_warned: false,
@@ -300,6 +306,8 @@ impl AppState {
             network_last_fill_ms: None,
             network_pending_submit_ms_by_intent: HashMap::new(),
             history_rows: Vec::new(),
+            history_ledger_rows: Vec::new(),
+            history_ledger_dirty: true,
             history_bucket: order_store::HistoryBucket::Day,
             last_applied_fee: "---".to_string(),
             grid_open: false,
@@ -335,6 +343,7 @@ impl AppState {
             hide_small_positions: true,
             hide_empty_predictor_rows: true,
             predictor_scroll_offset: 0,
+            history_scroll_offset: 0,
         }
     }
 
@@ -420,6 +429,12 @@ impl AppState {
         if tab != GridTab::Predictors {
             self.predictor_scroll_offset = 0;
         }
+        if tab == GridTab::History && self.history_ledger_dirty {
+            self.refresh_history_ledger_rows();
+        }
+        if tab != GridTab::History {
+            self.history_scroll_offset = 0;
+        }
     }
     pub fn selected_grid_symbol_index(&self) -> usize {
         self.grid_symbol_index
@@ -444,6 +459,12 @@ impl AppState {
     }
     pub fn set_predictor_scroll_offset(&mut self, offset: usize) {
         self.predictor_scroll_offset = offset;
+    }
+    pub fn history_scroll_offset(&self) -> usize {
+        self.history_scroll_offset
+    }
+    pub fn set_history_scroll_offset(&mut self, offset: usize) {
+        self.history_scroll_offset = offset;
     }
     pub fn is_symbol_selector_open(&self) -> bool {
         self.symbol_selector_open
@@ -615,6 +636,12 @@ impl AppState {
                 ];
             }
         }
+    }
+
+    pub fn refresh_history_ledger_rows(&mut self) {
+        self.history_ledger_rows = order_store::load_recent_persisted_trades_filtered(None, None, 500)
+            .unwrap_or_default();
+        self.history_ledger_dirty = false;
     }
 
     fn refresh_equity_usdt(&mut self) {
@@ -1115,7 +1142,14 @@ impl AppState {
                     &mut self.network_order_sync_latencies_ms,
                     snapshot.fetch_latency_ms,
                 );
-                self.refresh_history_rows();
+                if self.history_popup_open {
+                    self.refresh_history_rows();
+                }
+                if self.grid_tab == GridTab::History {
+                    self.refresh_history_ledger_rows();
+                } else {
+                    self.history_ledger_dirty = true;
+                }
             }
             AppEvent::StrategyStatsUpdate { strategy_stats } => {
                 rebuild_projection = true;
@@ -1169,6 +1203,7 @@ impl AppState {
             AppEvent::PortfolioStateUpdate { snapshot } => {
                 rebuild_projection = true;
                 self.portfolio_state = snapshot;
+                self.last_portfolio_update_ms = Some(chrono::Utc::now().timestamp_millis() as u64);
             }
             AppEvent::RiskRateSnapshot {
                 global,
@@ -1841,6 +1876,18 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
     }
 
     if selected_grid_tab == GridTab::Risk {
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        let portfolio_updated_text = state
+            .last_portfolio_update_ms
+            .map(|ts| {
+                let local = chrono::Utc
+                    .timestamp_millis_opt(ts as i64)
+                    .single()
+                    .map(|dt| dt.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_else(|| "--".to_string());
+                format!("{} ({})", local, format_age_ms(now_ms.saturating_sub(ts)))
+            })
+            .unwrap_or_else(|| "-".to_string());
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1862,6 +1909,8 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     "  (70%=WARN, 90%=CRIT)",
                     Style::default().fg(Color::DarkGray),
                 ),
+                Span::styled("  Updated ", Style::default().fg(Color::DarkGray)),
+                Span::styled(portfolio_updated_text, Style::default().fg(Color::Cyan)),
             ])),
             chunks[0],
         );
@@ -2277,40 +2326,96 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             .split(body_area);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Bucket: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Order Ledger: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    match state.history_bucket {
-                        order_store::HistoryBucket::Day => "Day",
-                        order_store::HistoryBucket::Hour => "Hour",
-                        order_store::HistoryBucket::Month => "Month",
-                    },
+                    format!("{} rows", state.history_ledger_rows.len()),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    "  (popup hotkeys: D/H/M)",
+                    "  (fee/qty/price/time)",
                     Style::default().fg(Color::DarkGray),
                 ),
             ])),
             chunks[0],
         );
 
-        let visible = build_history_lines(
-            &state.history_rows,
-            chunks[1].height.saturating_sub(2) as usize,
-        );
+        let max_rows = chunks[1].height.saturating_sub(3) as usize;
+        let max_start = state
+            .history_ledger_rows
+            .len()
+            .saturating_sub(max_rows.max(1));
+        let start = state.history_scroll_offset.min(max_start);
+        let mut ledger_rows = Vec::new();
+        for p in state.history_ledger_rows.iter().skip(start).take(max_rows) {
+            let t = &p.trade;
+            let side = if t.is_buyer { "BUY" } else { "SELL" };
+            ledger_rows.push(Row::new(vec![
+                Cell::from(
+                    chrono::Utc
+                        .timestamp_millis_opt(t.time as i64)
+                        .single()
+                        .map(|dt| dt.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| "--".to_string()),
+                ),
+                Cell::from(t.symbol.clone()),
+                Cell::from(side),
+                Cell::from(format!("{:.5}", t.qty)),
+                Cell::from(format!("{:.4}", t.price)),
+                Cell::from(format!("{:.6} {}", t.commission, t.commission_asset)),
+                Cell::from(p.source.clone()),
+            ]));
+        }
+        if ledger_rows.is_empty() {
+            ledger_rows.push(
+                Row::new(vec![
+                    Cell::from("(no ledger rows)"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                    Cell::from("-"),
+                ])
+                .style(Style::default().fg(Color::DarkGray)),
+            );
+        }
         frame.render_widget(
-            Paragraph::new(visible).block(
+            Table::new(
+                ledger_rows,
+                [
+                    Constraint::Length(15),
+                    Constraint::Length(14),
+                    Constraint::Length(6),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(16),
+                    Constraint::Min(10),
+                ],
+            )
+            .header(Row::new(vec![
+                Cell::from("Time"),
+                Cell::from("Symbol"),
+                Cell::from("Side"),
+                Cell::from("Qty"),
+                Cell::from("Price"),
+                Cell::from("Fee"),
+                Cell::from("Source"),
+            ]))
+            .column_spacing(1)
+            .block(
                 Block::default()
-                    .title(" History ")
+                    .title(" History Order Ledger ")
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::DarkGray)),
             ),
             chunks[1],
         );
         frame.render_widget(
-            Paragraph::new("[1/2/3/4/5] tab  [U] <$1 filter  [Z] close-all  [G/Esc] close"),
+            Paragraph::new(
+                "[1/2/3/4/5] tab  [J/K] scroll  [U] <$1 filter  [Z] close-all  [G/Esc] close",
+            ),
             chunks[2],
         );
         return;
