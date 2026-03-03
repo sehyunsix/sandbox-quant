@@ -1,3 +1,7 @@
+## v0.32.2 - 2026-03-03
+
+- Refactor runtime to alpha-portfolio architecture and simplify UI (#188) (20cf21e)
+
 ## v0.32.1 - 2026-03-02
 
 - chore(refactor): split main helpers and ui handlers modules (#186) (7d1df7e)
