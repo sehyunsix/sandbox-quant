@@ -532,6 +532,14 @@ impl OrderManager {
         (self.last_price > f64::EPSILON).then_some(self.last_price)
     }
 
+    pub fn open_order_count(&self) -> usize {
+        self.active_orders.len()
+    }
+
+    pub fn reserved_cash_usdt(&self) -> f64 {
+        self.open_order_count() as f64 * self.order_amount_usdt.max(0.0)
+    }
+
     /// Return current global rate-budget snapshot from the risk module.
     ///
     /// Intended for UI display and observability.

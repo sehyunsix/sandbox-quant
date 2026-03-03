@@ -86,34 +86,6 @@ pub(super) fn close_all_soft_skip_reason(reason_code: &str) -> bool {
     )
 }
 
-pub(super) fn build_asset_pnl_snapshot(
-    order_managers: &HashMap<String, OrderManager>,
-    realized_pnl_by_symbol: &HashMap<String, f64>,
-    live_futures_positions: &HashMap<String, AssetPnlEntry>,
-) -> HashMap<String, AssetPnlEntry> {
-    let mut out: HashMap<String, AssetPnlEntry> = order_managers
-        .iter()
-        .map(|(symbol, mgr)| {
-            (
-                symbol.clone(),
-                AssetPnlEntry {
-                    is_futures: mgr.market_kind() == MarketKind::Futures,
-                    side: mgr.position().side,
-                    position_qty: mgr.position().qty,
-                    entry_price: mgr.position().entry_price,
-                    realized_pnl_usdt: realized_pnl_by_symbol.get(symbol).copied().unwrap_or(0.0),
-                    unrealized_pnl_usdt: mgr.position().unrealized_pnl,
-                },
-            )
-        })
-        .collect();
-    // Exchange-reported futures positions override local reconstructed state when present.
-    for (symbol, entry) in live_futures_positions {
-        out.insert(symbol.clone(), entry.clone());
-    }
-    out
-}
-
 pub(super) fn canonical_strategy_tag(tag: &str) -> String {
     match tag.trim() {
         "MA(Config)" => "cfg".to_string(),

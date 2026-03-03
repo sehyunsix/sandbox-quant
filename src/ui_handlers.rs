@@ -631,12 +631,12 @@ pub(super) fn handle_grid_key(
 ) {
     if let Some(cmd) = parse_grid_command(key_code) {
         match cmd {
-            GridCommand::TabAssets => app_state.set_grid_tab(GridTab::Assets),
-            GridCommand::TabStrategies => app_state.set_grid_tab(GridTab::Strategies),
+            GridCommand::TabAssets => app_state.set_grid_tab(GridTab::Risk),
+            GridCommand::TabStrategies => app_state.set_grid_tab(GridTab::Risk),
             GridCommand::TabRisk => app_state.set_grid_tab(GridTab::Risk),
             GridCommand::TabNetwork => app_state.set_grid_tab(GridTab::Network),
             GridCommand::TabHistory => app_state.set_grid_tab(GridTab::History),
-            GridCommand::TabPositions => app_state.set_grid_tab(GridTab::Positions),
+            GridCommand::TabPositions => app_state.set_grid_tab(GridTab::Risk),
             GridCommand::TabPredictors => app_state.set_grid_tab(GridTab::Predictors),
             GridCommand::TabSystemLog => app_state.set_grid_tab(GridTab::SystemLog),
             GridCommand::CloseGrid => app_state.set_grid_open(false),

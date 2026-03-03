@@ -13,7 +13,6 @@ use crate::model::tick::Tick;
 /// Exponential backoff for reconnection.
 struct ExponentialBackoff {
     current: Duration,
-    initial: Duration,
     max: Duration,
     factor: f64,
 }
@@ -22,7 +21,6 @@ impl ExponentialBackoff {
     fn new(initial: Duration, max: Duration, factor: f64) -> Self {
         Self {
             current: initial,
-            initial,
             max,
             factor,
         }
@@ -34,10 +32,6 @@ impl ExponentialBackoff {
             (self.current.as_secs_f64() * self.factor).min(self.max.as_secs_f64()),
         );
         delay
-    }
-
-    fn reset(&mut self) {
-        self.current = self.initial;
     }
 }
 

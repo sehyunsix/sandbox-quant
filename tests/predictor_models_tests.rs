@@ -1,4 +1,4 @@
-use sandbox_quant::ev::EwmaYModelConfig;
+use sandbox_quant::predictor::PredictorBaseConfig;
 use sandbox_quant::model::signal::Signal;
 use sandbox_quant::predictor::{
     backfill_predictor_metrics_from_closes, backfill_predictor_metrics_from_closes_volnorm,
@@ -8,7 +8,7 @@ use sandbox_quant::predictor::{
 
 #[test]
 fn default_predictor_specs_include_ar1_variants() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let ids: Vec<String> = specs.iter().map(|(id, _)| id.clone()).collect();
     assert!(ids.contains(&"ewma-v1".to_string()));
     assert!(ids.contains(&"ar1-v1".to_string()));
@@ -35,7 +35,7 @@ fn default_predictor_specs_include_ar1_variants() {
 
 #[test]
 fn build_predictor_models_constructs_requested_models() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let models = build_predictor_models(&specs);
     assert!(models.contains_key("ewma-v1"));
     assert!(models.contains_key("ar1-v1"));
@@ -59,7 +59,7 @@ fn build_predictor_models_constructs_requested_models() {
 
 #[test]
 fn ar1_predictor_estimate_changes_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("ar1-v1").expect("missing ar1-v1");
 
@@ -115,7 +115,7 @@ fn default_horizon_includes_multi_minute_variants() {
 
 #[test]
 fn holt_predictor_estimate_changes_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("holt-v1").expect("missing holt-v1");
 
@@ -129,7 +129,7 @@ fn holt_predictor_estimate_changes_after_observations() {
 
 #[test]
 fn kalman_predictor_estimate_changes_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("kalman-v1").expect("missing kalman-v1");
 
@@ -143,7 +143,7 @@ fn kalman_predictor_estimate_changes_after_observations() {
 
 #[test]
 fn linear_indicator_predictor_estimate_changes_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("lin-ind-v1").expect("missing lin-ind-v1");
 
@@ -157,7 +157,7 @@ fn linear_indicator_predictor_estimate_changes_after_observations() {
 
 #[test]
 fn tsmom_rls_predictor_estimate_changes_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("tsmom-rls-v1")
@@ -175,7 +175,7 @@ fn tsmom_rls_predictor_estimate_changes_after_observations() {
 
 #[test]
 fn feature_rls_predictor_estimate_changes_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("feat-rls-v1").expect("missing feat-rls-v1");
 
@@ -191,7 +191,7 @@ fn feature_rls_predictor_estimate_changes_after_observations() {
 
 #[test]
 fn feature_rls_fast_predictor_estimate_changes_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("feat-rls-fast-v1")
@@ -209,7 +209,7 @@ fn feature_rls_fast_predictor_estimate_changes_after_observations() {
 
 #[test]
 fn feature_rls_prediction_is_clipped_to_reasonable_band() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("feat-rls-v1").expect("missing feat-rls-v1");
 
@@ -227,7 +227,7 @@ fn feature_rls_prediction_is_clipped_to_reasonable_band() {
 
 #[test]
 fn cross_asset_macro_rls_uses_factor_ticks_and_estimates() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("xasset-macro-rls-v1")
@@ -256,7 +256,7 @@ fn cross_asset_macro_rls_uses_factor_ticks_and_estimates() {
 
 #[test]
 fn ou_revert_predictor_estimate_changes_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("ou-revert-v1")
@@ -275,7 +275,7 @@ fn ou_revert_predictor_estimate_changes_after_observations() {
 
 #[test]
 fn ou_revert_predicts_reversion_after_uptrend() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("ou-revert-v1")
@@ -296,7 +296,7 @@ fn ou_revert_predicts_reversion_after_uptrend() {
 
 #[test]
 fn ou_revert_fast_variant_builds_and_estimates() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("ou-revert-fast-v1")
@@ -312,7 +312,7 @@ fn ou_revert_fast_variant_builds_and_estimates() {
 
 #[test]
 fn volmom_predictor_estimate_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("volmom-v1").expect("missing volmom-v1");
 
@@ -335,7 +335,7 @@ fn volmom_predictor_estimate_after_observations() {
 
 #[test]
 fn volmom_fast_variant_builds_and_estimates() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("volmom-fast-v1")
@@ -357,7 +357,7 @@ fn volmom_fast_variant_builds_and_estimates() {
 
 #[test]
 fn varratio_predictor_estimate_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("varratio-v1").expect("missing varratio-v1");
 
@@ -374,7 +374,7 @@ fn varratio_predictor_estimate_after_observations() {
 
 #[test]
 fn varratio_fast_variant_builds_and_estimates() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("varratio-fast-v1")
@@ -390,7 +390,7 @@ fn varratio_fast_variant_builds_and_estimates() {
 
 #[test]
 fn microrev_predictor_estimate_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("microrev-v1").expect("missing microrev-v1");
 
@@ -412,7 +412,7 @@ fn microrev_predictor_estimate_after_observations() {
 
 #[test]
 fn microrev_predicts_zero_during_trending() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models.get_mut("microrev-v1").expect("missing microrev-v1");
 
@@ -433,7 +433,7 @@ fn microrev_predicts_zero_during_trending() {
 
 #[test]
 fn selfcalib_predictor_estimate_after_observations() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("selfcalib-v1")
@@ -458,7 +458,7 @@ fn selfcalib_predictor_estimate_after_observations() {
 
 #[test]
 fn selfcalib_fast_variant_builds_and_estimates() {
-    let specs = default_predictor_specs(EwmaYModelConfig::default());
+    let specs = default_predictor_specs(PredictorBaseConfig::default());
     let mut models = build_predictor_models(&specs);
     let m = models
         .get_mut("selfcalib-fast-v1")

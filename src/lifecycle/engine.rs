@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use crate::ev::EntryExpectancySnapshot;
-
 #[derive(Debug, Clone)]
 pub struct PositionLifecycleState {
     pub position_id: String,
@@ -37,7 +35,7 @@ impl PositionLifecycleEngine {
         source_tag: &str,
         entry_price: f64,
         qty: f64,
-        expectancy: &EntryExpectancySnapshot,
+        expected_holding_ms: u64,
         now_ms: u64,
     ) -> String {
         let position_id = format!("pos-{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -50,7 +48,7 @@ impl PositionLifecycleEngine {
             qty,
             mfe_usdt: 0.0,
             mae_usdt: 0.0,
-            expected_holding_ms: expectancy.expected_holding_ms.max(1),
+            expected_holding_ms: expected_holding_ms.max(1),
             stop_loss_order_id: None,
         };
         self.states.insert(instrument.to_string(), state);
