@@ -89,8 +89,9 @@ pub(super) fn close_all_soft_skip_reason(reason_code: &str) -> bool {
 pub(super) fn build_asset_pnl_snapshot(
     order_managers: &HashMap<String, OrderManager>,
     realized_pnl_by_symbol: &HashMap<String, f64>,
+    live_futures_positions: &HashMap<String, AssetPnlEntry>,
 ) -> HashMap<String, AssetPnlEntry> {
-    order_managers
+    let mut out: HashMap<String, AssetPnlEntry> = order_managers
         .iter()
         .map(|(symbol, mgr)| {
             (
@@ -105,7 +106,12 @@ pub(super) fn build_asset_pnl_snapshot(
                 },
             )
         })
-        .collect()
+        .collect();
+    // Exchange-reported futures positions override local reconstructed state when present.
+    for (symbol, entry) in live_futures_positions {
+        out.insert(symbol.clone(), entry.clone());
+    }
+    out
 }
 
 pub(super) fn canonical_strategy_tag(tag: &str) -> String {
@@ -163,131 +169,6 @@ pub(super) fn derived_stop_price(position: &Position, stop_loss_pct: f64) -> Opt
         }
         _ => Some(position.entry_price * (1.0 - pct)),
     }
-}
-
-pub(super) fn y_snapshot_for_entry(
-    ev_cfg: &EvEstimatorConfig,
-    market: MarketKind,
-    futures_multiplier: f64,
-    y: YNormal,
-    order_amount_usdt: f64,
-    entry_price: f64,
-    max_holding_ms: u64,
-    now_ms: u64,
-) -> Option<EntryExpectancySnapshot> {
-    if entry_price <= f64::EPSILON || order_amount_usdt <= f64::EPSILON {
-        return None;
-    }
-    let qty = order_amount_usdt / entry_price;
-    if qty <= f64::EPSILON {
-        return None;
-    }
-    let stats = if market == MarketKind::Futures {
-        futures_ev_from_y_normal(
-            y,
-            FuturesEvInputs {
-                p0: entry_price,
-                qty,
-                multiplier: futures_multiplier,
-                side: PositionSide::Long,
-                fee: 0.0,
-                slippage: ev_cfg.fee_slippage_penalty_usdt,
-                funding: 0.0,
-                liq_risk: 0.0,
-            },
-        )
-    } else {
-        spot_ev_from_y_normal(
-            y,
-            SpotEvInputs {
-                p0: entry_price,
-                qty,
-                side: PositionSide::Long,
-                fee: 0.0,
-                slippage: ev_cfg.fee_slippage_penalty_usdt,
-                borrow: 0.0,
-            },
-        )
-    };
-    Some(EntryExpectancySnapshot {
-        expected_return_usdt: stats.ev,
-        expected_holding_ms: max_holding_ms.max(1),
-        worst_case_loss_usdt: stats.ev_std,
-        fee_slippage_penalty_usdt: ev_cfg.fee_slippage_penalty_usdt,
-        probability: sandbox_quant::ev::ProbabilitySnapshot {
-            p_win: stats.p_win,
-            p_tail_loss: 1.0 - stats.p_win,
-            p_timeout_exit: 0.5,
-            n_eff: 0.0,
-            confidence: sandbox_quant::ev::ConfidenceLevel::Low,
-            prob_model_version: "y-normal-v1".to_string(),
-        },
-        ev_model_version: "y-normal-spot-fut-v1".to_string(),
-        computed_at_ms: now_ms,
-    })
-}
-
-pub(super) fn y_snapshot_for_open_position(
-    ev_cfg: &EvEstimatorConfig,
-    market: MarketKind,
-    futures_multiplier: f64,
-    y: YNormal,
-    entry_price: f64,
-    qty: f64,
-    side: Option<sandbox_quant::model::order::OrderSide>,
-    max_holding_ms: u64,
-    now_ms: u64,
-) -> Option<EntryExpectancySnapshot> {
-    if entry_price <= f64::EPSILON || qty.abs() <= f64::EPSILON {
-        return None;
-    }
-    let side = match side {
-        Some(sandbox_quant::model::order::OrderSide::Sell) => PositionSide::Short,
-        _ => PositionSide::Long,
-    };
-    let stats = if market == MarketKind::Futures {
-        futures_ev_from_y_normal(
-            y,
-            FuturesEvInputs {
-                p0: entry_price,
-                qty: qty.abs(),
-                multiplier: futures_multiplier,
-                side,
-                fee: 0.0,
-                slippage: ev_cfg.fee_slippage_penalty_usdt,
-                funding: 0.0,
-                liq_risk: 0.0,
-            },
-        )
-    } else {
-        spot_ev_from_y_normal(
-            y,
-            SpotEvInputs {
-                p0: entry_price,
-                qty: qty.abs(),
-                side,
-                fee: 0.0,
-                slippage: ev_cfg.fee_slippage_penalty_usdt,
-                borrow: 0.0,
-            },
-        )
-    };
-    Some(EntryExpectancySnapshot {
-        expected_return_usdt: stats.ev,
-        expected_holding_ms: max_holding_ms.max(1),
-        worst_case_loss_usdt: stats.ev_std,
-        fee_slippage_penalty_usdt: ev_cfg.fee_slippage_penalty_usdt,
-        probability: sandbox_quant::ev::ProbabilitySnapshot {
-            p_win: stats.p_win,
-            p_tail_loss: 1.0 - stats.p_win,
-            p_timeout_exit: 0.5,
-            n_eff: 0.0,
-            confidence: sandbox_quant::ev::ConfidenceLevel::Low,
-            prob_model_version: "y-normal-v1".to_string(),
-        },
-        ev_model_version: "y-normal-spot-fut-v1".to_string(),
-        computed_at_ms: now_ms,
-    })
 }
 
 pub(super) fn enabled_instruments(

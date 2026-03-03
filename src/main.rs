@@ -10,9 +10,10 @@ use app_helpers::*;
 use sandbox_quant::binance::rest::BinanceRestClient;
 use sandbox_quant::binance::ws::BinanceWsClient;
 use sandbox_quant::config::{parse_interval_ms, Config};
+use sandbox_quant::doctor::maybe_run_doctor_from_args;
+use sandbox_quant::error::AppError;
 use sandbox_quant::ev::{
-    futures_ev_from_y_normal, spot_ev_from_y_normal, EntryExpectancySnapshot, EvEstimatorConfig,
-    EwmaYModel, EwmaYModelConfig, FuturesEvInputs, PositionSide, SpotEvInputs, YNormal,
+    EntryExpectancySnapshot, EvEstimatorConfig, EwmaYModel, EwmaYModelConfig,
 };
 use sandbox_quant::event::{AppEvent, AssetPnlEntry, LogDomain, LogLevel, LogRecord};
 use sandbox_quant::input::{
@@ -31,22 +32,23 @@ use sandbox_quant::predictor::{
     predictor_metrics_scope_key, stride_closes, OnlinePredictorMetrics, PendingPrediction,
     PREDICTOR_METRIC_WINDOW, PREDICTOR_WINDOW_MAX,
 };
-use sandbox_quant::strategy::aroon_trend::AroonTrendStrategy;
-use sandbox_quant::strategy::atr_expansion::AtrExpansionStrategy;
-use sandbox_quant::strategy::bollinger_reversion::BollingerReversionStrategy;
-use sandbox_quant::strategy::channel_breakout::ChannelBreakoutStrategy;
-use sandbox_quant::strategy::donchian_trend::DonchianTrendStrategy;
-use sandbox_quant::strategy::ema_crossover::EmaCrossover;
-use sandbox_quant::strategy::ensemble_vote::EnsembleVoteStrategy;
-use sandbox_quant::strategy::ma_crossover::MaCrossover;
-use sandbox_quant::strategy::ma_reversion::MaReversionStrategy;
-use sandbox_quant::strategy::macd_crossover::MacdCrossoverStrategy;
-use sandbox_quant::strategy::opening_range_breakout::OpeningRangeBreakoutStrategy;
-use sandbox_quant::strategy::regime_switch::RegimeSwitchStrategy;
-use sandbox_quant::strategy::roc_momentum::RocMomentumStrategy;
-use sandbox_quant::strategy::rsa::RsaStrategy;
-use sandbox_quant::strategy::stochastic_reversion::StochasticReversionStrategy;
-use sandbox_quant::strategy::volatility_compression::VolatilityCompressionStrategy;
+use sandbox_quant::runtime::predictor_eval::{
+    observe_predictor_eval_volatility, predictor_eval_scale, PredictorEvalVolState,
+};
+use sandbox_quant::runtime::entry_pipeline::{
+    estimate_open_position_snapshot_for_signal, fallback_sigma_for_market,
+    mark_ev_zero_exit_if_needed,
+};
+use sandbox_quant::runtime::internal_exit_flow::process_internal_exit_for_instrument;
+use sandbox_quant::runtime::order_execution_flow::{
+    handle_buy_fill_followups, should_track_sell_close,
+};
+use sandbox_quant::runtime::order_history_sync_flow::process_periodic_sync_for_instrument;
+use sandbox_quant::runtime::portfolio_sync::build_live_futures_positions;
+use sandbox_quant::runtime::signal_executor::{
+    evaluate_prequeue_buy_entry, evaluate_risk_buy_signal,
+};
+use sandbox_quant::runtime::strategy_runtime::StrategyRuntime;
 use sandbox_quant::strategy_catalog::{
     strategy_kind_category_for_label, strategy_type_options_by_category, StrategyCatalog,
     StrategyKind, StrategyProfile,
@@ -65,158 +67,31 @@ mod ui_handlers;
 const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
 
-#[derive(Debug, Clone, Copy, Default)]
-struct PredictorEvalVolState {
-    last_price: Option<f64>,
-    var: f64,
-    ready: bool,
+fn is_binance_invalid_signature_error(err: &anyhow::Error) -> bool {
+    if let Some(AppError::BinanceApi { code, .. }) = err.downcast_ref::<AppError>() {
+        return *code == -1022;
+    }
+    err.chain()
+        .any(|cause| cause.to_string().contains("code -1022"))
 }
 
-fn observe_predictor_eval_volatility(st: &mut PredictorEvalVolState, price: f64, alpha_var: f64) {
-    if price <= f64::EPSILON {
-        return;
-    }
-    if let Some(prev) = st.last_price {
-        if prev > f64::EPSILON {
-            let r = (price / prev).ln();
-            if !st.ready {
-                st.var = r * r;
-                st.ready = true;
-            } else {
-                let a = alpha_var.clamp(0.0, 1.0);
-                st.var = (1.0 - a) * st.var + a * (r * r);
-            }
-        }
-    }
-    st.last_price = Some(price);
-}
-
-fn predictor_eval_scale(st: &PredictorEvalVolState, min_sigma: f64) -> f64 {
-    if st.ready {
-        st.var.max(0.0).sqrt().max(min_sigma.max(1e-8))
-    } else {
-        min_sigma.max(1e-8)
-    }
-}
-
-#[derive(Debug)]
-enum StrategyRuntime {
-    Ma(MaCrossover),
-    Ema(EmaCrossover),
-    Atr(AtrExpansionStrategy),
-    Vlc(VolatilityCompressionStrategy),
-    Chb(ChannelBreakoutStrategy),
-    Orb(OpeningRangeBreakoutStrategy),
-    Rsa(RsaStrategy),
-    Dct(DonchianTrendStrategy),
-    Mrv(MaReversionStrategy),
-    Bbr(BollingerReversionStrategy),
-    Sto(StochasticReversionStrategy),
-    Reg(RegimeSwitchStrategy),
-    Ens(EnsembleVoteStrategy),
-    Mac(MacdCrossoverStrategy),
-    Roc(RocMomentumStrategy),
-    Arn(AroonTrendStrategy),
-}
-
-impl StrategyRuntime {
-    fn from_profile(profile: &StrategyProfile) -> Self {
-        let (fast, slow, min_ticks) = profile.periods_tuple();
-        match profile.strategy_kind() {
-            StrategyKind::Rsa => {
-                let period = fast.max(2);
-                let upper = slow.clamp(51, 95) as f64;
-                let lower = 100.0 - upper;
-                Self::Rsa(RsaStrategy::new(period, lower, upper, min_ticks))
-            }
-            StrategyKind::Dct => Self::Dct(DonchianTrendStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Mrv => Self::Mrv(MaReversionStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Bbr => Self::Bbr(BollingerReversionStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Sto => Self::Sto(StochasticReversionStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Atr => Self::Atr(AtrExpansionStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Vlc => {
-                Self::Vlc(VolatilityCompressionStrategy::new(fast, slow, min_ticks))
-            }
-            StrategyKind::Chb => Self::Chb(ChannelBreakoutStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Orb => {
-                Self::Orb(OpeningRangeBreakoutStrategy::new(fast, slow, min_ticks))
-            }
-            StrategyKind::Ema => Self::Ema(EmaCrossover::new(fast, slow, min_ticks)),
-            StrategyKind::Reg => Self::Reg(RegimeSwitchStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Ens => Self::Ens(EnsembleVoteStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Mac => Self::Mac(MacdCrossoverStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Roc => Self::Roc(RocMomentumStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Arn => Self::Arn(AroonTrendStrategy::new(fast, slow, min_ticks)),
-            StrategyKind::Ma => Self::Ma(MaCrossover::new(fast, slow, min_ticks)),
-        }
-    }
-
-    fn on_tick(&mut self, tick: &Tick) -> Signal {
-        match self {
-            Self::Ma(s) => s.on_tick(tick),
-            Self::Ema(s) => s.on_tick(tick),
-            Self::Atr(s) => s.on_tick(tick),
-            Self::Vlc(s) => s.on_tick(tick),
-            Self::Chb(s) => s.on_tick(tick),
-            Self::Orb(s) => s.on_tick(tick),
-            Self::Rsa(s) => s.on_tick(tick),
-            Self::Dct(s) => s.on_tick(tick),
-            Self::Mrv(s) => s.on_tick(tick),
-            Self::Bbr(s) => s.on_tick(tick),
-            Self::Sto(s) => s.on_tick(tick),
-            Self::Reg(s) => s.on_tick(tick),
-            Self::Ens(s) => s.on_tick(tick),
-            Self::Mac(s) => s.on_tick(tick),
-            Self::Roc(s) => s.on_tick(tick),
-            Self::Arn(s) => s.on_tick(tick),
-        }
-    }
-
-    fn fast_sma_value(&self) -> Option<f64> {
-        match self {
-            Self::Ma(s) => s.fast_sma_value(),
-            Self::Ema(s) => s.fast_ema_value(),
-            Self::Atr(_) => None,
-            Self::Vlc(s) => s.mean_value(),
-            Self::Chb(_) => None,
-            Self::Orb(_) => None,
-            Self::Rsa(_) => None,
-            Self::Dct(_) => None,
-            Self::Mrv(s) => s.mean_value(),
-            Self::Bbr(s) => s.mean_value(),
-            Self::Sto(_) => None,
-            Self::Reg(_) => None,
-            Self::Ens(_) => None,
-            Self::Mac(_) => None,
-            Self::Roc(_) => None,
-            Self::Arn(_) => None,
-        }
-    }
-
-    fn slow_sma_value(&self) -> Option<f64> {
-        match self {
-            Self::Ma(s) => s.slow_sma_value(),
-            Self::Ema(s) => s.slow_ema_value(),
-            Self::Atr(_) => None,
-            Self::Vlc(_) => None,
-            Self::Chb(_) => None,
-            Self::Orb(_) => None,
-            Self::Rsa(_) => None,
-            Self::Dct(_) => None,
-            Self::Mrv(_) => None,
-            Self::Bbr(_) => None,
-            Self::Sto(_) => None,
-            Self::Reg(_) => None,
-            Self::Ens(_) => None,
-            Self::Mac(_) => None,
-            Self::Roc(_) => None,
-            Self::Arn(_) => None,
-        }
-    }
+fn credential_lens_hint(config: &Config) -> String {
+    format!(
+        "spot_key_len={} spot_secret_len={} futures_key_len={} futures_secret_len={}",
+        config.binance.api_key.len(),
+        config.binance.api_secret.len(),
+        config.binance.futures_api_key.len(),
+        config.binance.futures_api_secret.len(),
+    )
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if maybe_run_doctor_from_args(&args).await? {
+        return Ok(());
+    }
+
     // Install rustls crypto provider (required by rustls 0.23+)
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -330,6 +205,7 @@ async fn main() -> Result<()> {
         &config.binance.futures_api_secret,
         config.binance.recv_window,
     ));
+    let (initial_api_symbol, initial_market) = parse_instrument_label(&initial_symbol);
 
     // Verify connectivity and log to TUI
     let ping_app_tx = app_tx.clone();
@@ -358,8 +234,57 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Verify signed endpoint auth early; fail fast on invalid signature (-1022).
+    let auth_check_result = if initial_market == MarketKind::Futures {
+        rest_client
+            .get_futures_account()
+            .await
+            .map(|_| "futures account auth OK")
+    } else {
+        rest_client
+            .get_account()
+            .await
+            .map(|_| "spot account auth OK")
+    };
+    match auth_check_result {
+        Ok(msg) => {
+            let _ = app_tx
+                .send(app_log(
+                    LogLevel::Info,
+                    LogDomain::System,
+                    "rest.auth.ok",
+                    msg,
+                ))
+                .await;
+        }
+        Err(e) => {
+            let host_hint = format!(
+                "rest_base_url={} futures_rest_base_url={}",
+                config.binance.rest_base_url, config.binance.futures_rest_base_url
+            );
+            let cred_hint = credential_lens_hint(&config);
+            let action_hint = if is_binance_invalid_signature_error(&e) {
+                "Signed request auth failed (-1022). Check API key/secret pair for this endpoint environment (demo/testnet vs live), then restart."
+            } else {
+                "Signed request auth failed. Check API key permissions and endpoint environment."
+            };
+            let detail = format!(
+                "{} [{}] [{}] cause={}",
+                action_hint, host_hint, cred_hint, e
+            );
+            let _ = app_tx
+                .send(app_log(
+                    LogLevel::Error,
+                    LogDomain::System,
+                    "rest.auth.fail",
+                    detail.clone(),
+                ))
+                .await;
+            return Err(anyhow::anyhow!(detail));
+        }
+    }
+
     // Fetch historical klines to pre-fill chart
-    let (initial_api_symbol, initial_market) = parse_instrument_label(&initial_symbol);
     let historical_candles = match rest_client
         .get_klines_for_market(
             &initial_api_symbol,
@@ -509,6 +434,7 @@ async fn main() -> Result<()> {
             .collect();
         let mut order_managers: HashMap<String, OrderManager> = HashMap::new();
         let mut realized_pnl_by_symbol: HashMap<String, f64> = HashMap::new();
+        let mut live_futures_positions: HashMap<String, AssetPnlEntry> = HashMap::new();
         let mut strategy_stats_by_instrument: HashMap<String, HashMap<String, OrderHistoryStats>> =
             HashMap::new();
         let ev_cfg = EvEstimatorConfig {
@@ -527,8 +453,6 @@ async fn main() -> Result<()> {
         };
         let ev_enabled = strat_config.ev.enabled;
         let ev_shadow_mode = strat_config.ev.mode.eq_ignore_ascii_case("shadow");
-        let ev_soft_mode = strat_config.ev.mode.eq_ignore_ascii_case("soft");
-        let ev_hard_mode = strat_config.ev.mode.eq_ignore_ascii_case("hard");
         let predictor_horizons = default_predictor_horizons();
         let base_predictor_cfg = EwmaYModelConfig {
             alpha_mean: strat_config.ev.y_ewma_alpha_mean,
@@ -640,17 +564,21 @@ async fn main() -> Result<()> {
                 {
                     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
                     let (_, market) = parse_instrument_label(&instrument);
-                    let fallback_sigma = if market == MarketKind::Futures {
-                        strat_config.ev.y_sigma_futures
-                    } else {
-                        strat_config.ev.y_sigma_spot
-                    };
-                    let y = y_model.estimate(&instrument, strat_config.ev.y_mu, fallback_sigma);
-                    let Some(snapshot) = y_snapshot_for_open_position(
+                    let fallback_sigma = fallback_sigma_for_market(
+                        market,
+                        strat_config.ev.y_sigma_spot,
+                        strat_config.ev.y_sigma_futures,
+                    );
+                    let Some(snapshot) = estimate_open_position_snapshot_for_signal(
                         &ev_cfg,
+                        &y_model,
+                        &instrument,
+                        "sys",
+                        &Signal::Hold,
+                        strat_config.ev.y_mu,
+                        fallback_sigma,
                         market,
                         strat_config.ev.futures_multiplier,
-                        y,
                         mgr.position().entry_price,
                         mgr.position().qty,
                         mgr.position().side,
@@ -671,9 +599,12 @@ async fn main() -> Result<()> {
                             gate_blocked: false,
                         })
                         .await;
-                    if ev_enabled && ev_value <= 0.0 && !ev_zero_exit_enqueued.contains(&instrument)
-                    {
-                        ev_zero_exit_enqueued.insert(instrument.clone());
+                    if mark_ev_zero_exit_if_needed(
+                        &mut ev_zero_exit_enqueued,
+                        &instrument,
+                        ev_enabled,
+                        ev_value,
+                    ) {
                         let _ = strat_app_tx
                             .send(app_log(
                                 LogLevel::Warn,
@@ -706,6 +637,23 @@ async fn main() -> Result<()> {
                 emit_rate_snapshot(&strat_app_tx, mgr);
             }
         }
+        match strat_rest.get_futures_position_risk().await {
+            Ok(rows) => {
+                live_futures_positions = build_live_futures_positions(&rows, |symbol| {
+                    normalize_instrument_label(&format!("{} (FUT)", symbol))
+                });
+            }
+            Err(e) => {
+                let _ = strat_app_tx
+                    .send(app_log(
+                        LogLevel::Warn,
+                        LogDomain::Portfolio,
+                        "futures.positions.bootstrap.fail",
+                        format!("Futures position bootstrap failed: {}", e),
+                    ))
+                    .await;
+            }
+        }
         let _ = strat_app_tx
             .send(AppEvent::StrategyStatsUpdate {
                 strategy_stats: build_scoped_strategy_stats(&strategy_stats_by_instrument),
@@ -713,7 +661,11 @@ async fn main() -> Result<()> {
             .await;
         let _ = strat_app_tx
             .send(AppEvent::AssetPnlUpdate {
-                by_symbol: build_asset_pnl_snapshot(&order_managers, &realized_pnl_by_symbol),
+                by_symbol: build_asset_pnl_snapshot(
+                    &order_managers,
+                    &realized_pnl_by_symbol,
+                    &live_futures_positions,
+                ),
             })
             .await;
 
@@ -879,11 +831,11 @@ async fn main() -> Result<()> {
                     );
                     if tick.price > f64::EPSILON {
                         let (_, tick_market) = parse_instrument_label(&tick_symbol);
-                        let fallback_sigma = if tick_market == MarketKind::Futures {
-                            strat_config.ev.y_sigma_futures
-                        } else {
-                            strat_config.ev.y_sigma_spot
-                        };
+                        let fallback_sigma = fallback_sigma_for_market(
+                            tick_market,
+                            strat_config.ev.y_sigma_spot,
+                            strat_config.ev.y_sigma_futures,
+                        );
                         for (predictor_id, predictor_model) in predictor_models.iter() {
                             let y_for_predictor = predictor_model.estimate_base(
                                 &tick_symbol,
@@ -1059,13 +1011,14 @@ async fn main() -> Result<()> {
                     if now_ms.saturating_sub(last_asset_pnl_emit_ms) >= 300 {
                         last_asset_pnl_emit_ms = now_ms;
                         let _ = strat_app_tx
-                            .send(AppEvent::AssetPnlUpdate {
-                                by_symbol: build_asset_pnl_snapshot(
-                                    &order_managers,
-                                    &realized_pnl_by_symbol,
-                                ),
-                            })
-                            .await;
+                                .send(AppEvent::AssetPnlUpdate {
+                                    by_symbol: build_asset_pnl_snapshot(
+                                        &order_managers,
+                                        &realized_pnl_by_symbol,
+                                        &live_futures_positions,
+                                    ),
+                                })
+                                .await;
                     }
 
                     for (source_tag, profile) in &profiles_by_tag {
@@ -1081,11 +1034,11 @@ async fn main() -> Result<()> {
                         let queue_instrument = normalize_instrument_label(&profile.symbol);
                         let source_tag_lc = source_tag.to_ascii_lowercase();
                         let (_, market) = parse_instrument_label(&queue_instrument);
-                        let fallback_sigma = if market == MarketKind::Futures {
-                            strat_config.ev.y_sigma_futures
-                        } else {
-                            strat_config.ev.y_sigma_spot
-                        };
+                        let fallback_sigma = fallback_sigma_for_market(
+                            market,
+                            strat_config.ev.y_sigma_spot,
+                            strat_config.ev.y_sigma_futures,
+                        );
                         for predictor_model in predictor_models.values_mut() {
                             predictor_model.observe_signal_price(
                                 &tick_symbol,
@@ -1120,51 +1073,51 @@ async fn main() -> Result<()> {
                                     .get(&queue_instrument)
                                     .map(|m| m.position().is_flat())
                                     .unwrap_or(true);
-                                let y = y_model.estimate_for_signal(
+                                if let Some(eval) = evaluate_prequeue_buy_entry(
+                                    &ev_cfg,
+                                    &y_model,
                                     &queue_instrument,
                                     &source_tag_lc,
-                                    &Signal::Buy,
+                                    market,
                                     strat_config.ev.y_mu,
                                     fallback_sigma,
-                                );
-                                if let Some(snapshot) = y_snapshot_for_entry(
-                                    &ev_cfg,
-                                    market,
                                     strat_config.ev.futures_multiplier,
-                                    y,
                                     strat_config.strategy.order_amount_usdt,
                                     tick.price,
                                     strat_config.exit.max_holding_ms,
                                     now_ms,
+                                    &strat_config.ev.mode,
+                                    strat_config.ev.entry_gate_min_ev_usdt,
+                                    is_buy_entry_attempt,
                                 ) {
-                                    let ev = snapshot.expected_return_usdt;
-                                    let p_win = snapshot.probability.p_win;
-                                    let gate_blocked = is_buy_entry_attempt
-                                        && ev_hard_mode
-                                        && ev <= strat_config.ev.entry_gate_min_ev_usdt;
+                                    let decision = eval.decision;
                                     let _ = strat_app_tx
                                         .send(AppEvent::EvSnapshotUpdate {
                                             symbol: queue_instrument.clone(),
                                             source_tag: source_tag_lc.clone(),
-                                            ev,
+                                            ev: decision.expected_return_usdt,
                                             entry_ev: None,
-                                            p_win,
+                                            p_win: decision.p_win,
                                             gate_mode: strat_config.ev.mode.clone(),
-                                            gate_blocked,
+                                            gate_blocked: decision.gate_blocked,
                                         })
                                         .await;
                                     if is_buy_entry_attempt {
                                         pending_entry_expectancy
-                                            .insert(queue_instrument.clone(), snapshot);
+                                            .insert(queue_instrument.clone(), eval.snapshot);
                                     }
                                     let _ = strat_app_tx
                                         .send(app_log(
                                             LogLevel::Info,
                                             LogDomain::Strategy,
-                                            "ev.signal.snapshot",
+                                            decision.log_event,
                                             format!(
                                                 "EV snapshot(prequeue,forward): {} src={} ev={:+.4} p_win={:.3} entry_attempt={}",
-                                                queue_instrument, source_tag_lc, ev, p_win, is_buy_entry_attempt
+                                                queue_instrument,
+                                                source_tag_lc,
+                                                decision.expected_return_usdt,
+                                                decision.p_win,
+                                                is_buy_entry_attempt
                                             ),
                                         ))
                                         .await;
@@ -1342,89 +1295,52 @@ async fn main() -> Result<()> {
                         let mut block_by_ev_gate = false;
                         if ev_enabled && is_buy_signal {
                             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                            let snapshot = if is_buy_entry_attempt {
-                                pending_entry_expectancy
-                                    .get(&instrument)
-                                    .cloned()
-                                    .or_else(|| {
-                                        mgr.last_price().and_then(|price| {
-                                            let (_, market) = parse_instrument_label(&instrument);
-                                            let fallback_sigma = if market == MarketKind::Futures {
-                                                strat_config.ev.y_sigma_futures
-                                            } else {
-                                                strat_config.ev.y_sigma_spot
-                                            };
-                                            let y = y_model.estimate_for_signal(
-                                                &instrument,
-                                                &source_tag_lc,
-                                                &Signal::Buy,
-                                                strat_config.ev.y_mu,
-                                                fallback_sigma,
-                                            );
-                                            y_snapshot_for_entry(
-                                                &ev_cfg,
-                                                market,
-                                                strat_config.ev.futures_multiplier,
-                                                y,
-                                                strat_config.strategy.order_amount_usdt,
-                                                price,
-                                                strat_config.exit.max_holding_ms,
-                                                now_ms,
-                                            )
-                                        })
-                                    })
-                            } else if mgr.position().qty.abs() > f64::EPSILON
-                                && mgr.position().entry_price > f64::EPSILON
-                            {
-                                let (_, market) = parse_instrument_label(&instrument);
-                                let fallback_sigma = if market == MarketKind::Futures {
-                                    strat_config.ev.y_sigma_futures
-                                } else {
-                                    strat_config.ev.y_sigma_spot
-                                };
-                                let y = y_model.estimate_for_signal(
-                                    &instrument,
-                                    &source_tag_lc,
-                                    &signal,
-                                    strat_config.ev.y_mu,
-                                    fallback_sigma,
-                                );
-                                y_snapshot_for_open_position(
-                                    &ev_cfg,
-                                    market,
-                                    strat_config.ev.futures_multiplier,
-                                    y,
-                                    mgr.position().entry_price,
-                                    mgr.position().qty,
-                                    mgr.position().side,
-                                    strat_config.exit.max_holding_ms,
-                                    now_ms,
-                                )
-                            } else {
-                                None
-                            };
-                            if let Some(snapshot) = snapshot {
-                                let ev = snapshot.expected_return_usdt;
-                                let p_win = snapshot.probability.p_win;
-                                if is_buy_entry_attempt
-                                    && ev_hard_mode
-                                    && ev <= strat_config.ev.entry_gate_min_ev_usdt
-                                {
-                                    block_by_ev_gate = true;
-                                }
+                            let (_, market) = parse_instrument_label(&instrument);
+                            let fallback_sigma = fallback_sigma_for_market(
+                                market,
+                                strat_config.ev.y_sigma_spot,
+                                strat_config.ev.y_sigma_futures,
+                            );
+                            let pending_snapshot =
+                                pending_entry_expectancy.get(&instrument).cloned();
+                            if let Some(eval) = evaluate_risk_buy_signal(
+                                &ev_cfg,
+                                &y_model,
+                                &instrument,
+                                &source_tag_lc,
+                                &signal,
+                                market,
+                                strat_config.ev.y_mu,
+                                fallback_sigma,
+                                strat_config.ev.futures_multiplier,
+                                strat_config.strategy.order_amount_usdt,
+                                strat_config.exit.max_holding_ms,
+                                now_ms,
+                                &strat_config.ev.mode,
+                                strat_config.ev.entry_gate_min_ev_usdt,
+                                is_buy_entry_attempt,
+                                pending_snapshot,
+                                mgr.last_price(),
+                                mgr.position().entry_price,
+                                mgr.position().qty,
+                                mgr.position().side,
+                            ) {
+                                let decision = eval.decision;
+                                block_by_ev_gate = decision.gate_blocked;
                                 let _ = strat_app_tx
                                     .send(AppEvent::EvSnapshotUpdate {
                                         symbol: instrument.clone(),
                                         source_tag: source_tag_lc.clone(),
-                                        ev,
+                                        ev: decision.expected_return_usdt,
                                         entry_ev: None,
-                                        p_win,
+                                        p_win: decision.p_win,
                                         gate_mode: strat_config.ev.mode.clone(),
                                         gate_blocked: block_by_ev_gate,
                                     })
                                     .await;
                                 if is_buy_entry_attempt {
-                                    pending_entry_expectancy.insert(instrument.clone(), snapshot);
+                                    pending_entry_expectancy
+                                        .insert(instrument.clone(), eval.snapshot);
                                 }
                                 let _ = strat_app_tx
                                     .send(app_log(
@@ -1434,22 +1350,14 @@ async fn main() -> Result<()> {
                                             LogLevel::Info
                                         },
                                         LogDomain::Strategy,
-                                        if block_by_ev_gate {
-                                            "ev.entry.gate.block"
-                                        } else if !is_buy_entry_attempt {
-                                            "ev.signal.snapshot"
-                                        } else if ev_soft_mode && ev <= strat_config.ev.entry_gate_min_ev_usdt {
-                                            "ev.entry.gate.soft_warn"
-                                        } else {
-                                            "ev.entry.snapshot"
-                                        },
+                                        decision.log_event,
                                         format!(
                                             "EV snapshot(forward): {} src={} mode={} ev={:+.4} p_win={:.3} gate_min={:+.4} entry_attempt={}",
                                             instrument,
                                             source_tag_lc,
                                             strat_config.ev.mode,
-                                            ev,
-                                            p_win,
+                                            decision.expected_return_usdt,
+                                            decision.p_win,
                                             strat_config.ev.entry_gate_min_ev_usdt,
                                             is_buy_entry_attempt
                                         ),
@@ -1514,184 +1422,37 @@ async fn main() -> Result<()> {
                                 }
                                 if let OrderUpdate::Filled { side, fills, avg_price, .. } = update {
                                     let filled_qty: f64 = fills.iter().map(|f| f.qty).sum();
-                                    if ev_enabled
-                                        && matches!(side, sandbox_quant::model::order::OrderSide::Buy)
-                                        && is_buy_entry_attempt
-                                        && filled_qty > f64::EPSILON
-                                    {
-                                        let fallback_now = chrono::Utc::now().timestamp_millis() as u64;
-                                        let expectancy = pending_entry_expectancy
-                                            .remove(&instrument)
-                                            .or_else(|| {
-                                                let (_, market) = parse_instrument_label(&instrument);
-                                                let fallback_sigma = if market == MarketKind::Futures {
-                                                    strat_config.ev.y_sigma_futures
-                                                } else {
-                                                    strat_config.ev.y_sigma_spot
-                                                };
-                                                let y = y_model.estimate_for_signal(
-                                                    &instrument,
-                                                    &source_tag_lc,
-                                                    &Signal::Buy,
-                                                    strat_config.ev.y_mu,
-                                                    fallback_sigma,
-                                                );
-                                                y_snapshot_for_entry(
-                                                    &ev_cfg,
-                                                    market,
-                                                    strat_config.ev.futures_multiplier,
-                                                    y,
-                                                    strat_config.strategy.order_amount_usdt,
-                                                    *avg_price,
-                                                    strat_config.exit.max_holding_ms,
-                                                    fallback_now,
-                                                )
-                                            });
-                                        if let Some(expectancy) = expectancy {
-                                            let position_id = lifecycle_engine.on_entry_filled(
-                                                &instrument,
-                                                &source_tag_lc,
-                                                *avg_price,
-                                                filled_qty,
-                                                &expectancy,
-                                                fallback_now,
-                                            );
-                                            let _ = strat_app_tx
-                                                .send(AppEvent::ExitPolicyUpdate {
-                                                    symbol: instrument.clone(),
-                                                    source_tag: source_tag_lc.clone(),
-                                                    stop_price: None,
-                                                    expected_holding_ms: Some(
-                                                        expectancy.expected_holding_ms,
-                                                    ),
-                                                    protective_stop_ok: None,
-                                                })
-                                                .await;
-                                            let _ = strat_app_tx
-                                                .send(AppEvent::EvSnapshotUpdate {
-                                                    symbol: instrument.clone(),
-                                                    source_tag: source_tag_lc.clone(),
-                                                    ev: expectancy.expected_return_usdt,
-                                                    entry_ev: Some(expectancy.expected_return_usdt),
-                                                    p_win: expectancy.probability.p_win,
-                                                    gate_mode: strat_config.ev.mode.clone(),
-                                                    gate_blocked: false,
-                                                })
-                                                .await;
-                                            lifecycle_triggered_once.remove(&instrument);
-                                            let _ = strat_app_tx
-                                                .send(app_log(
-                                                    LogLevel::Info,
-                                                    LogDomain::Risk,
-                                                    "lifecycle.entry",
-                                                    format!(
-                                                        "Lifecycle entry tracked: {} pos={} hold_ms={}",
-                                                        instrument, position_id, expectancy.expected_holding_ms
-                                                    ),
-                                                ))
-                                                .await;
-                                        }
-                                        if strat_config.exit.enforce_protective_stop {
-                                            let stop_price =
-                                                *avg_price * (1.0 - strat_config.exit.stop_loss_pct.max(0.0));
-                                            match mgr
-                                                .place_protective_stop_for_open_position(&source_tag_lc, stop_price)
-                                                .await
-                                            {
-                                                Ok(Some(stop_order_id)) => {
-                                                    lifecycle_engine.set_stop_loss_order_id(
-                                                        &instrument,
-                                                        Some(stop_order_id.clone()),
-                                                    );
-                                                    let _ = strat_app_tx
-                                                        .send(AppEvent::ExitPolicyUpdate {
-                                                            symbol: instrument.clone(),
-                                                            source_tag: source_tag_lc.clone(),
-                                                            stop_price: Some(stop_price),
-                                                            expected_holding_ms: None,
-                                                            protective_stop_ok: Some(true),
-                                                        })
-                                                        .await;
-                                                    let _ = strat_app_tx
-                                                        .send(app_log(
-                                                            LogLevel::Info,
-                                                            LogDomain::Risk,
-                                                            "protective_stop.ensure",
-                                                            format!(
-                                                                "Protective stop ensured: {} src={} stop={:.4} order={}",
-                                                                instrument, source_tag_lc, stop_price, stop_order_id
-                                                            ),
-                                                        ))
-                                                        .await;
-                                                }
-                                                Ok(None) => {
-                                                    let _ = strat_app_tx
-                                                        .send(AppEvent::ExitPolicyUpdate {
-                                                            symbol: instrument.clone(),
-                                                            source_tag: source_tag_lc.clone(),
-                                                            stop_price: Some(stop_price),
-                                                            expected_holding_ms: None,
-                                                            protective_stop_ok: Some(false),
-                                                        })
-                                                        .await;
-                                                    let _ = strat_app_tx
-                                                        .send(app_log(
-                                                            LogLevel::Warn,
-                                                            LogDomain::Risk,
-                                                            "protective_stop.missing",
-                                                            format!(
-                                                                "Protective stop unavailable: {} src={} stop={:.4}",
-                                                                instrument, source_tag_lc, stop_price
-                                                            ),
-                                                        ))
-                                                        .await;
-                                                    if !ev_shadow_mode {
-                                                        let _ = internal_exit_tx
-                                                            .send((
-                                                                instrument.clone(),
-                                                                "exit.stop_loss_protection".to_string(),
-                                                            ))
-                                                            .await;
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    let _ = strat_app_tx
-                                                        .send(AppEvent::ExitPolicyUpdate {
-                                                            symbol: instrument.clone(),
-                                                            source_tag: source_tag_lc.clone(),
-                                                            stop_price: Some(stop_price),
-                                                            expected_holding_ms: None,
-                                                            protective_stop_ok: Some(false),
-                                                        })
-                                                        .await;
-                                                    let _ = strat_app_tx
-                                                        .send(app_log(
-                                                            LogLevel::Warn,
-                                                            LogDomain::Risk,
-                                                            "protective_stop.ensure.fail",
-                                                            format!(
-                                                                "Protective stop ensure failed ({}|{}): {}",
-                                                                instrument, source_tag_lc, e
-                                                            ),
-                                                        ))
-                                                        .await;
-                                                    if !ev_shadow_mode {
-                                                        let _ = internal_exit_tx
-                                                            .send((
-                                                                instrument.clone(),
-                                                                "exit.stop_loss_protection".to_string(),
-                                                            ))
-                                                            .await;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                    let (_, market) = parse_instrument_label(&instrument);
+                                    handle_buy_fill_followups(
+                                        &strat_app_tx,
+                                        &internal_exit_tx,
+                                        &mut lifecycle_engine,
+                                        &mut lifecycle_triggered_once,
+                                        &mut pending_entry_expectancy,
+                                        mgr,
+                                        &instrument,
+                                        &source_tag_lc,
+                                        *avg_price,
+                                        filled_qty,
+                                        is_buy_entry_attempt,
+                                        ev_enabled,
+                                        ev_shadow_mode,
+                                        &strat_config.ev.mode,
+                                        &ev_cfg,
+                                        &y_model,
+                                        market,
+                                        strat_config.ev.y_mu,
+                                        strat_config.ev.y_sigma_spot,
+                                        strat_config.ev.y_sigma_futures,
+                                        strat_config.ev.futures_multiplier,
+                                        strat_config.strategy.order_amount_usdt,
+                                        strat_config.exit.max_holding_ms,
+                                        strat_config.exit.enforce_protective_stop,
+                                        strat_config.exit.stop_loss_pct,
+                                    )
+                                    .await;
 
-                                    if ev_enabled
-                                        && matches!(side, sandbox_quant::model::order::OrderSide::Sell)
-                                        && mgr.position().is_flat()
-                                    {
+                                    if should_track_sell_close(ev_enabled, *side, mgr.position().is_flat()) {
                                         lifecycle_triggered_once.remove(&instrument);
                                         if let Some(state) = lifecycle_engine.on_position_closed(&instrument) {
                                             let _ = strat_app_tx
@@ -1725,13 +1486,14 @@ async fn main() -> Result<()> {
                     }
                     if emit_asset_snapshot {
                         let _ = strat_app_tx
-                            .send(AppEvent::AssetPnlUpdate {
-                                by_symbol: build_asset_pnl_snapshot(
-                                    &order_managers,
-                                    &realized_pnl_by_symbol,
-                                ),
-                            })
-                            .await;
+                                .send(AppEvent::AssetPnlUpdate {
+                                    by_symbol: build_asset_pnl_snapshot(
+                                        &order_managers,
+                                        &realized_pnl_by_symbol,
+                                        &live_futures_positions,
+                                    ),
+                                })
+                                .await;
                     }
                 }
                 Some((instrument, reason_code)) = internal_exit_rx.recv() => {
@@ -1762,125 +1524,29 @@ async fn main() -> Result<()> {
                     }
                     let mut emit_asset_snapshot = false;
                     if let Some(mgr) = order_managers.get_mut(&instrument) {
-                        let mut close_failed_reason: Option<String> = None;
-                        let mut close_reject_code: Option<String> = None;
-                        match mgr
-                            .emergency_close_position(&source_tag_lc, &reason_code)
-                            .await
-                        {
-                            Ok(Some(ref update)) => {
-                                if let OrderUpdate::Rejected {
-                                    reason_code,
-                                    reason,
-                                    ..
-                                } = update
-                                {
-                                    close_reject_code = Some(reason_code.clone());
-                                    close_failed_reason = Some(reason.clone());
-                                }
-                                if instrument == selected_symbol {
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::OrderUpdate(update.clone()))
-                                        .await;
-                                }
-                                match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                                    Ok(history) => {
-                                        strategy_stats_by_instrument
-                                            .insert(instrument.clone(), history.strategy_stats.clone());
-                                        realized_pnl_by_symbol
-                                            .insert(instrument.clone(), history.stats.realized_pnl);
-                                        if instrument == selected_symbol {
-                                            let _ = strat_app_tx
-                                                .send(AppEvent::OrderHistoryUpdate(history))
-                                                .await;
-                                        }
-                                        let _ = strat_app_tx
-                                            .send(AppEvent::StrategyStatsUpdate {
-                                                strategy_stats: build_scoped_strategy_stats(
-                                                    &strategy_stats_by_instrument,
-                                                ),
-                                            })
-                                            .await;
-                                    }
-                                    Err(e) => {
-                                        let _ = strat_app_tx
-                                            .send(app_log(
-                                                LogLevel::Warn,
-                                                LogDomain::Order,
-                                                "history.refresh.fail",
-                                                format!("Order history refresh failed: {}", e),
-                                            ))
-                                            .await;
-                                    }
-                                }
-                                if let OrderUpdate::Filled { .. } = update {
-                                    lifecycle_triggered_once.remove(&instrument);
-                                    if let Some(state) = lifecycle_engine.on_position_closed(&instrument) {
-                                        let _ = strat_app_tx
-                                            .send(app_log(
-                                                LogLevel::Info,
-                                                LogDomain::Risk,
-                                                "lifecycle.close.internal",
-                                                format!(
-                                                    "Lifecycle internal close: {} pos={} reason={} mfe={:+.4} mae={:+.4}",
-                                                    instrument, state.position_id, reason_code, state.mfe_usdt, state.mae_usdt
-                                                ),
-                                            ))
-                                            .await;
-                                    }
-                                    if let Ok(balances) = mgr.refresh_balances().await {
-                                        if instrument == selected_symbol {
-                                            let _ = strat_app_tx.send(AppEvent::BalanceUpdate(balances)).await;
-                                        }
-                                    }
-                                }
-                                emit_asset_snapshot = true;
-                                emit_rate_snapshot(&strat_app_tx, mgr);
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                close_failed_reason = Some(e.to_string());
-                                let _ = strat_app_tx.send(AppEvent::Error(e.to_string())).await;
-                            }
+                        let result = process_internal_exit_for_instrument(
+                            &strat_app_tx,
+                            mgr,
+                            &instrument,
+                            &source_tag_lc,
+                            &reason_code,
+                            &selected_symbol,
+                            ORDER_HISTORY_LIMIT,
+                            close_all_job_id,
+                            &mut close_all_jobs,
+                            &mut strategy_stats_by_instrument,
+                            &mut realized_pnl_by_symbol,
+                            &mut lifecycle_triggered_once,
+                            &mut lifecycle_engine,
+                            close_all_soft_skip_reason,
+                            build_scoped_strategy_stats,
+                        )
+                        .await;
+                        if result.emit_asset_snapshot {
+                            emit_asset_snapshot = true;
                         }
-                        if let Some(job_id) = close_all_job_id {
-                            let (total, completed, failed) =
-                                if let Some(state) = close_all_jobs.get_mut(&job_id) {
-                                    state.1 = state.1.saturating_add(1);
-                                    let is_soft_skip = close_reject_code
-                                        .as_deref()
-                                        .map(close_all_soft_skip_reason)
-                                        .unwrap_or(false);
-                                    if close_failed_reason.is_some() && !is_soft_skip {
-                                        state.2 = state.2.saturating_add(1);
-                                    }
-                                    (state.0, state.1, state.2)
-                                } else {
-                                    (0, 0, 0)
-                                };
-                            if total > 0 || completed > 0 {
-                                let _ = strat_app_tx
-                                    .send(AppEvent::CloseAllProgress {
-                                        job_id,
-                                        symbol: instrument.clone(),
-                                        completed,
-                                        total,
-                                        failed,
-                                        reason: close_failed_reason.clone(),
-                                    })
-                                    .await;
-                                if completed >= total {
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::CloseAllFinished {
-                                            job_id,
-                                            completed,
-                                            total,
-                                            failed,
-                                        })
-                                        .await;
-                                    close_all_jobs.remove(&job_id);
-                                }
-                            }
+                        if result.emit_rate_snapshot {
+                            emit_rate_snapshot(&strat_app_tx, mgr);
                         }
                     }
                     if emit_asset_snapshot {
@@ -1889,110 +1555,53 @@ async fn main() -> Result<()> {
                                 by_symbol: build_asset_pnl_snapshot(
                                     &order_managers,
                                     &realized_pnl_by_symbol,
+                                    &live_futures_positions,
                                 ),
                             })
                             .await;
                     }
                 }
                 _ = order_history_sync.tick() => {
+                    match strat_rest.get_futures_position_risk().await {
+                        Ok(rows) => {
+                            live_futures_positions = build_live_futures_positions(&rows, |symbol| {
+                                normalize_instrument_label(&format!("{} (FUT)", symbol))
+                            });
+                        }
+                        Err(e) => {
+                            let _ = strat_app_tx
+                                .send(app_log(
+                                    LogLevel::Warn,
+                                    LogDomain::Portfolio,
+                                    "futures.positions.sync.fail",
+                                    format!("Futures position sync failed: {}", e),
+                                ))
+                                .await;
+                        }
+                    }
                     for (instrument, mgr) in order_managers.iter_mut() {
-                        if mgr.position().is_flat() {
-                            ev_zero_exit_enqueued.remove(instrument);
-                        }
-                        match mgr.refresh_order_history(ORDER_HISTORY_LIMIT).await {
-                            Ok(history) => {
-                                if instrument == &selected_symbol {
-                                    let _ = strat_app_tx
-                                        .send(AppEvent::OrderHistoryUpdate(history.clone()))
-                                        .await;
-                                }
-                                strategy_stats_by_instrument
-                                    .insert(instrument.clone(), history.strategy_stats.clone());
-                                realized_pnl_by_symbol
-                                    .insert(instrument.clone(), history.stats.realized_pnl);
-                            }
-                            Err(e) => {
-                                let _ = strat_app_tx
-                                    .send(app_log(
-                                        LogLevel::Warn,
-                                        LogDomain::Order,
-                                        "history.sync.fail",
-                                        format!(
-                                            "Periodic order history sync failed ({}): {}",
-                                            instrument, e
-                                        ),
-                                    ))
-                                    .await;
-                            }
-                        }
-                        if mgr.position().qty.abs() > f64::EPSILON
-                            && mgr.position().entry_price > f64::EPSILON
-                        {
-                            let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                            let (_, market) = parse_instrument_label(instrument);
-                            let fallback_sigma = if market == MarketKind::Futures {
-                                strat_config.ev.y_sigma_futures
-                            } else {
-                                strat_config.ev.y_sigma_spot
-                            };
-                            let y = y_model.estimate(instrument, strat_config.ev.y_mu, fallback_sigma);
-                            let Some(snapshot) = y_snapshot_for_open_position(
-                                &ev_cfg,
-                                market,
-                                strat_config.ev.futures_multiplier,
-                                y,
-                                mgr.position().entry_price,
-                                mgr.position().qty,
-                                mgr.position().side,
-                                strat_config.exit.max_holding_ms,
-                                now_ms,
-                            ) else {
-                                continue;
-                            };
-                            let ev_value = snapshot.expected_return_usdt;
-                            let _ = strat_app_tx
-                                .send(AppEvent::EvSnapshotUpdate {
-                                    symbol: instrument.clone(),
-                                    source_tag: "sys".to_string(),
-                                    ev: snapshot.expected_return_usdt,
-                                    entry_ev: None,
-                                    p_win: snapshot.probability.p_win,
-                                    gate_mode: strat_config.ev.mode.clone(),
-                                    gate_blocked: false,
-                                })
-                                .await;
-                            if ev_enabled
-                                && ev_value <= 0.0
-                                && !ev_zero_exit_enqueued.contains(instrument)
-                            {
-                                ev_zero_exit_enqueued.insert(instrument.clone());
-                                let _ = strat_app_tx
-                                    .send(app_log(
-                                        LogLevel::Warn,
-                                        LogDomain::Risk,
-                                        "ev.exit.zero",
-                                        format!(
-                                            "EV<=0 forced exit queued: {} ev={:+.4}",
-                                            instrument, ev_value
-                                        ),
-                                    ))
-                                    .await;
-                                let _ = internal_exit_tx
-                                    .send((instrument.clone(), "exit.ev_non_positive".to_string()))
-                                    .await;
-                            }
-                        }
-                        if let Some(stop_price) = derived_stop_price(mgr.position(), strat_config.exit.stop_loss_pct) {
-                            let _ = strat_app_tx
-                                .send(AppEvent::ExitPolicyUpdate {
-                                    symbol: instrument.clone(),
-                                    source_tag: "sys".to_string(),
-                                    stop_price: Some(stop_price),
-                                    expected_holding_ms: None,
-                                    protective_stop_ok: None,
-                                })
-                                .await;
-                        }
+                        process_periodic_sync_for_instrument(
+                            &strat_app_tx,
+                            &internal_exit_tx,
+                            mgr,
+                            instrument,
+                            &selected_symbol,
+                            ORDER_HISTORY_LIMIT,
+                            &mut strategy_stats_by_instrument,
+                            &mut realized_pnl_by_symbol,
+                            &mut ev_zero_exit_enqueued,
+                            ev_enabled,
+                            &strat_config.ev.mode,
+                            &ev_cfg,
+                            &y_model,
+                            strat_config.ev.y_mu,
+                            strat_config.ev.y_sigma_spot,
+                            strat_config.ev.y_sigma_futures,
+                            strat_config.ev.futures_multiplier,
+                            strat_config.exit.max_holding_ms,
+                            strat_config.exit.stop_loss_pct,
+                        )
+                        .await;
                         emit_rate_snapshot(&strat_app_tx, mgr);
                     }
                     let _ = strat_app_tx
@@ -2005,6 +1614,7 @@ async fn main() -> Result<()> {
                             by_symbol: build_asset_pnl_snapshot(
                                 &order_managers,
                                 &realized_pnl_by_symbol,
+                                &live_futures_positions,
                             ),
                         })
                         .await;
@@ -2072,6 +1682,7 @@ async fn main() -> Result<()> {
                                 by_symbol: build_asset_pnl_snapshot(
                                     &order_managers,
                                     &realized_pnl_by_symbol,
+                                    &live_futures_positions,
                                 ),
                             })
                             .await;
@@ -2155,6 +1766,7 @@ async fn main() -> Result<()> {
                             by_symbol: build_asset_pnl_snapshot(
                                 &order_managers,
                                 &realized_pnl_by_symbol,
+                                &live_futures_positions,
                             ),
                         })
                         .await;
