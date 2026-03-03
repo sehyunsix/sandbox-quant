@@ -1,3 +1,7 @@
+## v0.32.3 - 2026-03-03
+
+- Improve portfolio sync and add exchange user-stream updates (#189) (00851d6)
+
 ## v0.32.2 - 2026-03-03
 
 - Refactor runtime to alpha-portfolio architecture and simplify UI (#188) (20cf21e)
