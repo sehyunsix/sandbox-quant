@@ -1,3 +1,7 @@
+## v0.34.0 - 2026-03-04
+
+- feat: add regime confidence gating for alpha portfolio (a828b3e)
+
 ## v0.33.0 - 2026-03-04
 
 - feat: add regime-aware portfolio sizing path (047c0a2)
