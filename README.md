@@ -66,6 +66,38 @@ cargo run --bin sandbox-quant -- doctor sync --once --market futures --symbol BT
 cargo run --bin sandbox-quant -- doctor help
 ```
 
+## Backtesting CLI
+
+Run alpha-only walk-forward backtests with historical CSV bars:
+
+```bash
+# Minimal run (uses defaults)
+cargo run --bin backtest -- --symbol BTCUSDT --bars data/demo_market_backlog.csv
+
+# Split strategy/order outputs into separate DBs (recommended)
+cargo run --bin backtest -- \
+  --symbol BTCUSDT \
+  --bars data/demo_market_backlog.csv \
+  --strategy-db data/backtest_strategy.sqlite \
+  --order-db data/backtest_orders.sqlite \
+  --train-bars 420 \
+  --test-bars 120 \
+  --embargo-bars 8 \
+  --max-folds 5 \
+  --order-usdt 100
+```
+
+The command emits fold-by-fold metrics and persists:
+
+- `backtest_strategy.sqlite`: run metadata + fold metrics
+- `backtest_orders.sqlite`: per-fill ledger (`qty`, `price`, `fee`, `pnl`, `reason`, etc.)
+
+The default configuration already uses:
+
+- `fee-rate=0.001`
+- `slippage-bps=2.0`
+- `min-signal=0.0`
+
 ## Key Controls
 
 | Area | Keys | Description |
