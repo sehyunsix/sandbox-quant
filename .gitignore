@@ -2,3 +2,6 @@
 .env
 *.log
 .DS_Store
+data/*.sqlite
+data/*.json
+docs-site/book/

@@ -6,3 +6,4 @@
 - [RFC 0002: Risk Visualization](./rfc-0002.md)
 - [RFC 0003: UI Transition](./rfc-0003.md)
 - [RFC 0045: Alpha-Portfolio-Execution-Manage](./rfc-0045.md)
+- [RFC 0047: Alpha-Only Portfolio Backtest Safety](./rfc-0047.md)
