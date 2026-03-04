@@ -29,6 +29,37 @@ pub struct PortfolioDecision {
     pub reason: &'static str,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RegimeDecisionConfig {
+    pub enabled: bool,
+    pub confidence_min: f64,
+    pub entry_multiplier_trend_up: f64,
+    pub entry_multiplier_range: f64,
+    pub entry_multiplier_trend_down: f64,
+    pub entry_multiplier_unknown: f64,
+    pub hold_multiplier_trend_up: f64,
+    pub hold_multiplier_range: f64,
+    pub hold_multiplier_trend_down: f64,
+    pub hold_multiplier_unknown: f64,
+}
+
+impl RegimeDecisionConfig {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            confidence_min: 0.0,
+            entry_multiplier_trend_up: 1.0,
+            entry_multiplier_range: 1.0,
+            entry_multiplier_trend_down: 1.0,
+            entry_multiplier_unknown: 1.0,
+            hold_multiplier_trend_up: 1.0,
+            hold_multiplier_range: 1.0,
+            hold_multiplier_trend_down: 1.0,
+            hold_multiplier_unknown: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PortfolioExecutionIntent {
     pub symbol: String,
@@ -83,6 +114,7 @@ pub fn decide_portfolio_action_from_alpha(
     alpha_mu: f64,
     order_amount_usdt: f64,
     regime: MarketRegimeSignal,
+    regime_cfg: RegimeDecisionConfig,
 ) -> PortfolioDecision {
     let strength = alpha_mu.abs().clamp(0.0, 1.0);
     let target_ratio = target_ratio_from_strength(strength);
@@ -101,8 +133,24 @@ pub fn decide_portfolio_action_from_alpha(
         timestamp_ms: now_ms,
     };
 
-    let regime_confidence = regime.confidence.max(0.0).min(1.0);
-    let regime_target_ratio = target_ratio * regime_entry_multiplier(&regime) * regime_confidence;
+    let regime_effective = if regime_cfg.enabled {
+        regime
+    } else {
+        neutral_regime_signal()
+    };
+    let regime_confidence = regime_effective.confidence.max(0.0).min(1.0);
+    let effective_confidence = if regime_cfg.enabled {
+        if regime_confidence < regime_cfg.confidence_min {
+            0.0
+        } else {
+            regime_confidence
+        }
+    } else {
+        regime_confidence
+    };
+    let regime_target_ratio = target_ratio
+        * regime_entry_multiplier(&regime_effective, &regime_cfg)
+        * effective_confidence;
 
     if is_flat {
         if alpha_mu <= 0.0 {
@@ -110,17 +158,19 @@ pub fn decide_portfolio_action_from_alpha(
                 alpha,
                 target_position_ratio: 0.0,
                 execution_signal: Signal::Hold,
-                regime: regime.regime,
+                regime: regime_effective.regime,
                 regime_confidence,
                 reason: "portfolio.alpha.hold_flat",
             };
         }
-        if regime.regime == MarketRegime::TrendDown || regime.regime == MarketRegime::Unknown {
+        if regime_effective.regime == MarketRegime::TrendDown
+            || regime_effective.regime == MarketRegime::Unknown
+        {
             return PortfolioDecision {
                 alpha,
                 target_position_ratio: 0.0,
                 execution_signal: Signal::Hold,
-                regime: regime.regime,
+                regime: regime_effective.regime,
                 regime_confidence,
                 reason: "portfolio.regime.blocked",
             };
@@ -130,7 +180,7 @@ pub fn decide_portfolio_action_from_alpha(
                 alpha,
                 target_position_ratio: 0.0,
                 execution_signal: Signal::Hold,
-                regime: regime.regime,
+                regime: regime_effective.regime,
                 regime_confidence,
                 reason: "portfolio.regime.too_small",
             };
@@ -139,7 +189,7 @@ pub fn decide_portfolio_action_from_alpha(
             alpha,
             target_position_ratio: regime_target_ratio.min(1.0),
             execution_signal: Signal::Buy,
-            regime: regime.regime,
+            regime: regime_effective.regime,
             regime_confidence,
             reason: "portfolio.alpha.entry",
         };
@@ -150,39 +200,52 @@ pub fn decide_portfolio_action_from_alpha(
             alpha,
             target_position_ratio: 0.0,
             execution_signal: Signal::Sell,
-            regime: regime.regime,
+            regime: regime_effective.regime,
             regime_confidence,
             reason: "portfolio.alpha.exit",
         };
     }
 
-    let hold_ratio =
-        target_ratio * regime_hold_multiplier(&regime) * regime_confidence.clamp(0.2, 1.0);
+    let hold_ratio = target_ratio
+        * regime_hold_multiplier(&regime_effective, &regime_cfg)
+        * effective_confidence;
     PortfolioDecision {
         alpha,
         target_position_ratio: hold_ratio.min(1.0),
         execution_signal: Signal::Hold,
-        regime: regime.regime,
+        regime: regime_effective.regime,
         regime_confidence,
         reason: "portfolio.alpha.hold",
     }
 }
 
-fn regime_entry_multiplier(regime: &MarketRegimeSignal) -> f64 {
+fn regime_entry_multiplier(regime: &MarketRegimeSignal, cfg: &RegimeDecisionConfig) -> f64 {
     match regime.regime {
-        MarketRegime::TrendUp => 1.0,
-        MarketRegime::TrendDown => 0.0,
-        MarketRegime::Range => 0.5,
-        MarketRegime::Unknown => 0.0,
+        MarketRegime::TrendUp => cfg.entry_multiplier_trend_up,
+        MarketRegime::TrendDown => cfg.entry_multiplier_trend_down,
+        MarketRegime::Range => cfg.entry_multiplier_range,
+        MarketRegime::Unknown => cfg.entry_multiplier_unknown,
     }
 }
 
-fn regime_hold_multiplier(regime: &MarketRegimeSignal) -> f64 {
+fn regime_hold_multiplier(regime: &MarketRegimeSignal, cfg: &RegimeDecisionConfig) -> f64 {
     match regime.regime {
-        MarketRegime::TrendUp => 1.0,
-        MarketRegime::TrendDown => 0.75,
-        MarketRegime::Range => 0.5,
-        MarketRegime::Unknown => 0.75,
+        MarketRegime::TrendUp => cfg.hold_multiplier_trend_up,
+        MarketRegime::TrendDown => cfg.hold_multiplier_trend_down,
+        MarketRegime::Range => cfg.hold_multiplier_range,
+        MarketRegime::Unknown => cfg.hold_multiplier_unknown,
+    }
+}
+
+fn neutral_regime_signal() -> MarketRegimeSignal {
+    MarketRegimeSignal {
+        regime: MarketRegime::TrendUp,
+        confidence: 1.0,
+        ema_fast: 0.0,
+        ema_slow: 0.0,
+        vol_ratio: 0.0,
+        slope: 0.0,
+        updated_at_ms: 0,
     }
 }
 

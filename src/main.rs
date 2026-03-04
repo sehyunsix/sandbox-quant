@@ -34,7 +34,7 @@ use sandbox_quant::predictor::{
     PredictorBaseConfig, PREDICTOR_METRIC_WINDOW, PREDICTOR_WINDOW_MAX,
 };
 use sandbox_quant::runtime::alpha_portfolio::{
-    decide_portfolio_action_from_alpha, PortfolioExecutionIntent,
+    decide_portfolio_action_from_alpha, PortfolioExecutionIntent, RegimeDecisionConfig,
 };
 use sandbox_quant::runtime::execution_intent_flow::process_execution_intent_for_instrument;
 use sandbox_quant::runtime::internal_exit_flow::process_internal_exit_for_instrument;
@@ -1273,6 +1273,34 @@ async fn main() -> Result<()> {
                             .copied()
                             .unwrap_or(0.0);
                         let queue_regime = regime_signal;
+                        let regime_cfg = RegimeDecisionConfig {
+                            enabled: strat_config.alpha.regime_gate_enabled,
+                            confidence_min: strat_config
+                                .alpha
+                                .regime_confidence_min
+                                .max(0.0)
+                                .min(1.0),
+                            entry_multiplier_trend_up: strat_config
+                                .alpha
+                                .regime_entry_multiplier_up,
+                            entry_multiplier_range: strat_config
+                                .alpha
+                                .regime_entry_multiplier_range,
+                            entry_multiplier_trend_down: strat_config
+                                .alpha
+                                .regime_entry_multiplier_down,
+                            entry_multiplier_unknown: strat_config
+                                .alpha
+                                .regime_entry_multiplier_unknown,
+                            hold_multiplier_trend_up: strat_config.alpha.regime_hold_multiplier_up,
+                            hold_multiplier_range: strat_config.alpha.regime_hold_multiplier_range,
+                            hold_multiplier_trend_down: strat_config
+                                .alpha
+                                .regime_hold_multiplier_down,
+                            hold_multiplier_unknown: strat_config
+                                .alpha
+                                .regime_hold_multiplier_unknown,
+                        };
                         let portfolio = decide_portfolio_action_from_alpha(
                             &queue_instrument,
                             now_ms,
@@ -1280,6 +1308,7 @@ async fn main() -> Result<()> {
                             alpha_mu,
                             strat_config.strategy.order_amount_usdt,
                             queue_regime,
+                            regime_cfg,
                         );
                         let intent = portfolio.to_intent(
                             &portfolio_source_tag,

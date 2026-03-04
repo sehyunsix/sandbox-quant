@@ -149,6 +149,26 @@ pub struct AlphaConfig {
     pub predictor_ewma_alpha_var: f64,
     #[serde(default = "default_alpha_predictor_min_sigma", alias = "y_min_sigma")]
     pub predictor_min_sigma: f64,
+    #[serde(default = "default_alpha_regime_gate_enabled")]
+    pub regime_gate_enabled: bool,
+    #[serde(default = "default_alpha_regime_confidence_min")]
+    pub regime_confidence_min: f64,
+    #[serde(default = "default_alpha_regime_entry_multiplier_up")]
+    pub regime_entry_multiplier_up: f64,
+    #[serde(default = "default_alpha_regime_entry_multiplier_range")]
+    pub regime_entry_multiplier_range: f64,
+    #[serde(default = "default_alpha_regime_entry_multiplier_down")]
+    pub regime_entry_multiplier_down: f64,
+    #[serde(default = "default_alpha_regime_entry_multiplier_unknown")]
+    pub regime_entry_multiplier_unknown: f64,
+    #[serde(default = "default_alpha_regime_hold_multiplier_up")]
+    pub regime_hold_multiplier_up: f64,
+    #[serde(default = "default_alpha_regime_hold_multiplier_range")]
+    pub regime_hold_multiplier_range: f64,
+    #[serde(default = "default_alpha_regime_hold_multiplier_down")]
+    pub regime_hold_multiplier_down: f64,
+    #[serde(default = "default_alpha_regime_hold_multiplier_unknown")]
+    pub regime_hold_multiplier_unknown: f64,
 }
 
 impl Default for AlphaConfig {
@@ -176,6 +196,16 @@ impl Default for AlphaConfig {
             predictor_ewma_alpha_mean: default_alpha_predictor_ewma_alpha_mean(),
             predictor_ewma_alpha_var: default_alpha_predictor_ewma_alpha_var(),
             predictor_min_sigma: default_alpha_predictor_min_sigma(),
+            regime_gate_enabled: default_alpha_regime_gate_enabled(),
+            regime_confidence_min: default_alpha_regime_confidence_min(),
+            regime_entry_multiplier_up: default_alpha_regime_entry_multiplier_up(),
+            regime_entry_multiplier_range: default_alpha_regime_entry_multiplier_range(),
+            regime_entry_multiplier_down: default_alpha_regime_entry_multiplier_down(),
+            regime_entry_multiplier_unknown: default_alpha_regime_entry_multiplier_unknown(),
+            regime_hold_multiplier_up: default_alpha_regime_hold_multiplier_up(),
+            regime_hold_multiplier_range: default_alpha_regime_hold_multiplier_range(),
+            regime_hold_multiplier_down: default_alpha_regime_hold_multiplier_down(),
+            regime_hold_multiplier_unknown: default_alpha_regime_hold_multiplier_unknown(),
         }
     }
 }
@@ -357,6 +387,46 @@ fn default_alpha_predictor_ewma_alpha_var() -> f64 {
 
 fn default_alpha_predictor_min_sigma() -> f64 {
     0.001
+}
+
+fn default_alpha_regime_gate_enabled() -> bool {
+    true
+}
+
+fn default_alpha_regime_confidence_min() -> f64 {
+    0.0
+}
+
+fn default_alpha_regime_entry_multiplier_up() -> f64 {
+    1.0
+}
+
+fn default_alpha_regime_entry_multiplier_range() -> f64 {
+    0.5
+}
+
+fn default_alpha_regime_entry_multiplier_down() -> f64 {
+    0.0
+}
+
+fn default_alpha_regime_entry_multiplier_unknown() -> f64 {
+    0.0
+}
+
+fn default_alpha_regime_hold_multiplier_up() -> f64 {
+    1.0
+}
+
+fn default_alpha_regime_hold_multiplier_range() -> f64 {
+    0.5
+}
+
+fn default_alpha_regime_hold_multiplier_down() -> f64 {
+    0.75
+}
+
+fn default_alpha_regime_hold_multiplier_unknown() -> f64 {
+    0.75
 }
 
 fn default_exit_max_holding_ms() -> u64 {
