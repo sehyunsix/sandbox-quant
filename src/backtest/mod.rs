@@ -281,14 +281,46 @@ pub fn parse_candle_csv(symbol: &str, path: &Path) -> Result<CandleFeed> {
                     .iter()
                     .map(|v| v.to_ascii_lowercase())
                     .collect::<Vec<_>>();
-                idx_ts = resolve_idx(&h, &["open_time", "timestamp_ms", "time", "timestamp"])
-                    .or_else(|| resolve_idx(&h, &["ts"]))
-                    .or(Some(0))
-                    .unwrap_or(0);
-                idx_open = resolve_idx(&h, &["open"]).unwrap_or(1);
-                idx_high = resolve_idx(&h, &["high"]).unwrap_or(2);
-                idx_low = resolve_idx(&h, &["low"]).unwrap_or(3);
-                idx_close = resolve_idx(&h, &["close"]).unwrap_or(4);
+                if looks_like_header {
+                    let header_ts = resolve_idx(
+                        &h,
+                        &["open_time", "timestamp_ms", "time", "timestamp"],
+                    )
+                    .or_else(|| resolve_idx(&h, &["ts"]));
+                    let header_open = resolve_idx(&h, &["open"]);
+                    let header_high = resolve_idx(&h, &["high"]);
+                    let header_low = resolve_idx(&h, &["low"]);
+                    let header_close = resolve_idx(&h, &["close"]);
+
+                    if header_ts.is_none()
+                        || header_open.is_none()
+                        || header_high.is_none()
+                        || header_low.is_none()
+                        || header_close.is_none()
+                    {
+                        return Err(anyhow!(
+                            "invalid candle csv header on line {}: {:?}; expected columns including open_time/time/timestamp(ts), open, high, low, close",
+                            line_no + 1,
+                            fields
+                        ));
+                    }
+
+                    idx_ts = header_ts.unwrap_or(0);
+                    idx_open = header_open.unwrap_or(1);
+                    idx_high = header_high.unwrap_or(2);
+                    idx_low = header_low.unwrap_or(3);
+                    idx_close = header_close.unwrap_or(4);
+                } else {
+                    idx_ts = resolve_idx(&h, &["open_time", "timestamp_ms", "time", "timestamp"])
+                        .or_else(|| resolve_idx(&h, &["ts"]))
+                        .or(Some(0))
+                        .unwrap_or(0);
+                    idx_open = resolve_idx(&h, &["open"]).unwrap_or(1);
+                    idx_high = resolve_idx(&h, &["high"]).unwrap_or(2);
+                    idx_low = resolve_idx(&h, &["low"]).unwrap_or(3);
+                    idx_close = resolve_idx(&h, &["close"]).unwrap_or(4);
+                }
+
                 if idx_open >= fields.len()
                     || idx_high >= fields.len()
                     || idx_low >= fields.len()
@@ -296,7 +328,7 @@ pub fn parse_candle_csv(symbol: &str, path: &Path) -> Result<CandleFeed> {
                     || idx_ts >= fields.len()
                 {
                     return Err(anyhow!(
-                        "invalid candle csv header on line {}: {:?}; expected columns including open_time/open and high/low/close",
+                        "invalid candle csv header on line {}: {:?}; expected columns including open_time/open/high/low/close",
                         line_no + 1,
                         fields
                     ));
