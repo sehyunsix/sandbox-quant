@@ -1,3 +1,8 @@
+## v0.35.0 - 2026-03-04
+
+- feat(backtest): add alpha portfolio backtest module and config-driven pipeline (07c6387)
+- throttle rest requests by weighted rate limits and track response headers (68c42b3)
+
 ## v0.34.0 - 2026-03-04
 
 - feat: add regime confidence gating for alpha portfolio (a828b3e)
