@@ -85,6 +85,16 @@ level = "debug"
     assert!((config.alpha.predictor_ewma_alpha_mean - 0.08).abs() < f64::EPSILON);
     assert!((config.alpha.predictor_ewma_alpha_var - 0.08).abs() < f64::EPSILON);
     assert!((config.alpha.predictor_min_sigma - 0.001).abs() < f64::EPSILON);
+    assert!(config.alpha.regime_gate_enabled);
+    assert!((config.alpha.regime_confidence_min - 0.0).abs() < f64::EPSILON);
+    assert!((config.alpha.regime_entry_multiplier_up - 1.0).abs() < f64::EPSILON);
+    assert!((config.alpha.regime_entry_multiplier_range - 0.5).abs() < f64::EPSILON);
+    assert!((config.alpha.regime_entry_multiplier_down - 0.0).abs() < f64::EPSILON);
+    assert!((config.alpha.regime_entry_multiplier_unknown - 0.0).abs() < f64::EPSILON);
+    assert!((config.alpha.regime_hold_multiplier_up - 1.0).abs() < f64::EPSILON);
+    assert!((config.alpha.regime_hold_multiplier_range - 0.5).abs() < f64::EPSILON);
+    assert!((config.alpha.regime_hold_multiplier_down - 0.75).abs() < f64::EPSILON);
+    assert!((config.alpha.regime_hold_multiplier_unknown - 0.75).abs() < f64::EPSILON);
     assert_eq!(config.exit.max_holding_ms, 1_800_000);
     assert!((config.exit.stop_loss_pct - 0.015).abs() < f64::EPSILON);
     assert!(config.exit.enforce_protective_stop);
