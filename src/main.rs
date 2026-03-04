@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use crossterm::event::{Event, KeyCode};
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite;
 
 use app_helpers::*;
@@ -45,6 +46,7 @@ use sandbox_quant::runtime::portfolio_sync::{
 use sandbox_quant::runtime::predictor_eval::{
     observe_predictor_eval_volatility, predictor_eval_scale, PredictorEvalVolState,
 };
+use sandbox_quant::runtime::regime::{RegimeDetector, RegimeDetectorConfig};
 use sandbox_quant::strategy_catalog::{
     strategy_kind_category_for_label, strategy_type_options_by_category, StrategyCatalog,
     StrategyKind, StrategyProfile,
@@ -64,7 +66,7 @@ const ORDER_HISTORY_LIMIT: usize = 20000;
 const ORDER_HISTORY_PERIODIC_LIMIT: usize = 500;
 const ORDER_HISTORY_SYNC_SECS: u64 = 5;
 const ORDER_HISTORY_BACKGROUND_SYNC_SECS: u64 = 30;
-const ORDER_HISTORY_BACKGROUND_SYNC_PER_TICK: usize = 1;
+const ORDER_HISTORY_BACKGROUND_SYNC_PER_TICK: usize = 4;
 const FUTURES_POSITION_REST_FALLBACK_SECS: u64 = 90;
 const FUTURES_USER_STREAM_KEEPALIVE_SECS: u64 = 30 * 60;
 const SPOT_USER_STREAM_KEEPALIVE_SECS: u64 = 30 * 60;
@@ -474,7 +476,9 @@ async fn main() -> Result<()> {
             let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
                 Ok(v) => v,
                 Err(e) => {
-                    let _ = futures_stream_rest.close_futures_user_data_stream(&listen_key).await;
+                    let _ = futures_stream_rest
+                        .close_futures_user_data_stream(&listen_key)
+                        .await;
                     let _ = futures_stream_app_tx
                         .send(app_log(
                             LogLevel::Warn,
@@ -493,9 +497,8 @@ async fn main() -> Result<()> {
             };
 
             let (_write, mut read) = ws_stream.split();
-            let mut keepalive = tokio::time::interval(Duration::from_secs(
-                FUTURES_USER_STREAM_KEEPALIVE_SECS,
-            ));
+            let mut keepalive =
+                tokio::time::interval(Duration::from_secs(FUTURES_USER_STREAM_KEEPALIVE_SECS));
             loop {
                 tokio::select! {
                     msg = read.next() => {
@@ -541,7 +544,9 @@ async fn main() -> Result<()> {
                 }
             }
 
-            let _ = futures_stream_rest.close_futures_user_data_stream(&listen_key).await;
+            let _ = futures_stream_rest
+                .close_futures_user_data_stream(&listen_key)
+                .await;
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
                 _ = futures_stream_shutdown.changed() => break,
@@ -551,117 +556,151 @@ async fn main() -> Result<()> {
     });
 
     let (spot_user_hint_tx, mut spot_user_hint_rx) = mpsc::channel::<SpotUserDataHint>(64);
-    let spot_stream_rest = rest_client.clone();
-    let spot_stream_app_tx = app_tx.clone();
-    let spot_stream_ws_base = config.binance.ws_base_url.clone();
-    let mut spot_stream_shutdown = shutdown_rx.clone();
-    tokio::spawn(async move {
-        let mut reconnect_delay_secs = 1u64;
-        loop {
-            if *spot_stream_shutdown.borrow() {
-                break;
-            }
-            let listen_key = match spot_stream_rest.start_spot_user_data_stream().await {
-                Ok(key) => key,
-                Err(e) => {
-                    let _ = spot_stream_app_tx
-                        .send(app_log(
-                            LogLevel::Warn,
-                            LogDomain::Ws,
-                            "spot.user_stream.listen_key.fail",
-                            format!("Failed to start spot user stream: {}", e),
-                        ))
-                        .await;
-                    tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
-                        _ = spot_stream_shutdown.changed() => break,
-                    }
-                    reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
-                    continue;
-                }
-            };
-            reconnect_delay_secs = 1;
-            let ws_url = format!("{}/{}", spot_stream_ws_base.trim_end_matches('/'), listen_key);
-            let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ = spot_stream_rest.close_spot_user_data_stream(&listen_key).await;
-                    let _ = spot_stream_app_tx
-                        .send(app_log(
-                            LogLevel::Warn,
-                            LogDomain::Ws,
-                            "spot.user_stream.connect.fail",
-                            format!("Spot user stream connect failed: {}", e),
-                        ))
-                        .await;
-                    tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
-                        _ = spot_stream_shutdown.changed() => break,
-                    }
-                    reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
-                    continue;
-                }
-            };
-
-            let (_write, mut read) = ws_stream.split();
-            let mut keepalive =
-                tokio::time::interval(Duration::from_secs(SPOT_USER_STREAM_KEEPALIVE_SECS));
+    if config.binance.api_key.trim().is_empty() {
+        let _ = app_tx
+            .send(app_log(
+                LogLevel::Info,
+                LogDomain::Ws,
+                "spot.user_stream.disabled",
+                "Spot user stream disabled: empty spot API key",
+            ))
+            .await;
+    } else {
+        let spot_stream_rest = rest_client.clone();
+        let spot_stream_app_tx = app_tx.clone();
+        let spot_stream_ws_base = config.binance.ws_base_url.clone();
+        let mut spot_stream_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let mut reconnect_delay_secs = 1u64;
             loop {
-                tokio::select! {
-                    msg = read.next() => {
-                        match msg {
-                            Some(Ok(tungstenite::Message::Text(text))) => {
-                                if let Ok(event) = serde_json::from_str::<BinanceSpotUserDataEvent>(&text) {
-                                    match event {
-                                        BinanceSpotUserDataEvent::ExecutionReport(evt) => {
-                                            let _ = spot_user_hint_tx
-                                                .send(SpotUserDataHint::Execution {
-                                                    instrument: normalize_instrument_label(&evt.symbol),
-                                                })
-                                                .await;
-                                        }
-                                        BinanceSpotUserDataEvent::OutboundAccountPosition(_) => {
-                                            let _ = spot_user_hint_tx.send(SpotUserDataHint::AccountUpdate).await;
-                                        }
-                                        BinanceSpotUserDataEvent::Unknown => {}
-                                    }
-                                }
-                            }
-                            Some(Ok(tungstenite::Message::Ping(_))) => {}
-                            Some(Ok(tungstenite::Message::Pong(_))) => {}
-                            Some(Ok(tungstenite::Message::Close(_))) | Some(Err(_)) | None => {
-                                break;
-                            }
-                            Some(Ok(_)) => {}
-                        }
-                    }
-                    _ = keepalive.tick() => {
-                        if let Err(e) = spot_stream_rest.keepalive_spot_user_data_stream(&listen_key).await {
+                if *spot_stream_shutdown.borrow() {
+                    break;
+                }
+                let listen_key = match spot_stream_rest.start_spot_user_data_stream().await {
+                    Ok(key) => key,
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if msg.contains("404") || msg.contains("<html>") {
                             let _ = spot_stream_app_tx
-                                .send(app_log(
-                                    LogLevel::Warn,
-                                    LogDomain::Ws,
-                                    "spot.user_stream.keepalive.fail",
-                                    format!("Spot user stream keepalive failed: {}", e),
-                                ))
-                                .await;
+                            .send(app_log(
+                                LogLevel::Warn,
+                                LogDomain::Ws,
+                                "spot.user_stream.disabled",
+                                format!(
+                                    "Spot user stream disabled: endpoint unavailable on current rest_base_url ({})",
+                                    msg
+                                ),
+                            ))
+                            .await;
                             break;
                         }
+                        let _ = spot_stream_app_tx
+                            .send(app_log(
+                                LogLevel::Warn,
+                                LogDomain::Ws,
+                                "spot.user_stream.listen_key.fail",
+                                format!("Failed to start spot user stream: {}", e),
+                            ))
+                            .await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                            _ = spot_stream_shutdown.changed() => break,
+                        }
+                        reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
+                        continue;
                     }
-                    _ = spot_stream_shutdown.changed() => {
-                        let _ = spot_stream_rest.close_spot_user_data_stream(&listen_key).await;
-                        return;
+                };
+                reconnect_delay_secs = 1;
+                let ws_url = format!(
+                    "{}/{}",
+                    spot_stream_ws_base.trim_end_matches('/'),
+                    listen_key
+                );
+                let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = spot_stream_rest
+                            .close_spot_user_data_stream(&listen_key)
+                            .await;
+                        let _ = spot_stream_app_tx
+                            .send(app_log(
+                                LogLevel::Warn,
+                                LogDomain::Ws,
+                                "spot.user_stream.connect.fail",
+                                format!("Spot user stream connect failed: {}", e),
+                            ))
+                            .await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                            _ = spot_stream_shutdown.changed() => break,
+                        }
+                        reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
+                        continue;
+                    }
+                };
+
+                let (_write, mut read) = ws_stream.split();
+                let mut keepalive =
+                    tokio::time::interval(Duration::from_secs(SPOT_USER_STREAM_KEEPALIVE_SECS));
+                loop {
+                    tokio::select! {
+                        msg = read.next() => {
+                            match msg {
+                                Some(Ok(tungstenite::Message::Text(text))) => {
+                                    if let Ok(event) = serde_json::from_str::<BinanceSpotUserDataEvent>(&text) {
+                                        match event {
+                                            BinanceSpotUserDataEvent::ExecutionReport(evt) => {
+                                                let _ = spot_user_hint_tx
+                                                    .send(SpotUserDataHint::Execution {
+                                                        instrument: normalize_instrument_label(&evt.symbol),
+                                                    })
+                                                    .await;
+                                            }
+                                            BinanceSpotUserDataEvent::OutboundAccountPosition(_) => {
+                                                let _ = spot_user_hint_tx.send(SpotUserDataHint::AccountUpdate).await;
+                                            }
+                                            BinanceSpotUserDataEvent::Unknown => {}
+                                        }
+                                    }
+                                }
+                                Some(Ok(tungstenite::Message::Ping(_))) => {}
+                                Some(Ok(tungstenite::Message::Pong(_))) => {}
+                                Some(Ok(tungstenite::Message::Close(_))) | Some(Err(_)) | None => {
+                                    break;
+                                }
+                                Some(Ok(_)) => {}
+                            }
+                        }
+                        _ = keepalive.tick() => {
+                            if let Err(e) = spot_stream_rest.keepalive_spot_user_data_stream(&listen_key).await {
+                                let _ = spot_stream_app_tx
+                                    .send(app_log(
+                                        LogLevel::Warn,
+                                        LogDomain::Ws,
+                                        "spot.user_stream.keepalive.fail",
+                                        format!("Spot user stream keepalive failed: {}", e),
+                                    ))
+                                    .await;
+                                break;
+                            }
+                        }
+                        _ = spot_stream_shutdown.changed() => {
+                            let _ = spot_stream_rest.close_spot_user_data_stream(&listen_key).await;
+                            return;
+                        }
                     }
                 }
+                let _ = spot_stream_rest
+                    .close_spot_user_data_stream(&listen_key)
+                    .await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
+                    _ = spot_stream_shutdown.changed() => break,
+                }
+                reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
             }
-            let _ = spot_stream_rest.close_spot_user_data_stream(&listen_key).await;
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)) => {},
-                _ = spot_stream_shutdown.changed() => break,
-            }
-            reconnect_delay_secs = (reconnect_delay_secs.saturating_mul(2)).min(60);
-        }
-    });
+        });
+    }
 
     // Spawn strategy + order manager task
     let strat_app_tx = app_tx.clone();
@@ -684,6 +723,7 @@ async fn main() -> Result<()> {
         let mut live_futures_positions: HashMap<String, AssetPnlEntry> = HashMap::new();
         let mut strategy_stats_by_instrument: HashMap<String, HashMap<String, OrderHistoryStats>> =
             HashMap::new();
+        let mut regime_detectors: HashMap<String, RegimeDetector> = HashMap::new();
         let predictor_horizons = default_predictor_horizons();
         let base_predictor_cfg = PredictorBaseConfig {
             alpha_mean: strat_config.alpha.predictor_ewma_alpha_mean,
@@ -981,6 +1021,18 @@ async fn main() -> Result<()> {
                     };
                     let tick_symbol = normalize_instrument_label(&tick.symbol);
                     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                    let regime_signal = {
+                        let detector = regime_detectors
+                            .entry(tick_symbol.clone())
+                            .or_insert_with(|| RegimeDetector::new(RegimeDetectorConfig::default()));
+                        detector.update(tick.price, now_ms)
+                    };
+                    let _ = strat_app_tx
+                        .send(AppEvent::RegimeUpdate {
+                            symbol: tick_symbol.clone(),
+                            regime: regime_signal,
+                        })
+                        .await;
                     for model in predictor_models.values_mut() {
                         model.observe_price(&tick_symbol, tick.price);
                     }
@@ -1220,12 +1272,14 @@ async fn main() -> Result<()> {
                             .get(&queue_instrument)
                             .copied()
                             .unwrap_or(0.0);
+                        let queue_regime = regime_signal;
                         let portfolio = decide_portfolio_action_from_alpha(
                             &queue_instrument,
                             now_ms,
                             is_flat,
                             alpha_mu,
                             strat_config.strategy.order_amount_usdt,
+                            queue_regime,
                         );
                         let intent = portfolio.to_intent(
                             &portfolio_source_tag,
@@ -1256,12 +1310,32 @@ async fn main() -> Result<()> {
                                 .send(app_log(
                                     LogLevel::Info,
                                     LogDomain::Strategy,
+                                    "alpha.signal",
+                                    format!(
+                                        "alpha signal [{}] src={} mu={:+.6} side={:?} regime={:?} conf={:.3} exp={:+.4} strength={:.3} target={:.2}",
+                                        queue_instrument,
+                                        portfolio_source_tag,
+                                        alpha_mu,
+                                        portfolio.alpha.side_bias,
+                                        portfolio.regime,
+                                        portfolio.regime_confidence,
+                                        portfolio.alpha.expected_return_usdt,
+                                        portfolio.alpha.strength,
+                                        portfolio.target_position_ratio
+                                    ),
+                                ))
+                                .await;
+                            let _ = strat_app_tx
+                                .send(app_log(
+                                    LogLevel::Info,
+                                    LogDomain::Strategy,
                                     "portfolio.decision",
                                     format!(
-                                        "portfolio decision [{}] src={} sig={:?} target={:.2} current={:.2} delta={:+.2} ev={:+.4} strength={:.3} reason={}",
+                                        "portfolio decision [{}] src={} sig={:?} regime={:?} target={:.2} current={:.2} delta={:+.2} ev={:+.4} strength={:.3} reason={}",
                                         queue_instrument,
                                         portfolio_source_tag,
                                         signal,
+                                        portfolio.regime,
                                         intent.target_position_ratio,
                                         current_position_ratio,
                                         intent.position_delta_ratio,
@@ -1720,9 +1794,9 @@ async fn main() -> Result<()> {
 
                     if !tradable_instruments.is_empty() {
                         let total = tradable_instruments.len();
-                        let mut synced_count = 0usize;
+                        let mut due_symbols: Vec<(String, usize)> = Vec::new();
                         for _ in 0..total {
-                            if synced_count >= ORDER_HISTORY_BACKGROUND_SYNC_PER_TICK {
+                            if due_symbols.len() >= ORDER_HISTORY_BACKGROUND_SYNC_PER_TICK {
                                 break;
                             }
                             let idx = background_history_sync_cursor % total;
@@ -1758,21 +1832,78 @@ async fn main() -> Result<()> {
                             } else {
                                 ORDER_HISTORY_PERIODIC_LIMIT
                             };
-                            if let Some(mgr) = order_managers.get_mut(&instrument) {
-                                process_periodic_sync_basic_for_instrument(
-                                    &strat_app_tx,
-                                    mgr,
-                                    &instrument,
-                                    &selected_symbol,
-                                    history_limit,
-                                    &mut strategy_stats_by_instrument,
-                                    &mut realized_pnl_by_symbol,
-                                    strat_config.exit.stop_loss_pct,
-                                )
-                                .await;
-                                last_history_sync_ms_by_instrument.insert(instrument, now_ms);
-                                emit_rate_snapshot(&strat_app_tx, mgr);
-                                synced_count += 1;
+                            due_symbols.push((instrument, history_limit));
+                        }
+                        if !due_symbols.is_empty() {
+                            let mut join_set = JoinSet::new();
+                            for (instrument, history_limit) in due_symbols {
+                                let Some(mgr) = order_managers.remove(&instrument) else {
+                                    continue;
+                                };
+                                let stop_loss_pct = strat_config.exit.stop_loss_pct;
+                                join_set.spawn(async move {
+                                    let mut mgr = mgr;
+                                    let history = mgr.refresh_order_history(history_limit).await;
+                                    let stop_price = derived_stop_price(mgr.position(), stop_loss_pct);
+                                    (instrument, mgr, history, stop_price)
+                                });
+                            }
+                            while let Some(joined) = join_set.join_next().await {
+                                match joined {
+                                    Ok((instrument, mgr, history_result, stop_price)) => {
+                                        order_managers.insert(instrument.clone(), mgr);
+                                        match history_result {
+                                            Ok(history) => {
+                                                strategy_stats_by_instrument
+                                                    .insert(instrument.clone(), history.strategy_stats.clone());
+                                                realized_pnl_by_symbol
+                                                    .insert(instrument.clone(), history.stats.realized_pnl);
+                                                if instrument == selected_symbol {
+                                                    let _ = strat_app_tx.send(AppEvent::OrderHistoryUpdate(history)).await;
+                                                }
+                                                last_history_sync_ms_by_instrument
+                                                    .insert(instrument.clone(), now_ms);
+                                            }
+                                            Err(e) => {
+                                                let _ = strat_app_tx
+                                                    .send(app_log(
+                                                        LogLevel::Warn,
+                                                        LogDomain::Order,
+                                                        "history.sync.fail",
+                                                        format!(
+                                                            "Periodic order history sync failed ({}): {}",
+                                                            instrument, e
+                                                        ),
+                                                    ))
+                                                    .await;
+                                            }
+                                        }
+                                        if let Some(stop_price) = stop_price {
+                                            let _ = strat_app_tx
+                                                .send(AppEvent::ExitPolicyUpdate {
+                                                    symbol: instrument.clone(),
+                                                    source_tag: "sys".to_string(),
+                                                    stop_price: Some(stop_price),
+                                                    expected_holding_ms: None,
+                                                    protective_stop_ok: None,
+                                                })
+                                                .await;
+                                        }
+                                        if let Some(mgr_ref) = order_managers.get(&instrument) {
+                                            emit_rate_snapshot(&strat_app_tx, mgr_ref);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = strat_app_tx
+                                            .send(app_log(
+                                                LogLevel::Warn,
+                                                LogDomain::Order,
+                                                "history.sync.task.fail",
+                                                format!("Periodic sync task join failed: {}", e),
+                                            ))
+                                            .await;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1963,6 +2094,7 @@ async fn main() -> Result<()> {
         &config.binance.kline_interval,
     );
     app_state.refresh_history_rows();
+    app_state.refresh_today_realized_pnl_usdt();
     app_state.symbol_items = tradable_symbols.clone();
     refresh_strategy_lists(&mut app_state, &strategy_catalog, &enabled_strategy_tags);
     app_state.set_selected_grid_strategy_index(

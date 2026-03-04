@@ -1,5 +1,5 @@
-use sandbox_quant::predictor::PredictorBaseConfig;
 use sandbox_quant::model::signal::Signal;
+use sandbox_quant::predictor::PredictorBaseConfig;
 use sandbox_quant::predictor::{
     backfill_predictor_metrics_from_closes, backfill_predictor_metrics_from_closes_volnorm,
     build_predictor_models, default_predictor_horizons, default_predictor_specs,

@@ -14,8 +14,8 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
 use crate::event::{
-    AppEvent, ExitPolicyEntry, LogDomain, LogLevel, LogRecord, PortfolioStateSnapshot,
-    PredictorMetricEntry, WsConnectionStatus,
+    AppEvent, ExitPolicyEntry, LogDomain, LogLevel, LogRecord, MarketRegime, MarketRegimeSignal,
+    PortfolioStateSnapshot, PredictorMetricEntry, WsConnectionStatus,
 };
 use crate::model::candle::{Candle, CandleBuilder};
 use crate::model::order::{Fill, OrderSide};
@@ -31,9 +31,7 @@ use crate::ui::network_metrics::{
 use crate::ui::position_ledger::build_open_order_positions_from_trades;
 
 use chart::{FillMarker, PriceChart};
-use dashboard::{
-    KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, StatusBar,
-};
+use dashboard::{KeybindBar, LogPanel, OrderHistoryPanel, OrderLogPanel, StatusBar};
 use ui_projection::AssetEntry;
 use ui_projection::UiProjection;
 
@@ -115,7 +113,9 @@ pub struct AppState {
     pub history_win_count: u32,
     pub history_lose_count: u32,
     pub history_realized_pnl: f64,
+    pub today_realized_pnl_usdt: f64,
     pub portfolio_state: PortfolioStateSnapshot,
+    pub symbol_regime_by_symbol: HashMap<String, MarketRegimeSignal>,
     pub strategy_stats: HashMap<String, OrderHistoryStats>,
     pub exit_policy_by_scope: HashMap<String, ExitPolicyEntry>,
     pub predictor_metrics_by_scope: HashMap<String, PredictorMetricEntry>,
@@ -236,7 +236,9 @@ impl AppState {
             history_win_count: 0,
             history_lose_count: 0,
             history_realized_pnl: 0.0,
+            today_realized_pnl_usdt: 0.0,
             portfolio_state: PortfolioStateSnapshot::default(),
+            symbol_regime_by_symbol: HashMap::new(),
             strategy_stats: HashMap::new(),
             exit_policy_by_scope: HashMap::new(),
             predictor_metrics_by_scope: HashMap::new(),
@@ -466,6 +468,12 @@ impl AppState {
     pub fn set_history_scroll_offset(&mut self, offset: usize) {
         self.history_scroll_offset = offset;
     }
+    pub fn symbol_regime(&self, symbol: &str) -> MarketRegimeSignal {
+        self.symbol_regime_by_symbol
+            .get(symbol)
+            .copied()
+            .unwrap_or_else(MarketRegimeSignal::default)
+    }
     pub fn is_symbol_selector_open(&self) -> bool {
         self.symbol_selector_open
     }
@@ -639,9 +647,13 @@ impl AppState {
     }
 
     pub fn refresh_history_ledger_rows(&mut self) {
-        self.history_ledger_rows = order_store::load_recent_persisted_trades_filtered(None, None, 500)
-            .unwrap_or_default();
+        self.history_ledger_rows =
+            order_store::load_recent_persisted_trades_filtered(None, None, 500).unwrap_or_default();
         self.history_ledger_dirty = false;
+    }
+
+    pub fn refresh_today_realized_pnl_usdt(&mut self) {
+        self.today_realized_pnl_usdt = order_store::load_today_realized_pnl_usdt().unwrap_or(0.0);
     }
 
     fn refresh_equity_usdt(&mut self) {
@@ -1150,6 +1162,7 @@ impl AppState {
                 } else {
                     self.history_ledger_dirty = true;
                 }
+                self.refresh_today_realized_pnl_usdt();
             }
             AppEvent::StrategyStatsUpdate { strategy_stats } => {
                 rebuild_projection = true;
@@ -1204,6 +1217,9 @@ impl AppState {
                 rebuild_projection = true;
                 self.portfolio_state = snapshot;
                 self.last_portfolio_update_ms = Some(chrono::Utc::now().timestamp_millis() as u64);
+            }
+            AppEvent::RegimeUpdate { symbol, regime } => {
+                self.symbol_regime_by_symbol.insert(symbol, regime);
             }
             AppEvent::RiskRateSnapshot {
                 global,
@@ -1883,11 +1899,27 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 let local = chrono::Utc
                     .timestamp_millis_opt(ts as i64)
                     .single()
-                    .map(|dt| dt.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S").to_string())
+                    .map(|dt| {
+                        dt.with_timezone(&chrono::Local)
+                            .format("%m-%d %H:%M:%S")
+                            .to_string()
+                    })
                     .unwrap_or_else(|| "--".to_string());
                 format!("{} ({})", local, format_age_ms(now_ms.saturating_sub(ts)))
             })
             .unwrap_or_else(|| "-".to_string());
+        let regime = state.symbol_regime(&state.symbol);
+        let regime_label = match regime.regime {
+            MarketRegime::TrendUp => "Up",
+            MarketRegime::TrendDown => "Down",
+            MarketRegime::Range => "Range",
+            MarketRegime::Unknown => "Unknown",
+        };
+        let regime_text = format!(
+            "{} {:>4.0}%",
+            regime_label,
+            (regime.confidence * 100.0).clamp(0.0, 100.0)
+        );
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1909,6 +1941,9 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     "  (70%=WARN, 90%=CRIT)",
                     Style::default().fg(Color::DarkGray),
                 ),
+                Span::raw("  "),
+                Span::styled("Regime ", Style::default().fg(Color::DarkGray)),
+                Span::styled(regime_text, Style::default().fg(Color::Cyan)),
                 Span::styled("  Updated ", Style::default().fg(Color::DarkGray)),
                 Span::styled(portfolio_updated_text, Style::default().fg(Color::Cyan)),
             ])),
@@ -2010,6 +2045,16 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                 ),
             ]),
             Line::from(vec![
+                Span::styled("Today PnL ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:+.4}", state.today_realized_pnl_usdt),
+                    Style::default().fg(if state.today_realized_pnl_usdt >= 0.0 {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    }),
+                ),
+                Span::raw("  "),
                 Span::styled("Total Rlz ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{:+.4}", state.portfolio_state.total_realized_pnl_usdt),
@@ -2050,7 +2095,12 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
             if let Some(entry) = state.portfolio_state.by_symbol.get(&symbol) {
                 position_rows.push(Row::new(vec![
                     Cell::from(symbol),
-                    Cell::from(entry.side.map(|s| s.to_string()).unwrap_or_else(|| "-".to_string())),
+                    Cell::from(
+                        entry
+                            .side
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                    ),
                     Cell::from(format!("{:.5}", entry.position_qty)),
                     Cell::from(format!("{:.2}", entry.entry_price)),
                     Cell::from(format!("{:+.4}", entry.unrealized_pnl_usdt)),
@@ -2356,7 +2406,11 @@ fn render_grid_popup(frame: &mut Frame, state: &AppState) {
                     chrono::Utc
                         .timestamp_millis_opt(t.time as i64)
                         .single()
-                        .map(|dt| dt.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S").to_string())
+                        .map(|dt| {
+                            dt.with_timezone(&chrono::Local)
+                                .format("%m-%d %H:%M:%S")
+                                .to_string()
+                        })
                         .unwrap_or_else(|| "--".to_string()),
                 ),
                 Cell::from(t.symbol.clone()),

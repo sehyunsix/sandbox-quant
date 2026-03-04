@@ -6,5 +6,6 @@ pub mod order_history_sync_flow;
 pub mod portfolio_layer_state;
 pub mod portfolio_sync;
 pub mod predictor_eval;
+pub mod regime;
 pub mod strategy_registry;
 pub mod strategy_runtime;

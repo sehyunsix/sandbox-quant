@@ -519,6 +519,21 @@ pub fn load_trade_count(symbol: &str) -> Result<usize> {
     Ok(count.max(0) as usize)
 }
 
+pub fn load_today_realized_pnl_usdt() -> Result<f64> {
+    std::fs::create_dir_all("data")?;
+    let conn = Connection::open("data/order_history.sqlite")?;
+    ensure_trade_schema(&conn)?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT COALESCE(SUM(realized_pnl), 0.0)
+        FROM order_history_trades
+        WHERE date(event_time_ms / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
+        "#,
+    )?;
+    let pnl = stmt.query_row([], |row| row.get::<_, f64>(0))?;
+    Ok(pnl)
+}
+
 #[derive(Clone, Copy, Default)]
 struct LongPos {
     qty: f64,

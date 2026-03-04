@@ -130,7 +130,10 @@ pub struct AlphaConfig {
     pub predictor_mu: f64,
     #[serde(default = "default_alpha_predictor_sigma_spot", alias = "y_sigma_spot")]
     pub predictor_sigma_spot: f64,
-    #[serde(default = "default_alpha_predictor_sigma_futures", alias = "y_sigma_futures")]
+    #[serde(
+        default = "default_alpha_predictor_sigma_futures",
+        alias = "y_sigma_futures"
+    )]
     pub predictor_sigma_futures: f64,
     #[serde(default = "default_alpha_futures_multiplier")]
     pub futures_multiplier: f64,
