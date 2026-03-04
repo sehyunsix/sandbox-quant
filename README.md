@@ -71,6 +71,11 @@ cargo run --bin sandbox-quant -- doctor help
 Run alpha-only walk-forward backtests with historical CSV bars:
 
 ```bash
+# Optional: fetch fresh candles first
+./scripts/fetch_backtest_bars.sh --symbol BTCUSDT --interval 1m --days-back 14 --bars 5000 --out data/btcusdt_1m_bars.csv
+```
+
+```bash
 # Minimal run (uses defaults)
 cargo run --bin backtest -- --symbol BTCUSDT --bars data/demo_market_backlog.csv
 
