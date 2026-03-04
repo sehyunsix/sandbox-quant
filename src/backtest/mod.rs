@@ -255,6 +255,7 @@ pub fn parse_candle_csv(symbol: &str, path: &Path) -> Result<CandleFeed> {
     let mut idx_close = 4usize;
     let mut line_no = 0usize;
     let mut has_header = false;
+    let mut first_row_consumed = false;
 
     let resolve_idx = |header: &[String], names: &[&str]| -> Option<usize> {
         names
@@ -273,25 +274,42 @@ pub fn parse_candle_csv(symbol: &str, path: &Path) -> Result<CandleFeed> {
         let fields: Vec<&str> = trimmed.split(',').map(|v| v.trim()).collect();
 
         if !has_header {
-            let is_header = fields.first().is_some_and(|f| f.parse::<f64>().is_err());
-
-            if is_header {
+            let looks_like_header =
+                fields.first().is_some_and(|f| f.parse::<f64>().is_err());
+            if looks_like_header || first_row_consumed {
                 let h = fields
                     .iter()
                     .map(|v| v.to_ascii_lowercase())
                     .collect::<Vec<_>>();
-                idx_ts = resolve_idx(&h, &["open_time", "timestamp_ms", "time"])
+                idx_ts = resolve_idx(&h, &["open_time", "timestamp_ms", "time", "timestamp"])
                     .or_else(|| resolve_idx(&h, &["ts"]))
+                    .or(Some(0))
                     .unwrap_or(0);
                 idx_open = resolve_idx(&h, &["open"]).unwrap_or(1);
                 idx_high = resolve_idx(&h, &["high"]).unwrap_or(2);
                 idx_low = resolve_idx(&h, &["low"]).unwrap_or(3);
                 idx_close = resolve_idx(&h, &["close"]).unwrap_or(4);
-                has_header = true;
-                line_no += 1;
-                continue;
+                if idx_open >= fields.len()
+                    || idx_high >= fields.len()
+                    || idx_low >= fields.len()
+                    || idx_close >= fields.len()
+                    || idx_ts >= fields.len()
+                {
+                    return Err(anyhow!(
+                        "invalid candle csv header on line {}: {:?}; expected columns including open_time/open and high/low/close",
+                        line_no + 1,
+                        fields
+                    ));
+                }
+                has_header = looks_like_header;
+                if looks_like_header {
+                    first_row_consumed = true;
+                    line_no += 1;
+                    continue;
+                }
             }
             has_header = true;
+            first_row_consumed = true;
         }
 
         if fields.len() <= idx_close {

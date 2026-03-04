@@ -80,3 +80,18 @@ open_time,open,high,low,close
     assert_eq!(feed.interval_ms, 60_000);
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn parse_csv_rejects_non_ohlcv_headers() {
+    let csv = "\
+exchange,environment,asset_class
+Alpaca,Paper,Equity
+Tradier,Sandbox,Equity
+";
+    let path = PathBuf::from("/tmp/sq_backtest_non_ohlcv.csv");
+    std::fs::write(&path, csv).expect("write non-ohlcv csv");
+    let err = parse_candle_csv("BTCUSDT", &path).expect_err("non-ohlcv file should be rejected");
+    let msg = err.to_string().to_ascii_lowercase();
+    assert!(msg.contains("invalid candle csv header") || msg.contains("need at least 2 valid rows"));
+    let _ = std::fs::remove_file(&path);
+}
