@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
+use tokio::time::Duration;
 
 use crate::error::AppError;
 use crate::model::candle::Candle;
@@ -13,6 +15,71 @@ use super::types::{
     BinanceFuturesOrderResponse, BinanceFuturesPositionRisk, BinanceFuturesUserTrade,
     BinanceListenKeyResponse, BinanceMyTrade, BinanceOrderResponse, ServerTimeResponse,
 };
+
+const REST_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const REST_WEIGHT_LIMIT_PER_MINUTE: u64 = 1_200;
+const REST_WEIGHT_ACCOUNT_LIMIT_PER_MINUTE: u64 = 600;
+const REST_WEIGHT_ORDER_LIMIT_PER_MINUTE: u64 = 600;
+const REST_WEIGHT_MARKET_DATA_LIMIT_PER_MINUTE: u64 = 800;
+const REST_WEIGHT_WARNING_THRESHOLD: u64 = 960;
+
+const WEIGHT_ACCOUNT_QUERY: u64 = 10;
+const WEIGHT_MARKET_DATA_QUERY: u64 = 2;
+const WEIGHT_SYMBOL_RULES: u64 = 2;
+const WEIGHT_ORDER_SUBMIT: u64 = 1;
+const WEIGHT_CANCEL_ORDER: u64 = 1;
+const WEIGHT_ORDER_HISTORY: u64 = 10;
+const WEIGHT_TRADE_HISTORY: u64 = 10;
+const WEIGHT_USER_STREAM: u64 = 1;
+const WEIGHT_SERVER_TIME: u64 = 1;
+
+#[derive(Debug, Clone, Copy)]
+enum RestEndpointGroup {
+    Orders,
+    Account,
+    MarketData,
+}
+
+impl RestEndpointGroup {
+    fn limit_per_minute(self) -> u64 {
+        match self {
+            Self::Orders => REST_WEIGHT_ORDER_LIMIT_PER_MINUTE,
+            Self::Account => REST_WEIGHT_ACCOUNT_LIMIT_PER_MINUTE,
+            Self::MarketData => REST_WEIGHT_MARKET_DATA_LIMIT_PER_MINUTE,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RestRateState {
+    window_start: Instant,
+    used_global_weight: u64,
+    used_order_weight: u64,
+    used_account_weight: u64,
+    used_market_data_weight: u64,
+}
+
+impl RestRateState {
+    fn new() -> Self {
+        Self {
+            window_start: Instant::now(),
+            used_global_weight: 0,
+            used_order_weight: 0,
+            used_account_weight: 0,
+            used_market_data_weight: 0,
+        }
+    }
+
+    fn window_elapsed_secs(&self) -> u64 {
+        self.window_start.elapsed().as_secs()
+    }
+
+    fn reset_if_needed(&mut self) {
+        if self.window_elapsed_secs() >= REST_RATE_LIMIT_WINDOW_SECS {
+            *self = RestRateState::new();
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SymbolOrderRules {
@@ -32,9 +99,7 @@ pub struct BinanceRestClient {
     futures_secret_key: String,
     recv_window: u64,
     time_offset_ms: AtomicI64,
-    // Simple rate limiter: request count in current minute window
-    request_count: AtomicU64,
-    window_start: std::sync::Mutex<Instant>,
+    rate_state: Mutex<RestRateState>,
 }
 
 impl BinanceRestClient {
@@ -57,8 +122,7 @@ impl BinanceRestClient {
             futures_secret_key: futures_secret_key.to_string(),
             recv_window,
             time_offset_ms: AtomicI64::new(0),
-            request_count: AtomicU64::new(0),
-            window_start: std::sync::Mutex::new(Instant::now()),
+            rate_state: Mutex::new(RestRateState::new()),
         }
     }
 
@@ -104,62 +168,178 @@ impl BinanceRestClient {
         serde_json::from_str::<super::types::BinanceApiErrorResponse>(body).ok()
     }
 
-    fn check_rate_limit(&self) {
-        let mut start = match self.window_start.lock() {
+    fn parse_header_u64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|text| text.parse::<u64>().ok())
+    }
+
+    fn observe_used_weight_from_headers(&self, headers: &reqwest::header::HeaderMap) {
+        let observed = Self::parse_header_u64(headers, "x-mbx-used-weight-1m")
+            .or_else(|| Self::parse_header_u64(headers, "x-mbx-used-weight"))
+            .or_else(|| Self::parse_header_u64(headers, "X-MBX-USED-WEIGHT-1M"));
+        if observed.is_none() {
+            return;
+        }
+        let observed_weight = observed.expect("observed checked above");
+
+        let mut state = match self.rate_state.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                tracing::error!("rate-limit mutex poisoned; continuing with recovered state");
+                tracing::error!("rate-limit state mutex poisoned; continuing with recovered state");
                 poisoned.into_inner()
             }
         };
-        if start.elapsed().as_secs() >= 60 {
-            *start = Instant::now();
-            self.request_count.store(0, Ordering::Relaxed);
+        state.reset_if_needed();
+        if observed_weight > state.used_global_weight {
+            state.used_global_weight = observed_weight;
         }
-        let count = self.request_count.fetch_add(1, Ordering::Relaxed);
-        if count > 960 {
-            tracing::warn!(count, "Approaching rate limit (80% of 1200/min)");
+        if observed_weight > REST_WEIGHT_WARNING_THRESHOLD {
+            let reset_in_ms = REST_RATE_LIMIT_WINDOW_SECS
+                .saturating_sub(state.window_elapsed_secs())
+                * 1000;
+            tracing::warn!(
+                used_weight = observed_weight,
+                reset_in_ms,
+                "REST weight from Binance header near limit"
+            );
         }
     }
 
+    fn try_reserve_weight(
+        &self,
+        weight: u64,
+        group: RestEndpointGroup,
+        context: &'static str,
+    ) -> Option<u64> {
+        let mut state = match self.rate_state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!(
+                    context,
+                    "rate-limit state mutex poisoned; continuing with recovered state"
+                );
+                poisoned.into_inner()
+            }
+        };
+
+        state.reset_if_needed();
+        let group_used_weight = match group {
+            RestEndpointGroup::Orders => state.used_order_weight,
+            RestEndpointGroup::Account => state.used_account_weight,
+            RestEndpointGroup::MarketData => state.used_market_data_weight,
+        };
+        let group_limit = group.limit_per_minute();
+
+        if state.used_global_weight + weight > REST_WEIGHT_LIMIT_PER_MINUTE
+            || group_used_weight + weight > group_limit
+        {
+            let reset_in_ms = REST_RATE_LIMIT_WINDOW_SECS
+                .saturating_sub(state.window_elapsed_secs())
+                .saturating_mul(1000);
+            return Some(reset_in_ms.max(250));
+        }
+
+        state.used_global_weight += weight;
+        match group {
+            RestEndpointGroup::Orders => state.used_order_weight += weight,
+            RestEndpointGroup::Account => state.used_account_weight += weight,
+            RestEndpointGroup::MarketData => state.used_market_data_weight += weight,
+        }
+        if state.used_global_weight > REST_WEIGHT_WARNING_THRESHOLD {
+            let reset_in_ms = REST_RATE_LIMIT_WINDOW_SECS
+                .saturating_sub(state.window_elapsed_secs())
+                .saturating_mul(1000);
+            tracing::warn!(
+                context,
+                used_weight = state.used_global_weight,
+                reset_in_ms,
+                "Approaching REST request weight limit"
+            );
+        }
+        None
+    }
+
+    async fn check_rate_limit(&self, weight: u64, group: RestEndpointGroup, context: &'static str) {
+        loop {
+            if let Some(wait_ms) = self.try_reserve_weight(weight, group, context) {
+                tracing::warn!(
+                    context,
+                    wait_ms,
+                    "REST request blocked by in-module throttle, waiting for rate window reset"
+                );
+                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                continue;
+            }
+            break;
+        }
+    }
+
+    async fn send_tracked_request(
+        &self,
+        request: reqwest::RequestBuilder,
+        context: &'static str,
+    ) -> Result<reqwest::Response> {
+        let resp = request.send().await.context(context)?;
+        self.observe_used_weight_from_headers(resp.headers());
+        Ok(resp)
+    }
+
     pub async fn ping(&self) -> Result<()> {
+        self.check_rate_limit(
+            WEIGHT_MARKET_DATA_QUERY,
+            RestEndpointGroup::MarketData,
+            "ping",
+        )
+        .await;
+
         let url = format!("{}/api/v3/ping", self.base_url);
-        self.http
-            .get(&url)
-            .send()
-            .await
-            .context("ping failed")?
-            .error_for_status()
+        let resp = self
+            .send_tracked_request(self.http.get(&url), "ping failed")
+            .await?;
+        resp.error_for_status()
             .context("ping returned error status")?;
         Ok(())
     }
 
     pub async fn server_time(&self) -> Result<u64> {
+        self.check_rate_limit(
+            WEIGHT_SERVER_TIME,
+            RestEndpointGroup::MarketData,
+            "server_time",
+        )
+        .await;
+
         let url = format!("{}/api/v3/time", self.base_url);
         let resp: ServerTimeResponse = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("server_time failed")?
+            .send_tracked_request(self.http.get(&url), "server_time failed")
+            .await?
             .json()
-            .await?;
+            .await
+            .context("server_time failed")?;
         Ok(resp.server_time)
     }
 
     pub async fn get_account(&self) -> Result<AccountInfo> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_ACCOUNT_QUERY,
+            RestEndpointGroup::Account,
+            "get_account",
+        )
+        .await;
 
         let signed = self.sign("");
         let url = format!("{}/api/v3/account?{}", self.base_url, signed);
 
         let resp = self
-            .http
-            .get(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
-            .send()
-            .await
-            .context("get_account HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .get(&url)
+                    .header("X-MBX-APIKEY", &self.api_key),
+                "get_account HTTP failed",
+            )
+            .await?;
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -177,18 +357,24 @@ impl BinanceRestClient {
     }
 
     pub async fn get_futures_account(&self) -> Result<BinanceFuturesAccountInfo> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_ACCOUNT_QUERY,
+            RestEndpointGroup::Account,
+            "get_futures_account",
+        )
+        .await;
 
         let signed = self.sign_futures("");
         let url = format!("{}/fapi/v2/account?{}", self.futures_base_url, signed);
 
         let resp = self
-            .http
-            .get(&url)
-            .header("X-MBX-APIKEY", &self.futures_api_key)
-            .send()
-            .await
-            .context("get_futures_account HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .get(&url)
+                    .header("X-MBX-APIKEY", &self.futures_api_key),
+                "get_futures_account HTTP failed",
+            )
+            .await?;
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -206,17 +392,23 @@ impl BinanceRestClient {
     }
 
     pub async fn get_futures_position_risk(&self) -> Result<Vec<BinanceFuturesPositionRisk>> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_ACCOUNT_QUERY,
+            RestEndpointGroup::Account,
+            "get_futures_position_risk",
+        )
+        .await;
         for attempt in 0..=1 {
             let signed = self.sign_futures("");
             let url = format!("{}/fapi/v2/positionRisk?{}", self.futures_base_url, signed);
             let resp = self
-                .http
-                .get(&url)
-                .header("X-MBX-APIKEY", &self.futures_api_key)
-                .send()
-                .await
-                .context("get_futures_position_risk HTTP failed")?;
+                .send_tracked_request(
+                    self.http
+                        .get(&url)
+                        .header("X-MBX-APIKEY", &self.futures_api_key),
+                    "get_futures_position_risk HTTP failed",
+                )
+                .await?;
             if resp.status().is_success() {
                 return Ok(resp.json().await?);
             }
@@ -246,15 +438,21 @@ impl BinanceRestClient {
     }
 
     pub async fn start_futures_user_data_stream(&self) -> Result<String> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_USER_STREAM,
+            RestEndpointGroup::Account,
+            "start_futures_user_data_stream",
+        )
+        .await;
         let url = format!("{}/fapi/v1/listenKey", self.futures_base_url);
         let resp = self
-            .http
-            .post(&url)
-            .header("X-MBX-APIKEY", &self.futures_api_key)
-            .send()
-            .await
-            .context("start_futures_user_data_stream HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .post(&url)
+                    .header("X-MBX-APIKEY", &self.futures_api_key),
+                "start_futures_user_data_stream HTTP failed",
+            )
+            .await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Some(err) = Self::parse_binance_api_error(&body) {
@@ -274,16 +472,22 @@ impl BinanceRestClient {
     }
 
     pub async fn keepalive_futures_user_data_stream(&self, listen_key: &str) -> Result<()> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_USER_STREAM,
+            RestEndpointGroup::Account,
+            "keepalive_futures_user_data_stream",
+        )
+        .await;
         let url = format!("{}/fapi/v1/listenKey", self.futures_base_url);
         let resp = self
-            .http
-            .put(&url)
-            .header("X-MBX-APIKEY", &self.futures_api_key)
-            .query(&[("listenKey", listen_key)])
-            .send()
-            .await
-            .context("keepalive_futures_user_data_stream HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .put(&url)
+                    .header("X-MBX-APIKEY", &self.futures_api_key)
+                    .query(&[("listenKey", listen_key)]),
+                "keepalive_futures_user_data_stream HTTP failed",
+            )
+            .await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Some(err) = Self::parse_binance_api_error(&body) {
@@ -302,16 +506,22 @@ impl BinanceRestClient {
     }
 
     pub async fn close_futures_user_data_stream(&self, listen_key: &str) -> Result<()> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_USER_STREAM,
+            RestEndpointGroup::Account,
+            "close_futures_user_data_stream",
+        )
+        .await;
         let url = format!("{}/fapi/v1/listenKey", self.futures_base_url);
         let resp = self
-            .http
-            .delete(&url)
-            .header("X-MBX-APIKEY", &self.futures_api_key)
-            .query(&[("listenKey", listen_key)])
-            .send()
-            .await
-            .context("close_futures_user_data_stream HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .delete(&url)
+                    .header("X-MBX-APIKEY", &self.futures_api_key)
+                    .query(&[("listenKey", listen_key)]),
+                "close_futures_user_data_stream HTTP failed",
+            )
+            .await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Some(err) = Self::parse_binance_api_error(&body) {
@@ -330,15 +540,21 @@ impl BinanceRestClient {
     }
 
     pub async fn start_spot_user_data_stream(&self) -> Result<String> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_USER_STREAM,
+            RestEndpointGroup::Account,
+            "start_spot_user_data_stream",
+        )
+        .await;
         let url = format!("{}/api/v3/userDataStream", self.base_url);
         let resp = self
-            .http
-            .post(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
-            .send()
-            .await
-            .context("start_spot_user_data_stream HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .post(&url)
+                    .header("X-MBX-APIKEY", &self.api_key),
+                "start_spot_user_data_stream HTTP failed",
+            )
+            .await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Some(err) = Self::parse_binance_api_error(&body) {
@@ -358,16 +574,22 @@ impl BinanceRestClient {
     }
 
     pub async fn keepalive_spot_user_data_stream(&self, listen_key: &str) -> Result<()> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_USER_STREAM,
+            RestEndpointGroup::Account,
+            "keepalive_spot_user_data_stream",
+        )
+        .await;
         let url = format!("{}/api/v3/userDataStream", self.base_url);
         let resp = self
-            .http
-            .put(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
-            .query(&[("listenKey", listen_key)])
-            .send()
-            .await
-            .context("keepalive_spot_user_data_stream HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .put(&url)
+                    .header("X-MBX-APIKEY", &self.api_key)
+                    .query(&[("listenKey", listen_key)]),
+                "keepalive_spot_user_data_stream HTTP failed",
+            )
+            .await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Some(err) = Self::parse_binance_api_error(&body) {
@@ -386,16 +608,22 @@ impl BinanceRestClient {
     }
 
     pub async fn close_spot_user_data_stream(&self, listen_key: &str) -> Result<()> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_USER_STREAM,
+            RestEndpointGroup::Account,
+            "close_spot_user_data_stream",
+        )
+        .await;
         let url = format!("{}/api/v3/userDataStream", self.base_url);
         let resp = self
-            .http
-            .delete(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
-            .query(&[("listenKey", listen_key)])
-            .send()
-            .await
-            .context("close_spot_user_data_stream HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .delete(&url)
+                    .header("X-MBX-APIKEY", &self.api_key)
+                    .query(&[("listenKey", listen_key)]),
+                "close_spot_user_data_stream HTTP failed",
+            )
+            .await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Some(err) = Self::parse_binance_api_error(&body) {
@@ -420,7 +648,12 @@ impl BinanceRestClient {
         quantity: f64,
         client_order_id: &str,
     ) -> Result<BinanceOrderResponse> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_ORDER_SUBMIT,
+            RestEndpointGroup::Orders,
+            "place_market_order",
+        )
+        .await;
 
         let query = format!(
             "symbol={}&side={}&type=MARKET&quantity={:.5}&newClientOrderId={}&newOrderRespType=FULL",
@@ -441,12 +674,13 @@ impl BinanceRestClient {
         );
 
         let resp = self
-            .http
-            .post(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
-            .send()
-            .await
-            .context("place_market_order HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .post(&url)
+                    .header("X-MBX-APIKEY", &self.api_key),
+                "place_market_order HTTP failed",
+            )
+            .await?;
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -477,7 +711,12 @@ impl BinanceRestClient {
         quantity: f64,
         client_order_id: &str,
     ) -> Result<BinanceOrderResponse> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_ORDER_SUBMIT,
+            RestEndpointGroup::Orders,
+            "place_futures_market_order",
+        )
+        .await;
 
         let query = format!(
             "symbol={}&side={}&type=MARKET&quantity={:.5}&newClientOrderId={}&newOrderRespType=RESULT",
@@ -498,12 +737,13 @@ impl BinanceRestClient {
         );
 
         let resp = self
-            .http
-            .post(&url)
-            .header("X-MBX-APIKEY", &self.futures_api_key)
-            .send()
-            .await
-            .context("place_futures_market_order HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .post(&url)
+                    .header("X-MBX-APIKEY", &self.futures_api_key),
+                "place_futures_market_order HTTP failed",
+            )
+            .await?;
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -558,7 +798,12 @@ impl BinanceRestClient {
         stop_price: f64,
         client_order_id: &str,
     ) -> Result<BinanceOrderResponse> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_ORDER_SUBMIT,
+            RestEndpointGroup::Orders,
+            "place_futures_stop_market_order",
+        )
+        .await;
 
         let query = format!(
             "symbol={}&side={}&type=STOP_MARKET&quantity={:.5}&stopPrice={:.5}&reduceOnly=true&newClientOrderId={}&newOrderRespType=RESULT",
@@ -581,12 +826,13 @@ impl BinanceRestClient {
         );
 
         let resp = self
-            .http
-            .post(&url)
-            .header("X-MBX-APIKEY", &self.futures_api_key)
-            .send()
-            .await
-            .context("place_futures_stop_market_order HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .post(&url)
+                    .header("X-MBX-APIKEY", &self.futures_api_key),
+                "place_futures_stop_market_order HTTP failed",
+            )
+            .await?;
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -637,13 +883,17 @@ impl BinanceRestClient {
     }
 
     pub async fn get_spot_symbol_order_rules(&self, symbol: &str) -> Result<SymbolOrderRules> {
+        self.check_rate_limit(
+            WEIGHT_SYMBOL_RULES,
+            RestEndpointGroup::MarketData,
+            "get_spot_symbol_order_rules",
+        )
+        .await;
+
         let url = format!("{}/api/v3/exchangeInfo?symbol={}", self.base_url, symbol);
         let payload: serde_json::Value = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("get_spot_symbol_order_rules HTTP failed")?
+            .send_tracked_request(self.http.get(&url), "get_spot_symbol_order_rules HTTP failed")
+            .await?
             .error_for_status()
             .context("get_spot_symbol_order_rules returned error status")?
             .json()
@@ -653,16 +903,23 @@ impl BinanceRestClient {
     }
 
     pub async fn get_futures_symbol_order_rules(&self, symbol: &str) -> Result<SymbolOrderRules> {
+        self.check_rate_limit(
+            WEIGHT_SYMBOL_RULES,
+            RestEndpointGroup::MarketData,
+            "get_futures_symbol_order_rules",
+        )
+        .await;
+
         let url = format!(
             "{}/fapi/v1/exchangeInfo?symbol={}",
             self.futures_base_url, symbol
         );
         let payload: serde_json::Value = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("get_futures_symbol_order_rules HTTP failed")?
+            .send_tracked_request(
+                self.http.get(&url),
+                "get_futures_symbol_order_rules HTTP failed",
+            )
+            .await?
             .error_for_status()
             .context("get_futures_symbol_order_rules returned error status")?
             .json()
@@ -690,7 +947,12 @@ impl BinanceRestClient {
         limit: usize,
         is_futures: bool,
     ) -> Result<Vec<Candle>> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_MARKET_DATA_QUERY,
+            RestEndpointGroup::MarketData,
+            "get_klines_for_market",
+        )
+        .await;
 
         let url = if is_futures {
             format!(
@@ -705,11 +967,8 @@ impl BinanceRestClient {
         };
 
         let resp: Vec<Vec<serde_json::Value>> = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("get_klines HTTP failed")?
+            .send_tracked_request(self.http.get(&url), "get_klines HTTP failed")
+            .await?
             .error_for_status()
             .context("get_klines returned error status")?
             .json()
@@ -749,7 +1008,12 @@ impl BinanceRestClient {
         symbol: &str,
         client_order_id: &str,
     ) -> Result<BinanceOrderResponse> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_CANCEL_ORDER,
+            RestEndpointGroup::Orders,
+            "cancel_order",
+        )
+        .await;
 
         let query = format!("symbol={}&origClientOrderId={}", symbol, client_order_id);
         let signed = self.sign(&query);
@@ -758,12 +1022,13 @@ impl BinanceRestClient {
         tracing::info!(symbol, client_order_id, "Cancelling order");
 
         let resp = self
-            .http
-            .delete(&url)
-            .header("X-MBX-APIKEY", &self.api_key)
-            .send()
-            .await
-            .context("cancel_order HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .delete(&url)
+                    .header("X-MBX-APIKEY", &self.api_key),
+                "cancel_order HTTP failed",
+            )
+            .await?;
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -787,7 +1052,12 @@ impl BinanceRestClient {
         limit: usize,
         from_order_id: Option<u64>,
     ) -> Result<Vec<BinanceAllOrder>> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_ORDER_HISTORY,
+            RestEndpointGroup::Orders,
+            "get_all_orders_page",
+        )
+        .await;
 
         let limit = limit.clamp(1, 1000);
         let query = match from_order_id {
@@ -799,12 +1069,13 @@ impl BinanceRestClient {
             let url = format!("{}/api/v3/allOrders?{}", self.base_url, signed);
 
             let resp = self
-                .http
-                .get(&url)
-                .header("X-MBX-APIKEY", &self.api_key)
-                .send()
-                .await
-                .context("get_all_orders HTTP failed")?;
+                .send_tracked_request(
+                    self.http
+                        .get(&url)
+                        .header("X-MBX-APIKEY", &self.api_key),
+                    "get_all_orders HTTP failed",
+                )
+                .await?;
 
             if resp.status().is_success() {
                 return Ok(resp.json().await?);
@@ -841,7 +1112,12 @@ impl BinanceRestClient {
         limit: usize,
         from_order_id: Option<u64>,
     ) -> Result<Vec<BinanceAllOrder>> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_ORDER_HISTORY,
+            RestEndpointGroup::Orders,
+            "get_futures_all_orders_page",
+        )
+        .await;
         let limit = limit.clamp(1, 1000);
         let query = match from_order_id {
             Some(order_id) => format!("symbol={}&limit={}&orderId={}", symbol, limit, order_id),
@@ -850,12 +1126,13 @@ impl BinanceRestClient {
         let signed = self.sign_futures(&query);
         let url = format!("{}/fapi/v1/allOrders?{}", self.futures_base_url, signed);
         let resp = self
-            .http
-            .get(&url)
-            .header("X-MBX-APIKEY", &self.futures_api_key)
-            .send()
-            .await
-            .context("get_futures_all_orders HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .get(&url)
+                    .header("X-MBX-APIKEY", &self.futures_api_key),
+                "get_futures_all_orders HTTP failed",
+            )
+            .await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Some(err) = Self::parse_binance_api_error(&body) {
@@ -911,7 +1188,12 @@ impl BinanceRestClient {
         limit: usize,
         from_id: Option<u64>,
     ) -> Result<Vec<BinanceMyTrade>> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_TRADE_HISTORY,
+            RestEndpointGroup::Orders,
+            "get_my_trades_page",
+        )
+        .await;
 
         let limit = limit.clamp(1, 1000);
         let query = match from_id {
@@ -923,12 +1205,13 @@ impl BinanceRestClient {
             let url = format!("{}/api/v3/myTrades?{}", self.base_url, signed);
 
             let resp = self
-                .http
-                .get(&url)
-                .header("X-MBX-APIKEY", &self.api_key)
-                .send()
-                .await
-                .context("get_my_trades HTTP failed")?;
+                .send_tracked_request(
+                    self.http
+                        .get(&url)
+                        .header("X-MBX-APIKEY", &self.api_key),
+                    "get_my_trades HTTP failed",
+                )
+                .await?;
 
             if resp.status().is_success() {
                 return Ok(resp.json().await?);
@@ -1047,7 +1330,12 @@ impl BinanceRestClient {
         limit: usize,
         from_id: Option<u64>,
     ) -> Result<Vec<BinanceMyTrade>> {
-        self.check_rate_limit();
+        self.check_rate_limit(
+            WEIGHT_TRADE_HISTORY,
+            RestEndpointGroup::Orders,
+            "get_futures_my_trades_page",
+        )
+        .await;
         let limit = limit.clamp(1, 1000);
         let query = match from_id {
             Some(v) => format!("symbol={}&limit={}&fromId={}", symbol, limit, v),
@@ -1056,12 +1344,13 @@ impl BinanceRestClient {
         let signed = self.sign_futures(&query);
         let url = format!("{}/fapi/v1/userTrades?{}", self.futures_base_url, signed);
         let resp = self
-            .http
-            .get(&url)
-            .header("X-MBX-APIKEY", &self.futures_api_key)
-            .send()
-            .await
-            .context("get_futures_my_trades HTTP failed")?;
+            .send_tracked_request(
+                self.http
+                    .get(&url)
+                    .header("X-MBX-APIKEY", &self.futures_api_key),
+                "get_futures_my_trades HTTP failed",
+            )
+            .await?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             if let Some(err) = Self::parse_binance_api_error(&body) {
@@ -1254,8 +1543,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn check_rate_limit_does_not_panic_on_poisoned_mutex() {
+    #[tokio::test]
+    async fn check_rate_limit_does_not_panic_on_poisoned_mutex() {
         let client = BinanceRestClient::new(
             "https://testnet.binance.vision",
             "https://testnet.binancefuture.com",
@@ -1267,17 +1556,17 @@ mod tests {
         );
 
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = client.window_start.lock().unwrap();
-            panic!("poison window_start mutex");
+            let _guard = client.rate_state.lock().unwrap();
+            panic!("poison rate_state mutex");
         }));
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.check_rate_limit();
-        }));
-        assert!(
-            result.is_ok(),
-            "check_rate_limit should recover from poison"
-        );
+        client
+            .check_rate_limit(
+                WEIGHT_MARKET_DATA_QUERY,
+                RestEndpointGroup::MarketData,
+                "rate limit lock recovery test",
+            )
+            .await;
     }
 
     #[test]
