@@ -1,3 +1,7 @@
+## v0.33.0 - 2026-03-04
+
+- feat: add regime-aware portfolio sizing path (047c0a2)
+
 ## v0.32.3 - 2026-03-03
 
 - Improve portfolio sync and add exchange user-stream updates (#189) (00851d6)
