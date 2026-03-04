@@ -1,3 +1,4 @@
+pub mod backtest;
 pub mod binance;
 pub mod config;
 pub mod doctor;
