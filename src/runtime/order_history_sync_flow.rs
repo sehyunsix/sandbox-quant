@@ -1,6 +1,6 @@
 use crate::event::{AppEvent, LogDomain, LogLevel, LogRecord};
-use crate::model::position::Position;
 use crate::model::order::OrderSide;
+use crate::model::position::Position;
 use crate::order_manager::{MarketKind, OrderHistoryStats, OrderManager};
 use std::collections::HashMap;
 use tokio::sync::mpsc;

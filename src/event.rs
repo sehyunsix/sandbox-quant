@@ -61,6 +61,10 @@ pub enum AppEvent {
     PortfolioStateUpdate {
         snapshot: PortfolioStateSnapshot,
     },
+    RegimeUpdate {
+        symbol: String,
+        regime: MarketRegimeSignal,
+    },
     RiskRateSnapshot {
         global: RateBudgetSnapshot,
         orders: RateBudgetSnapshot,
@@ -121,6 +125,31 @@ pub struct AssetPnlEntry {
     pub entry_price: f64,
     pub realized_pnl_usdt: f64,
     pub unrealized_pnl_usdt: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketRegime {
+    TrendUp,
+    TrendDown,
+    Range,
+    Unknown,
+}
+
+impl Default for MarketRegime {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MarketRegimeSignal {
+    pub regime: MarketRegime,
+    pub confidence: f64,
+    pub ema_fast: f64,
+    pub ema_slow: f64,
+    pub vol_ratio: f64,
+    pub slope: f64,
+    pub updated_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Default)]

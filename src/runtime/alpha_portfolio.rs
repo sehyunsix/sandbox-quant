@@ -1,3 +1,4 @@
+use crate::event::{MarketRegime, MarketRegimeSignal};
 use crate::model::signal::Signal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,8 @@ pub struct PortfolioDecision {
     pub alpha: AlphaSignal,
     pub target_position_ratio: f64,
     pub execution_signal: Signal,
+    pub regime: MarketRegime,
+    pub regime_confidence: f64,
     pub reason: &'static str,
 }
 
@@ -64,12 +67,12 @@ impl PortfolioExecutionIntent {
     pub fn effective_signal(&self, min_delta_ratio: f64) -> Signal {
         let threshold = min_delta_ratio.max(0.0);
         if self.position_delta_ratio > threshold {
-            return Signal::Buy;
+            Signal::Buy
+        } else if self.position_delta_ratio < -threshold {
+            Signal::Sell
+        } else {
+            Signal::Hold
         }
-        if self.position_delta_ratio < -threshold {
-            return Signal::Sell;
-        }
-        Signal::Hold
     }
 }
 
@@ -79,6 +82,7 @@ pub fn decide_portfolio_action_from_alpha(
     is_flat: bool,
     alpha_mu: f64,
     order_amount_usdt: f64,
+    regime: MarketRegimeSignal,
 ) -> PortfolioDecision {
     let strength = alpha_mu.abs().clamp(0.0, 1.0);
     let target_ratio = target_ratio_from_strength(strength);
@@ -96,35 +100,89 @@ pub fn decide_portfolio_action_from_alpha(
         confidence: confidence_from_strength(strength),
         timestamp_ms: now_ms,
     };
+
+    let regime_confidence = regime.confidence.max(0.0).min(1.0);
+    let regime_target_ratio = target_ratio * regime_entry_multiplier(&regime) * regime_confidence;
+
     if is_flat {
-        if alpha_mu > 0.0 {
+        if alpha_mu <= 0.0 {
             return PortfolioDecision {
                 alpha,
-                target_position_ratio: target_ratio,
-                execution_signal: Signal::Buy,
-                reason: "portfolio.alpha.entry",
+                target_position_ratio: 0.0,
+                execution_signal: Signal::Hold,
+                regime: regime.regime,
+                regime_confidence,
+                reason: "portfolio.alpha.hold_flat",
+            };
+        }
+        if regime.regime == MarketRegime::TrendDown || regime.regime == MarketRegime::Unknown {
+            return PortfolioDecision {
+                alpha,
+                target_position_ratio: 0.0,
+                execution_signal: Signal::Hold,
+                regime: regime.regime,
+                regime_confidence,
+                reason: "portfolio.regime.blocked",
+            };
+        }
+        if regime_target_ratio < PORTFOLIO_MIN_ENTRY_RATIO {
+            return PortfolioDecision {
+                alpha,
+                target_position_ratio: 0.0,
+                execution_signal: Signal::Hold,
+                regime: regime.regime,
+                regime_confidence,
+                reason: "portfolio.regime.too_small",
             };
         }
         return PortfolioDecision {
             alpha,
-            target_position_ratio: 0.0,
-            execution_signal: Signal::Hold,
-            reason: "portfolio.alpha.hold_flat",
+            target_position_ratio: regime_target_ratio.min(1.0),
+            execution_signal: Signal::Buy,
+            regime: regime.regime,
+            regime_confidence,
+            reason: "portfolio.alpha.entry",
         };
     }
+
     if alpha_mu <= 0.0 {
         return PortfolioDecision {
             alpha,
             target_position_ratio: 0.0,
             execution_signal: Signal::Sell,
+            regime: regime.regime,
+            regime_confidence,
             reason: "portfolio.alpha.exit",
         };
     }
+
+    let hold_ratio =
+        target_ratio * regime_hold_multiplier(&regime) * regime_confidence.clamp(0.2, 1.0);
     PortfolioDecision {
         alpha,
-        target_position_ratio: target_ratio,
+        target_position_ratio: hold_ratio.min(1.0),
         execution_signal: Signal::Hold,
+        regime: regime.regime,
+        regime_confidence,
         reason: "portfolio.alpha.hold",
+    }
+}
+
+fn regime_entry_multiplier(regime: &MarketRegimeSignal) -> f64 {
+    match regime.regime {
+        MarketRegime::TrendUp => 1.0,
+        MarketRegime::TrendDown => 0.0,
+        MarketRegime::Range => 0.5,
+        MarketRegime::Unknown => 0.0,
+    }
+}
+
+fn regime_hold_multiplier(regime: &MarketRegimeSignal) -> f64 {
+    match regime.regime {
+        MarketRegime::TrendUp => 1.0,
+        MarketRegime::TrendDown => 0.75,
+        MarketRegime::Range => 0.5,
+        MarketRegime::Unknown => 0.75,
     }
 }
 
@@ -133,8 +191,6 @@ fn confidence_from_strength(strength: f64) -> f64 {
 }
 
 fn target_ratio_from_strength(strength: f64) -> f64 {
-    // Stepwise sizing keeps behavior predictable while enabling future
-    // portfolio sizing upgrades.
     if strength >= 0.8 {
         1.0
     } else if strength >= 0.6 {
@@ -147,3 +203,5 @@ fn target_ratio_from_strength(strength: f64) -> f64 {
         0.1
     }
 }
+
+const PORTFOLIO_MIN_ENTRY_RATIO: f64 = 0.15;
