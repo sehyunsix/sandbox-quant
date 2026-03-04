@@ -20,6 +20,10 @@ LIMIT_BARS=10000
 DAYS_BACK=14
 INTERVAL_MS=60000
 BASE_URL="https://api.binance.com"
+REQUEST_TIMEOUT=20
+MAX_RETRIES=3
+SLEEP_SECONDS=0.25
+VERBOSE=0
 
 usage() {
   cat <<'USAGE'
@@ -27,6 +31,8 @@ Usage:
   scripts/fetch_backtest_bars.sh [--symbol BTCUSDT] [--interval 1m] [--days-back 14]
                               [--bars 10000] [--out data/backtest_BTCUSDT_1m.csv]
                               [--start-ms unix_ms] [--end-ms unix_ms]
+                              [--timeout-seconds 20] [--max-retries 3]
+                              [--sleep-seconds 0.25] [--verbose]
 
 Arguments:
   --symbol     Symbol (default: BTCUSDT)
@@ -36,7 +42,29 @@ Arguments:
   --out        Output CSV path
   --start-ms   Start timestamp in ms (overrides --days-back)
   --end-ms     End timestamp in ms (default: now)
+  --timeout-seconds   curl timeout seconds (default: 20)
+  --max-retries       request retry count (default: 3)
+  --sleep-seconds     sleep between batches (default: 0.25)
+  --verbose           print fetch progress
 USAGE
+}
+
+logf() {
+  if (( VERBOSE == 1 )); then
+    echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"
+  fi
+}
+
+parse_non_negative_int() {
+  if [[ ! "$1" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+}
+
+parse_non_negative_number() {
+  if [[ ! "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    return 1
+  fi
 }
 
 while (($# > 0)); do
@@ -52,10 +80,12 @@ while (($# > 0)); do
       shift 2
       ;;
     --bars)
+      parse_non_negative_int "$2" || { echo "--bars requires integer >= 0: $2" >&2; exit 1; }
       LIMIT_BARS="$2"
       shift 2
       ;;
     --days-back)
+      parse_non_negative_int "$2" || { echo "--days-back requires integer >= 0: $2" >&2; exit 1; }
       DAYS_BACK="$2"
       shift 2
       ;;
@@ -64,16 +94,37 @@ while (($# > 0)); do
       shift 2
       ;;
     --start-ms)
+      parse_non_negative_int "$2" || { echo "--start-ms requires unix ms integer: $2" >&2; exit 1; }
       START_MS_OVERRIDE="$2"
       shift 2
       ;;
     --end-ms)
+      parse_non_negative_int "$2" || { echo "--end-ms requires unix ms integer: $2" >&2; exit 1; }
       END_MS_OVERRIDE="$2"
+      shift 2
+      ;;
+    --timeout-seconds)
+      parse_non_negative_number "$2" || { echo "--timeout-seconds requires number >= 0: $2" >&2; exit 1; }
+      REQUEST_TIMEOUT="$2"
+      shift 2
+      ;;
+    --max-retries)
+      parse_non_negative_int "$2" || { echo "--max-retries requires integer >= 0: $2" >&2; exit 1; }
+      MAX_RETRIES="$2"
+      shift 2
+      ;;
+    --sleep-seconds)
+      parse_non_negative_number "$2" || { echo "--sleep-seconds requires number >= 0: $2" >&2; exit 1; }
+      SLEEP_SECONDS="$2"
       shift 2
       ;;
     --help|-h)
       usage
       exit 0
+      ;;
+    --verbose)
+      VERBOSE=1
+      shift
       ;;
     *)
       echo "unknown argument: $1" >&2
@@ -111,6 +162,11 @@ if [[ ! "${SYMBOL}" =~ ^[A-Z0-9]{3,12}$ ]]; then
   exit 1
 fi
 
+if [[ "${LIMIT_BARS}" -eq 0 ]]; then
+  echo "nothing to fetch (--bars 0)"
+  exit 0
+fi
+
 if [[ -z "${START_MS_OVERRIDE:-}" ]]; then
   if [[ -z "${END_MS_OVERRIDE:-}" ]]; then
     END_MS="$(date +%s)000"
@@ -137,6 +193,46 @@ trap 'rm -f "$TMP_FILE"' EXIT
 touch "$TMP_FILE"
 echo "open_time,open,high,low,close" > "$TMP_FILE"
 
+fetch_with_retries() {
+  local request_url="$1"
+  local attempt=1
+  local http_code=""
+  local response_file
+  local response_body
+
+  while (( attempt <= MAX_RETRIES )); do
+    response_file="$(mktemp)"
+    http_code="$(curl --max-time "$REQUEST_TIMEOUT" -fsSL -w "%{http_code}" -o "$response_file" "$request_url" || true)"
+    response_body="$(cat "$response_file")"
+    rm -f "$response_file"
+
+    if [[ "$http_code" == "200" ]]; then
+      if jq -e 'type == "array"' <<<"$response_body" >/dev/null 2>&1; then
+        echo "$response_body"
+        return 0
+      fi
+
+      if jq -e 'type == "object" and has("msg")' <<<"$response_body" >/dev/null 2>&1; then
+        echo "request failed with structured api error: $response_body" >&2
+        return 1
+      fi
+
+      logf "request failed with unexpected response: ${response_body:0:200}"
+    else
+      logf "request failed: attempt=$attempt status=$http_code"
+    fi
+
+    if (( attempt >= MAX_RETRIES )); then
+      break
+    fi
+
+    ((attempt += 1))
+    sleep 1
+  done
+
+  return 1
+}
+
 fetched=0
 cursor="$START_MS"
 while true; do
@@ -148,8 +244,16 @@ while true; do
   fi
 
   url="${BASE_URL}/api/v3/klines?symbol=${SYMBOL}&interval=${INTERVAL}&startTime=${cursor}&endTime=${END_MS}&limit=${batch_limit}"
-  payload="$(curl -fsSL "$url")"
-  row_count="$(jq 'length' <<<"$payload")"
+  if ! payload="$(fetch_with_retries "$url")"; then
+    echo "failed to fetch after retries: $url" >&2
+    exit 1
+  fi
+
+  row_count="$(jq 'length' <<<"$payload" 2>/dev/null || true)"
+  if [[ -z "$row_count" || ! "$row_count" =~ ^[0-9]+$ ]]; then
+    echo "invalid row count in response from: $url" >&2
+    exit 1
+  fi
   if [[ "$row_count" -eq 0 ]]; then
     break
   fi
@@ -165,6 +269,7 @@ while true; do
     fetched=$((fetched + 1))
     tail_time=$open_time
   done < <(jq -c '.[]' <<<"$payload")
+  logf "fetched ${fetched}/${LIMIT_BARS} bars (batch=${batch_limit}, rows=${row_count}) current_cursor=${cursor}"
 
   if [[ "$row_count" -lt "$batch_limit" ]]; then
     break
@@ -173,7 +278,7 @@ while true; do
     break
   fi
   cursor=$((tail_time + INTERVAL_MS))
-  sleep 0.25
+  sleep "$SLEEP_SECONDS"
 done
 
 if [[ "$fetched" -eq 0 ]]; then
