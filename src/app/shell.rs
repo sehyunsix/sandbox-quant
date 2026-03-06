@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use crossterm::cursor::MoveToColumn;
+use crossterm::cursor::{MoveToColumn, MoveToNextLine, RestorePosition, SavePosition};
 use crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::{Color, Print, PrintStyledContent, Stylize};
@@ -41,8 +41,8 @@ fn loop_shell(
     let mut stdout = io::stdout();
     let mut buffer = String::new();
     let mut completion_index = 0usize;
-    let mut completion_visible = false;
-    render_prompt(&mut stdout, app, &buffer)?;
+    let mut rendered_menu_lines = 0usize;
+    render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
 
     loop {
         if let Event::Key(key) = read()? {
@@ -57,36 +57,23 @@ fn loop_shell(
                 KeyCode::Char(ch) => {
                     buffer.push(ch);
                     completion_index = 0;
-                    completion_visible = false;
-                    render_prompt(&mut stdout, app, &buffer)?;
+                    render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                 }
                 KeyCode::Backspace => {
                     buffer.pop();
                     completion_index = 0;
-                    completion_visible = false;
-                    render_prompt(&mut stdout, app, &buffer)?;
+                    render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                 }
                 KeyCode::Tab => {
-                    let instruments = app
-                        .portfolio_store
-                        .snapshot
-                        .positions
-                        .keys()
-                        .map(|instrument| instrument.0.clone())
-                        .collect::<Vec<_>>();
-                    let completions = complete_shell_input(&buffer, &instruments);
+                    let completions = current_completions(app, &buffer);
                     if completions.len() == 1 {
                         buffer = completions[0].clone();
                         completion_index = 0;
-                        completion_visible = false;
-                        render_prompt(&mut stdout, app, &buffer)?;
+                        render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                     } else if !completions.is_empty() {
                         completion_index = (completion_index + 1) % completions.len();
                         buffer = completions[completion_index].clone();
-                        completion_visible = true;
-                        println!();
-                        print_completion_menu(&completions, completion_index);
-                        render_prompt(&mut stdout, app, &buffer)?;
+                        render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                     }
                 }
                 KeyCode::Enter => {
@@ -94,20 +81,22 @@ fn loop_shell(
                     let line = buffer.clone();
                     buffer.clear();
                     completion_index = 0;
-                    completion_visible = false;
-                    match parse_shell_input(&line)? {
-                        ShellInput::Empty => {}
-                        ShellInput::Help => println!("{}", shell_help_text()),
-                        ShellInput::Exit => break,
-                        ShellInput::Mode(mode) => {
-                            app.switch_mode(mode)?;
-                            println!(
-                                "{} {}",
-                                "mode switched to".dark_grey(),
-                                mode_name(mode).with(mode_color(mode)).bold()
-                            );
+                    rendered_menu_lines = 0;
+                    match parse_shell_input(&line) {
+                        Ok(ShellInput::Empty) => {}
+                        Ok(ShellInput::Help) => println!("{}", shell_help_text()),
+                        Ok(ShellInput::Exit) => break,
+                        Ok(ShellInput::Mode(mode)) => {
+                            match app.switch_mode(mode) {
+                                Ok(()) => println!(
+                                    "{} {}",
+                                    "mode switched to".dark_grey(),
+                                    mode_name(mode).with(mode_color(mode)).bold()
+                                ),
+                                Err(error) => print_error(error),
+                            }
                         }
-                        ShellInput::Command(command) => {
+                        Ok(ShellInput::Command(command)) => {
                             let rendered_command = command.clone();
                             match runtime.run(app, command) {
                                 Ok(()) => print_command_output(
@@ -118,14 +107,11 @@ fn loop_shell(
                                 Err(error) => print_error(error),
                             }
                         }
+                        Err(error) => print_error(error),
                     }
-                    render_prompt(&mut stdout, app, &buffer)?;
+                    render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                 }
                 _ => {}
-            }
-
-            if completion_visible && buffer.is_empty() {
-                completion_visible = false;
             }
         }
     }
@@ -153,6 +139,38 @@ fn render_prompt(
         Print(" "),
         Print(buffer)
     )?;
+    stdout.flush()
+}
+
+fn render_shell(
+    stdout: &mut io::Stdout,
+    app: &AppBootstrap<BinanceExchange>,
+    buffer: &str,
+    completion_index: usize,
+    rendered_menu_lines: &mut usize,
+) -> io::Result<()> {
+    render_prompt(stdout, app, buffer)?;
+    execute!(stdout, SavePosition)?;
+
+    let completions = current_completions(app, buffer);
+    let menu_lines = if should_show_completion_menu(buffer, &completions) {
+        print_completion_menu(stdout, &completions, completion_index)?
+    } else {
+        0
+    };
+
+    let lines_to_clear = (*rendered_menu_lines).saturating_sub(menu_lines);
+    for _ in 0..lines_to_clear {
+        execute!(
+            stdout,
+            MoveToNextLine(1),
+            MoveToColumn(0),
+            Clear(ClearType::CurrentLine)
+        )?;
+    }
+
+    *rendered_menu_lines = menu_lines;
+    execute!(stdout, RestorePosition)?;
     stdout.flush()
 }
 
@@ -209,19 +227,37 @@ pub fn format_completion_line(completions: &[String], selected: usize) -> String
         .join("  ")
 }
 
-fn print_completion_menu(completions: &[String], selected: usize) {
-    println!("{}", "completions".dark_grey());
+fn print_completion_menu(
+    stdout: &mut io::Stdout,
+    completions: &[String],
+    selected: usize,
+) -> io::Result<usize> {
+    execute!(
+        stdout,
+        MoveToNextLine(1),
+        MoveToColumn(0),
+        Clear(ClearType::CurrentLine),
+        PrintStyledContent("completions".dark_grey()),
+    )?;
+
     for (index, item) in completions.iter().enumerate() {
+        execute!(stdout, MoveToNextLine(1), MoveToColumn(0), Clear(ClearType::CurrentLine))?;
         if index == selected {
-            println!(
-                "{} {}",
-                ">".cyan().bold(),
-                item.as_str().black().on_white()
-            );
+            execute!(
+                stdout,
+                PrintStyledContent(">".cyan().bold()),
+                Print(" "),
+                PrintStyledContent(item.as_str().black().on_white()),
+            )?;
         } else {
-            println!("  {}", item.as_str().dark_grey());
+            execute!(
+                stdout,
+                Print("  "),
+                PrintStyledContent(item.as_str().dark_grey()),
+            )?;
         }
     }
+    Ok(completions.len() + 1)
 }
 
 fn print_command_output(
@@ -234,4 +270,19 @@ fn print_command_output(
 
 fn print_error(error: impl std::fmt::Display) {
     println!("{} {}", "error:".red().bold(), error.to_string().red());
+}
+
+fn current_completions(app: &AppBootstrap<BinanceExchange>, buffer: &str) -> Vec<String> {
+    let instruments = app
+        .portfolio_store
+        .snapshot
+        .positions
+        .keys()
+        .map(|instrument| instrument.0.clone())
+        .collect::<Vec<_>>();
+    complete_shell_input(buffer, &instruments)
+}
+
+fn should_show_completion_menu(buffer: &str, completions: &[String]) -> bool {
+    buffer.trim_start().starts_with('/') && !completions.is_empty()
 }
