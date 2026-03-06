@@ -1,6 +1,6 @@
 use crate::v1::domain::identifiers::BatchId;
 use crate::v1::domain::instrument::Instrument;
-use crate::v1::domain::position::Side;
+use crate::v1::domain::market::Market;
 use crate::v1::error::exchange_error::ExchangeError;
 use crate::v1::error::execution_error::ExecutionError;
 use crate::v1::exchange::facade::ExchangeFacade;
@@ -8,6 +8,9 @@ use crate::v1::exchange::types::CloseOrderRequest;
 use crate::v1::execution::close_all::CloseAllBatchResult;
 use crate::v1::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
 use crate::v1::execution::command::ExecutionCommand;
+use crate::v1::execution::futures::planner::FuturesExecutionPlanner;
+use crate::v1::execution::planner::ExecutionPlan;
+use crate::v1::execution::spot::planner::SpotExecutionPlanner;
 use crate::v1::portfolio::store::PortfolioStateStore;
 
 #[derive(Debug, Default)]
@@ -18,6 +21,21 @@ pub struct ExecutionService {
 impl ExecutionService {
     pub fn accept(&mut self, command: ExecutionCommand) {
         self.last_command = Some(command);
+    }
+
+    fn plan_close(
+        &self,
+        store: &PortfolioStateStore,
+        instrument: &Instrument,
+    ) -> Result<ExecutionPlan, ExecutionError> {
+        let Some(position) = store.snapshot.positions.get(instrument) else {
+            return Err(ExecutionError::NoOpenPosition);
+        };
+
+        match position.market {
+            Market::Spot => SpotExecutionPlanner.plan_close(position),
+            Market::Futures => FuturesExecutionPlanner.plan_close(position),
+        }
     }
 
     /// Submits a close order for the current authoritative position snapshot.
@@ -32,35 +50,35 @@ impl ExecutionService {
         store: &PortfolioStateStore,
         instrument: &Instrument,
     ) -> Result<CloseSymbolResult, ExecutionError> {
-        let Some(position) = store.snapshot.positions.get(instrument) else {
-            return Ok(CloseSymbolResult {
-                instrument: instrument.clone(),
-                result: CloseSubmitResult::SkippedNoPosition,
-            });
+        let plan = match self.plan_close(store, instrument) {
+            Ok(plan) => plan,
+            Err(ExecutionError::NoOpenPosition) => {
+                return Ok(CloseSymbolResult {
+                    instrument: instrument.clone(),
+                    result: CloseSubmitResult::SkippedNoPosition,
+                });
+            }
+            Err(error) => return Err(error),
         };
-        if position.is_flat() {
-            return Ok(CloseSymbolResult {
-                instrument: instrument.clone(),
-                result: CloseSubmitResult::SkippedNoPosition,
-            });
-        }
 
-        let side = match position.side() {
-            Some(Side::Buy) => Side::Sell,
-            Some(Side::Sell) => Side::Buy,
-            None => return Err(ExecutionError::NoOpenPosition),
-        };
-        let qty = position.abs_qty();
-        if qty <= f64::EPSILON {
-            return Err(ExecutionError::CloseQtyTooSmall);
+        if plan.qty <= f64::EPSILON {
+            return Ok(CloseSymbolResult {
+                instrument: instrument.clone(),
+                result: CloseSubmitResult::SkippedNoPosition,
+            });
         }
 
         exchange.submit_close_order(CloseOrderRequest {
-            instrument: instrument.clone(),
-            market: position.market,
-            side,
-            qty,
-            reduce_only: position.market == crate::v1::domain::market::Market::Futures,
+            instrument: plan.instrument.clone(),
+            market: store
+                .snapshot
+                .positions
+                .get(instrument)
+                .map(|position| position.market)
+                .ok_or(ExecutionError::NoOpenPosition)?,
+            side: plan.side,
+            qty: plan.qty,
+            reduce_only: plan.reduce_only,
         })?;
 
         Ok(CloseSymbolResult {
