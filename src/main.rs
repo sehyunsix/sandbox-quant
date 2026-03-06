@@ -1,12 +1,13 @@
+use sandbox_quant::app::cli::parse_app_command;
 use sandbox_quant::app::bootstrap::AppBootstrap;
-use sandbox_quant::app::commands::AppCommand;
 use sandbox_quant::app::runtime::AppRuntime;
 use sandbox_quant::portfolio::store::PortfolioStateStore;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
-    let command = parse_command(std::env::args().nth(1).as_deref())?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let command = parse_app_command(&args)?;
     let mut app = AppBootstrap::from_env(PortfolioStateStore::default())?;
     let mut runtime = AppRuntime::default();
 
@@ -17,13 +18,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn parse_command(raw: Option<&str>) -> Result<AppCommand, String> {
-    match raw.unwrap_or("refresh") {
-        "refresh" => Ok(AppCommand::RefreshAuthoritativeState),
-        other => Err(format!(
-            "unsupported command: {other}. supported commands: refresh"
-        )),
-    }
 }
