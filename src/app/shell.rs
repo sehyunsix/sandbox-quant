@@ -42,6 +42,7 @@ fn loop_shell(
     let mut buffer = String::new();
     let mut completion_index = 0usize;
     let mut rendered_menu_lines = 0usize;
+    let mut completion_query: Option<String> = None;
     render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
 
     loop {
@@ -57,22 +58,47 @@ fn loop_shell(
                 KeyCode::Char(ch) => {
                     buffer.push(ch);
                     completion_index = 0;
+                    completion_query = Some(buffer.clone());
                     render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                 }
                 KeyCode::Backspace => {
                     buffer.pop();
                     completion_index = 0;
+                    completion_query = Some(buffer.clone());
                     render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                 }
                 KeyCode::Tab => {
-                    let completions = current_completions(app, &buffer);
+                    let query = completion_query.clone().unwrap_or_else(|| buffer.clone());
+                    let completions = current_completions(app, &query);
                     if completions.len() == 1 {
                         buffer = completions[0].clone();
                         completion_index = 0;
+                        completion_query = Some(query);
                         render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                     } else if !completions.is_empty() {
                         completion_index = (completion_index + 1) % completions.len();
                         buffer = completions[completion_index].clone();
+                        completion_query = Some(query);
+                        render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
+                    }
+                }
+                KeyCode::Up => {
+                    let query = completion_query.clone().unwrap_or_else(|| buffer.clone());
+                    let completions = current_completions(app, &query);
+                    if !completions.is_empty() {
+                        completion_index = previous_completion_index(completions.len(), completion_index);
+                        buffer = completions[completion_index].clone();
+                        completion_query = Some(query);
+                        render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
+                    }
+                }
+                KeyCode::Down => {
+                    let query = completion_query.clone().unwrap_or_else(|| buffer.clone());
+                    let completions = current_completions(app, &query);
+                    if !completions.is_empty() {
+                        completion_index = next_completion_index(completions.len(), completion_index);
+                        buffer = completions[completion_index].clone();
+                        completion_query = Some(query);
                         render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                     }
                 }
@@ -81,6 +107,7 @@ fn loop_shell(
                     let line = buffer.clone();
                     buffer.clear();
                     completion_index = 0;
+                    completion_query = None;
                     rendered_menu_lines = 0;
                     match parse_shell_input(&line) {
                         Ok(ShellInput::Empty) => {}
@@ -285,4 +312,22 @@ fn current_completions(app: &AppBootstrap<BinanceExchange>, buffer: &str) -> Vec
 
 fn should_show_completion_menu(buffer: &str, completions: &[String]) -> bool {
     buffer.trim_start().starts_with('/') && !completions.is_empty()
+}
+
+pub fn next_completion_index(len: usize, current: usize) -> usize {
+    if len == 0 {
+        0
+    } else {
+        (current + 1) % len
+    }
+}
+
+pub fn previous_completion_index(len: usize, current: usize) -> usize {
+    if len == 0 {
+        0
+    } else if current == 0 {
+        len - 1
+    } else {
+        current - 1
+    }
 }

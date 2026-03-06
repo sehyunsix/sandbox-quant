@@ -3,7 +3,9 @@ use sandbox_quant::app::cli::{
 };
 use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::app::commands::AppCommand;
-use sandbox_quant::app::shell::format_completion_line;
+use sandbox_quant::app::shell::{
+    format_completion_line, next_completion_index, previous_completion_index,
+};
 use sandbox_quant::domain::instrument::Instrument;
 use sandbox_quant::execution::command::{CommandSource, ExecutionCommand};
 
@@ -133,4 +135,12 @@ fn shell_completion_line_marks_selected_item() {
     );
 
     assert_eq!(line, "/refresh  [/close-all]");
+}
+
+#[test]
+fn completion_index_wraps_for_up_and_down_navigation() {
+    assert_eq!(next_completion_index(3, 0), 1);
+    assert_eq!(next_completion_index(3, 2), 0);
+    assert_eq!(previous_completion_index(3, 0), 2);
+    assert_eq!(previous_completion_index(3, 2), 1);
 }
