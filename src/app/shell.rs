@@ -115,30 +115,27 @@ fn loop_shell(
                     completion_query = None;
                     match parse_shell_input(&line) {
                         Ok(ShellInput::Empty) => {}
-                        Ok(ShellInput::Help) => println!("{}", shell_help_text()),
+                        Ok(ShellInput::Help) => print_plain_block(shell_help_text())?,
                         Ok(ShellInput::Exit) => break,
                         Ok(ShellInput::Mode(mode)) => {
                             match app.switch_mode(mode) {
-                                Ok(()) => println!(
-                                    "{} {}",
-                                    "mode switched to".dark_grey(),
-                                    mode_name(mode).with(mode_color(mode)).bold()
-                                ),
-                                Err(error) => print_error(error),
+                                Ok(()) => print_mode_switched(&mut stdout, mode)?,
+                                Err(error) => print_error(&mut stdout, error)?,
                             }
                         }
                         Ok(ShellInput::Command(command)) => {
                             let rendered_command = command.clone();
                             match runtime.run(app, command) {
                                 Ok(()) => print_command_output(
+                                    &mut stdout,
                                     &rendered_command,
                                     &app.portfolio_store,
                                     &app.event_log,
-                                ),
-                                Err(error) => print_error(error),
+                                )?,
+                                Err(error) => print_error(&mut stdout, error)?,
                             }
                         }
-                        Err(error) => print_error(error),
+                        Err(error) => print_error(&mut stdout, error)?,
                     }
                     render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                 }
@@ -318,15 +315,18 @@ fn print_completion_menu(
 }
 
 fn print_command_output(
+    stdout: &mut io::Stdout,
     command: &crate::app::commands::AppCommand,
     store: &crate::portfolio::store::PortfolioStateStore,
     event_log: &crate::storage::event_log::EventLog,
-) {
-    println!("{}", render_command_output(command, store, event_log).cyan());
+) -> io::Result<()> {
+    begin_output_block(stdout)?;
+    writeln!(stdout, "{}", render_command_output(command, store, event_log).cyan())
 }
 
-fn print_error(error: impl std::fmt::Display) {
-    println!("{} {}", "error:".red().bold(), error.to_string().red());
+fn print_error(stdout: &mut io::Stdout, error: impl std::fmt::Display) -> io::Result<()> {
+    begin_output_block(stdout)?;
+    writeln!(stdout, "{} {}", "error:".red().bold(), error.to_string().red())
 }
 
 fn current_completions(
@@ -345,6 +345,27 @@ fn current_completions(
 
 fn should_show_completion_menu(buffer: &str, completions: &[ShellCompletion]) -> bool {
     buffer.trim_start().starts_with('/') && !completions.is_empty()
+}
+
+fn begin_output_block(stdout: &mut io::Stdout) -> io::Result<()> {
+    execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
+    Ok(())
+}
+
+fn print_plain_block(text: &str) -> io::Result<()> {
+    let mut stdout = io::stdout();
+    begin_output_block(&mut stdout)?;
+    writeln!(stdout, "{text}")
+}
+
+fn print_mode_switched(stdout: &mut io::Stdout, mode: BinanceMode) -> io::Result<()> {
+    begin_output_block(stdout)?;
+    writeln!(
+        stdout,
+        "{} {}",
+        "mode switched to".dark_grey(),
+        mode_name(mode).with(mode_color(mode)).bold()
+    )
 }
 
 fn ensure_vertical_space(stdout: &mut io::Stdout, lines_needed: usize) -> io::Result<usize> {
