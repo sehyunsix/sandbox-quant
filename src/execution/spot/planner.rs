@@ -35,15 +35,15 @@ impl SpotExecutionPlanner {
     pub fn plan_target_exposure(
         &self,
         position: &PositionSnapshot,
+        current_price: f64,
         target_notional_usdt: f64,
     ) -> Result<ExecutionPlan, ExecutionError> {
-        let price = position.entry_price.ok_or(ExecutionError::MissingPriceContext)?;
-        if price <= f64::EPSILON {
+        if current_price <= f64::EPSILON {
             return Err(ExecutionError::MissingPriceContext);
         }
 
         let current_qty = position.signed_qty;
-        let target_qty = target_notional_usdt / price;
+        let target_qty = target_notional_usdt / current_price;
         let delta_qty = target_qty - current_qty;
         let side = if delta_qty >= 0.0 {
             Side::Buy

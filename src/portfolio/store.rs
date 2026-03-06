@@ -1,4 +1,6 @@
+use crate::domain::instrument::Instrument;
 use crate::error::exchange_error::ExchangeError;
+use crate::execution::price_source::PriceSource;
 use crate::exchange::facade::ExchangeFacade;
 use crate::exchange::types::AuthoritativeSnapshot;
 use crate::portfolio::reconcile::apply_authoritative_snapshot;
@@ -22,8 +24,16 @@ impl Default for PortfolioStateStore {
 
 impl PortfolioStateStore {
     pub fn apply_snapshot(&mut self, snapshot: AuthoritativeSnapshot) {
-        self.snapshot = apply_authoritative_snapshot(snapshot);
+        let mut next = apply_authoritative_snapshot(snapshot);
+        next.market_prices = self.snapshot.market_prices.clone();
+        self.snapshot = next;
         self.staleness = StalenessState::Fresh;
+    }
+
+    pub fn set_market_price(&mut self, instrument: Instrument, price: f64) {
+        if price > f64::EPSILON {
+            self.snapshot.market_prices.insert(instrument, price);
+        }
     }
 
     pub fn mark_market_data_stale(&mut self) {
@@ -47,5 +57,11 @@ impl PortfolioStateStore {
         let snapshot = exchange.load_authoritative_snapshot()?;
         self.apply_snapshot(snapshot);
         Ok(())
+    }
+}
+
+impl PriceSource for PortfolioStateStore {
+    fn current_price(&self, instrument: &Instrument) -> Option<f64> {
+        self.snapshot.market_prices.get(instrument).copied()
     }
 }

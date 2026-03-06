@@ -132,14 +132,55 @@ fn execution_service_plans_target_exposure_from_authoritative_store() {
         }],
         open_orders: vec![],
     });
+    store.set_market_price(instrument.clone(), 50000.0);
 
     let service = ExecutionService::default();
     let plan = service
-        .plan_target_exposure(&store, &instrument, Exposure::new(0.5).expect("bounded exposure"))
+        .plan_target_exposure(
+            &store,
+            &store,
+            &instrument,
+            Exposure::new(0.5).expect("bounded exposure"),
+        )
         .expect("planning should succeed");
 
     assert_eq!(plan.instrument, instrument);
     assert_eq!(plan.side, Side::Buy);
     assert!((plan.qty - 0.26).abs() < 1e-9);
     assert!(!plan.reduce_only);
+}
+
+#[test]
+fn target_exposure_requires_price_source_context() {
+    let instrument = Instrument::new("ETHUSDT");
+    let mut store = PortfolioStateStore::default();
+    store.apply_snapshot(AuthoritativeSnapshot {
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 500.0,
+            locked: 0.0,
+        }],
+        positions: vec![PositionSnapshot {
+            instrument: instrument.clone(),
+            market: Market::Spot,
+            signed_qty: 1.0,
+            entry_price: Some(2500.0),
+        }],
+        open_orders: vec![],
+    });
+
+    let service = ExecutionService::default();
+    let err = service
+        .plan_target_exposure(
+            &store,
+            &store,
+            &instrument,
+            Exposure::new(0.2).expect("bounded exposure"),
+        )
+        .expect_err("price source should be required");
+
+    assert!(matches!(
+        err,
+        sandbox_quant::error::execution_error::ExecutionError::MissingPriceContext
+    ));
 }

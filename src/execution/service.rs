@@ -11,6 +11,7 @@ use crate::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
 use crate::execution::command::ExecutionCommand;
 use crate::execution::futures::planner::FuturesExecutionPlanner;
 use crate::execution::planner::ExecutionPlan;
+use crate::execution::price_source::PriceSource;
 use crate::execution::spot::planner::SpotExecutionPlanner;
 use crate::execution::target_translation::exposure_to_notional;
 use crate::portfolio::store::PortfolioStateStore;
@@ -43,21 +44,24 @@ impl ExecutionService {
     pub fn plan_target_exposure(
         &self,
         store: &PortfolioStateStore,
+        price_source: &impl PriceSource,
         instrument: &Instrument,
         target: Exposure,
     ) -> Result<ExecutionPlan, ExecutionError> {
         let Some(position) = store.snapshot.positions.get(instrument) else {
             return Err(ExecutionError::NoOpenPosition);
         };
+        let current_price = price_source
+            .current_price(instrument)
+            .ok_or(ExecutionError::MissingPriceContext)?;
         let equity_usdt: f64 = store.snapshot.balances.iter().map(|b| b.total()).sum();
         let target_notional = exposure_to_notional(target, equity_usdt);
 
         match position.market {
-            Market::Spot => {
-                SpotExecutionPlanner.plan_target_exposure(position, target_notional.target_usdt)
-            }
+            Market::Spot => SpotExecutionPlanner
+                .plan_target_exposure(position, current_price, target_notional.target_usdt),
             Market::Futures => FuturesExecutionPlanner
-                .plan_target_exposure(position, target_notional.target_usdt),
+                .plan_target_exposure(position, current_price, target_notional.target_usdt),
         }
     }
 

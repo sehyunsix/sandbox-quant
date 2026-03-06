@@ -23,5 +23,6 @@ pub fn apply_authoritative_snapshot(snapshot: AuthoritativeSnapshot) -> Portfoli
         balances: snapshot.balances,
         positions,
         open_orders,
+        market_prices: BTreeMap::new(),
     }
 }

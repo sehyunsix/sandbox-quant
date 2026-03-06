@@ -10,4 +10,5 @@ pub struct PortfolioStateSnapshot {
     pub balances: Vec<BalanceSnapshot>,
     pub positions: BTreeMap<Instrument, PositionSnapshot>,
     pub open_orders: BTreeMap<Instrument, Vec<OpenOrder>>,
+    pub market_prices: BTreeMap<Instrument, f64>,
 }
