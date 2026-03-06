@@ -3,6 +3,7 @@ use sandbox_quant::app::cli::{
 };
 use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::app::commands::AppCommand;
+use sandbox_quant::app::shell::format_completion_line;
 use sandbox_quant::domain::instrument::Instrument;
 use sandbox_quant::execution::command::{CommandSource, ExecutionCommand};
 
@@ -122,4 +123,14 @@ fn shell_completion_suggests_commands_modes_and_instruments() {
         &["BTCUSDT".to_string(), "ETHUSDT".to_string()],
     );
     assert_eq!(instrument_matches, vec!["/close-symbol BTCUSDT".to_string()]);
+}
+
+#[test]
+fn shell_completion_line_marks_selected_item() {
+    let line = format_completion_line(
+        &["/refresh".to_string(), "/close-all".to_string()],
+        1,
+    );
+
+    assert_eq!(line, "/refresh  [/close-all]");
 }

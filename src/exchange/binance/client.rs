@@ -18,6 +18,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub trait BinanceTransport: Send + Sync {
+    fn transport_name(&self) -> &'static str {
+        "real"
+    }
+
     fn load_account_state(&self, market: Market) -> Result<RawAccountState, ExchangeError>;
     fn load_last_price(&self, symbol: &str, market: Market) -> Result<f64, ExchangeError>;
     fn load_symbol_rules(
@@ -43,6 +47,10 @@ impl BinanceExchange {
             transport,
             mapper: BinanceMapper,
         }
+    }
+
+    pub fn transport_name(&self) -> &'static str {
+        self.transport.transport_name()
     }
 }
 

@@ -26,6 +26,10 @@ impl BinanceDemoHttpTransport {
 }
 
 impl BinanceTransport for BinanceDemoHttpTransport {
+    fn transport_name(&self) -> &'static str {
+        "demo"
+    }
+
     fn load_account_state(&self, market: Market) -> Result<RawAccountState, ExchangeError> {
         self.inner.load_account_state(market)
     }
