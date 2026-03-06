@@ -6,6 +6,7 @@ use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::app::commands::AppCommand;
 use sandbox_quant::app::shell::{
     format_completion_line, next_completion_index, previous_completion_index,
+    scroll_lines_needed,
 };
 use sandbox_quant::domain::instrument::Instrument;
 use sandbox_quant::execution::command::{CommandSource, ExecutionCommand};
@@ -144,6 +145,12 @@ fn completion_index_wraps_for_up_and_down_navigation() {
     assert_eq!(next_completion_index(3, 2), 0);
     assert_eq!(previous_completion_index(3, 0), 2);
     assert_eq!(previous_completion_index(3, 2), 1);
+}
+
+#[test]
+fn scroll_lines_needed_detects_terminal_bottom_overflow() {
+    assert_eq!(scroll_lines_needed(5, 20, 3), 0);
+    assert_eq!(scroll_lines_needed(18, 20, 3), 2);
 }
 
 #[test]

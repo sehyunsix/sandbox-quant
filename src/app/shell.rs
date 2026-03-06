@@ -1,10 +1,10 @@
 use std::io::{self, Write};
 
-use crossterm::cursor::{MoveToColumn, MoveToNextLine, RestorePosition, SavePosition};
+use crossterm::cursor::{position, MoveToColumn, MoveToNextLine, RestorePosition, SavePosition};
 use crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::{Color, Print, PrintStyledContent, Stylize};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType, ScrollUp};
 
 use crate::app::bootstrap::{AppBootstrap, BinanceMode};
 use crate::app::cli::{
@@ -181,9 +181,14 @@ fn render_shell(
     rendered_menu_lines: &mut usize,
 ) -> io::Result<()> {
     render_prompt(stdout, app, buffer)?;
-    execute!(stdout, SavePosition)?;
-
     let completions = current_completions(app, buffer);
+    let expected_menu_lines = if should_show_completion_menu(buffer, &completions) {
+        completions.len() + 1
+    } else {
+        0
+    };
+    ensure_vertical_space(stdout, expected_menu_lines)?;
+    execute!(stdout, SavePosition)?;
     let menu_lines = if should_show_completion_menu(buffer, &completions) {
         print_completion_menu(stdout, &completions, completion_index)?
     } else {
@@ -337,6 +342,30 @@ fn current_completions(
 
 fn should_show_completion_menu(buffer: &str, completions: &[ShellCompletion]) -> bool {
     buffer.trim_start().starts_with('/') && !completions.is_empty()
+}
+
+fn ensure_vertical_space(stdout: &mut io::Stdout, lines_needed: usize) -> io::Result<()> {
+    if lines_needed == 0 {
+        return Ok(());
+    }
+
+    let (_, row) = position()?;
+    let (_, height) = size()?;
+    let overflow = scroll_lines_needed(row, height, lines_needed);
+    if overflow > 0 {
+        execute!(stdout, ScrollUp(overflow as u16))?;
+    }
+    Ok(())
+}
+
+pub fn scroll_lines_needed(current_row: u16, terminal_height: u16, lines_needed: usize) -> usize {
+    if terminal_height == 0 {
+        return 0;
+    }
+
+    let last_row = terminal_height.saturating_sub(1) as usize;
+    let current_row = current_row as usize;
+    current_row.saturating_add(lines_needed).saturating_sub(last_row)
 }
 
 pub fn next_completion_index(len: usize, current: usize) -> usize {
