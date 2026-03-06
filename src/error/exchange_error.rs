@@ -8,4 +8,6 @@ pub enum ExchangeError {
     RateLimited,
     #[error("invalid response")]
     InvalidResponse,
+    #[error("unsupported market operation")]
+    UnsupportedMarketOperation,
 }
