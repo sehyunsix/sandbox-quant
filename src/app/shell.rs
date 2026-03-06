@@ -320,13 +320,11 @@ fn print_command_output(
     store: &crate::portfolio::store::PortfolioStateStore,
     event_log: &crate::storage::event_log::EventLog,
 ) -> io::Result<()> {
-    begin_output_block(stdout)?;
-    writeln!(stdout, "{}", render_command_output(command, store, event_log).cyan())
+    print_multiline_block(stdout, &render_command_output(command, store, event_log), true)
 }
 
 fn print_error(stdout: &mut io::Stdout, error: impl std::fmt::Display) -> io::Result<()> {
-    begin_output_block(stdout)?;
-    writeln!(stdout, "{} {}", "error:".red().bold(), error.to_string().red())
+    print_multiline_block(stdout, &format!("error: {error}"), false)
 }
 
 fn current_completions(
@@ -354,18 +352,30 @@ fn begin_output_block(stdout: &mut io::Stdout) -> io::Result<()> {
 
 fn print_plain_block(text: &str) -> io::Result<()> {
     let mut stdout = io::stdout();
-    begin_output_block(&mut stdout)?;
-    writeln!(stdout, "{text}")
+    print_multiline_block(&mut stdout, text, false)
 }
 
 fn print_mode_switched(stdout: &mut io::Stdout, mode: BinanceMode) -> io::Result<()> {
-    begin_output_block(stdout)?;
-    writeln!(
-        stdout,
-        "{} {}",
-        "mode switched to".dark_grey(),
-        mode_name(mode).with(mode_color(mode)).bold()
-    )
+    print_multiline_block(stdout, &format!("mode switched to {}", mode_name(mode)), false)
+}
+
+fn print_multiline_block(stdout: &mut io::Stdout, text: &str, cyan_output: bool) -> io::Result<()> {
+    for (index, line) in text.lines().enumerate() {
+        if index == 0 {
+            begin_output_block(stdout)?;
+        } else {
+            execute!(stdout, MoveToColumn(0))?;
+        }
+
+        if cyan_output {
+            writeln!(stdout, "{}", line.cyan())?;
+        } else if let Some(rest) = line.strip_prefix("error: ") {
+            writeln!(stdout, "{} {}", "error:".red().bold(), rest.red())?;
+        } else {
+            writeln!(stdout, "{line}")?;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_vertical_space(stdout: &mut io::Stdout, lines_needed: usize) -> io::Result<usize> {
