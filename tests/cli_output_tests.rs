@@ -1,7 +1,9 @@
 use sandbox_quant::app::commands::AppCommand;
 use sandbox_quant::app::output::render_command_output;
+use sandbox_quant::domain::balance::BalanceSnapshot;
 use sandbox_quant::domain::instrument::Instrument;
 use sandbox_quant::domain::market::Market;
+use sandbox_quant::domain::order::{OpenOrder, OrderStatus};
 use sandbox_quant::domain::position::PositionSnapshot;
 use sandbox_quant::execution::command::{CommandSource, ExecutionCommand};
 use sandbox_quant::portfolio::store::PortfolioStateStore;
@@ -12,14 +14,28 @@ use serde_json::json;
 fn refresh_output_includes_store_summary() {
     let mut store = PortfolioStateStore::default();
     store.apply_snapshot(sandbox_quant::exchange::types::AuthoritativeSnapshot {
-        balances: vec![],
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 100.0,
+            locked: 10.0,
+        }],
         positions: vec![PositionSnapshot {
             instrument: Instrument::new("BTCUSDT"),
             market: Market::Futures,
             signed_qty: 0.25,
             entry_price: Some(65000.0),
         }],
-        open_orders: vec![],
+        open_orders: vec![OpenOrder {
+            order_id: None,
+            client_order_id: "close-1".to_string(),
+            instrument: Instrument::new("BTCUSDT"),
+            market: Market::Futures,
+            side: sandbox_quant::domain::position::Side::Sell,
+            orig_qty: 0.25,
+            executed_qty: 0.0,
+            reduce_only: true,
+            status: OrderStatus::Submitted,
+        }],
     });
 
     let mut event_log = EventLog::default();
@@ -34,7 +50,11 @@ fn refresh_output_includes_store_summary() {
 
     assert!(output.contains("refresh completed"));
     assert!(output.contains("staleness=Fresh"));
-    assert!(output.contains("positions=1"));
+    assert!(output.contains("balances (1)"));
+    assert!(output.contains("positions (1)"));
+    assert!(output.contains("open orders (1)"));
+    assert!(output.contains("USDT free=100.00000000"));
+    assert!(output.contains("BTCUSDT Futures side=Buy"));
     assert!(output.contains("last_event=app.portfolio.refreshed"));
 }
 

@@ -19,14 +19,96 @@ fn render_refresh_summary(store: &PortfolioStateStore, event_log: &EventLog) -> 
         .last()
         .map(|event| event.kind.as_str())
         .unwrap_or("none");
-    format!(
-        "refresh completed\nstaleness={:?}\nbalances={}\npositions={}\nopen_order_groups={}\nlast_event={}",
-        store.staleness,
-        store.snapshot.balances.len(),
-        store.snapshot.positions.len(),
-        store.snapshot.open_orders.len(),
-        last_event
-    )
+    let mut lines = vec![
+        "refresh completed".to_string(),
+        format!("staleness={:?}", store.staleness),
+        format!("last_event={last_event}"),
+        format!("balances ({})", store.snapshot.balances.len()),
+    ];
+
+    let balance_lines = store
+        .snapshot
+        .balances
+        .iter()
+        .filter(|balance| balance.total().abs() > f64::EPSILON)
+        .take(8)
+        .map(|balance| {
+            format!(
+                "  - {} free={:.8} locked={:.8} total={:.8}",
+                balance.asset,
+                balance.free,
+                balance.locked,
+                balance.total()
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if balance_lines.is_empty() {
+        lines.push("  - none".to_string());
+    } else {
+        lines.extend(balance_lines);
+    }
+
+    lines.push(format!("positions ({})", store.snapshot.positions.len()));
+    let position_lines = store
+        .snapshot
+        .positions
+        .values()
+        .take(12)
+        .map(|position| {
+            let side = position
+                .side()
+                .map(|side| format!("{side:?}"))
+                .unwrap_or_else(|| "Flat".to_string());
+            format!(
+                "  - {} {:?} side={} qty={:.8} entry={}",
+                position.instrument.0,
+                position.market,
+                side,
+                position.abs_qty(),
+                position
+                    .entry_price
+                    .map(|price| format!("{price:.8}"))
+                    .unwrap_or_else(|| "-".to_string())
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if position_lines.is_empty() {
+        lines.push("  - none".to_string());
+    } else {
+        lines.extend(position_lines);
+    }
+
+    lines.push(format!("open orders ({})", store.snapshot.open_orders.len()));
+    let order_lines = store
+        .snapshot
+        .open_orders
+        .iter()
+        .take(12)
+        .flat_map(|(instrument, orders)| {
+            orders.iter().map(move |order| {
+                format!(
+                    "  - {} {:?} side={:?} qty={:.8} filled={:.8} reduce_only={} status={:?}",
+                    instrument.0,
+                    order.market,
+                    order.side,
+                    order.orig_qty,
+                    order.executed_qty,
+                    order.reduce_only,
+                    order.status
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if order_lines.is_empty() {
+        lines.push("  - none".to_string());
+    } else {
+        lines.extend(order_lines);
+    }
+
+    lines.join("\n")
 }
 
 fn render_execution_summary(event_log: &EventLog) -> String {
