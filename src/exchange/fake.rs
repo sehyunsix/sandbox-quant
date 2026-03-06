@@ -7,7 +7,7 @@ use crate::error::exchange_error::ExchangeError;
 use crate::exchange::facade::ExchangeFacade;
 use crate::exchange::symbol_rules::SymbolRules;
 use crate::exchange::types::{
-    AuthoritativeSnapshot, CloseOrderAccepted, CloseOrderRequest,
+    AuthoritativeSnapshot, CloseOrderAccepted, CloseOrderRequest, SubmitOrderAccepted,
 };
 
 #[derive(Debug)]
@@ -15,6 +15,7 @@ pub struct FakeExchange {
     snapshot: Mutex<AuthoritativeSnapshot>,
     symbol_rules: Mutex<BTreeMap<(Instrument, Market), SymbolRules>>,
     close_requests: Mutex<Vec<CloseOrderRequest>>,
+    submit_requests: Mutex<Vec<CloseOrderRequest>>,
     next_submit_result: Mutex<Option<Result<CloseOrderAccepted, ExchangeError>>>,
 }
 
@@ -24,6 +25,7 @@ impl FakeExchange {
             snapshot: Mutex::new(snapshot),
             symbol_rules: Mutex::new(BTreeMap::new()),
             close_requests: Mutex::new(Vec::new()),
+            submit_requests: Mutex::new(Vec::new()),
             next_submit_result: Mutex::new(None),
         }
     }
@@ -54,6 +56,13 @@ impl FakeExchange {
         self.close_requests
             .lock()
             .expect("lock close_requests")
+            .clone()
+    }
+
+    pub fn submit_requests(&self) -> Vec<CloseOrderRequest> {
+        self.submit_requests
+            .lock()
+            .expect("lock submit_requests")
             .clone()
     }
 
@@ -103,5 +112,15 @@ impl ExchangeFacade for FakeExchange {
                 remote_order_id: "fake-close-1".to_string(),
             })
         }
+    }
+
+    fn submit_order(&self, request: CloseOrderRequest) -> Result<SubmitOrderAccepted, Self::Error> {
+        self.submit_requests
+            .lock()
+            .expect("lock submit_requests")
+            .push(request);
+        Ok(SubmitOrderAccepted {
+            remote_order_id: "fake-submit-1".to_string(),
+        })
     }
 }

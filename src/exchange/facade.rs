@@ -1,7 +1,9 @@
 use crate::domain::instrument::Instrument;
 use crate::domain::market::Market;
 use crate::exchange::symbol_rules::SymbolRules;
-use crate::exchange::types::{AuthoritativeSnapshot, CloseOrderAccepted, CloseOrderRequest};
+use crate::exchange::types::{
+    AuthoritativeSnapshot, CloseOrderAccepted, CloseOrderRequest, SubmitOrderAccepted,
+};
 
 pub trait ExchangeFacade {
     type Error;
@@ -16,4 +18,5 @@ pub trait ExchangeFacade {
         &self,
         request: CloseOrderRequest,
     ) -> Result<CloseOrderAccepted, Self::Error>;
+    fn submit_order(&self, request: CloseOrderRequest) -> Result<SubmitOrderAccepted, Self::Error>;
 }

@@ -65,6 +65,32 @@ impl ExecutionService {
         }
     }
 
+    pub fn submit_target_exposure<E: ExchangeFacade<Error = ExchangeError>>(
+        &mut self,
+        exchange: &E,
+        store: &PortfolioStateStore,
+        price_source: &impl PriceSource,
+        instrument: &Instrument,
+        target: Exposure,
+    ) -> Result<(), ExecutionError> {
+        let plan = self.plan_target_exposure(store, price_source, instrument, target)?;
+        let market = store
+            .snapshot
+            .positions
+            .get(instrument)
+            .map(|position| position.market)
+            .ok_or(ExecutionError::NoOpenPosition)?;
+
+        exchange.submit_order(CloseOrderRequest {
+            instrument: plan.instrument,
+            market,
+            side: plan.side,
+            qty: plan.qty,
+            reduce_only: plan.reduce_only,
+        })?;
+        Ok(())
+    }
+
     /// Submits a close order for the current authoritative position snapshot.
     ///
     /// Example:

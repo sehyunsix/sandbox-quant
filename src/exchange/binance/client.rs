@@ -8,7 +8,9 @@ use crate::exchange::binance::mapper::BinanceMapper;
 use crate::exchange::binance::orders::{RawCloseOrderAck, RawCloseOrderRequest, RawSymbolRules};
 use crate::exchange::facade::ExchangeFacade;
 use crate::exchange::symbol_rules::SymbolRules;
-use crate::exchange::types::{AuthoritativeSnapshot, CloseOrderAccepted, CloseOrderRequest};
+use crate::exchange::types::{
+    AuthoritativeSnapshot, CloseOrderAccepted, CloseOrderRequest, SubmitOrderAccepted,
+};
 
 pub trait BinanceTransport: Send + Sync {
     fn load_account_state(&self, market: Market) -> Result<RawAccountState, ExchangeError>;
@@ -70,5 +72,13 @@ impl ExchangeFacade for BinanceExchange {
         let raw = self.mapper.map_close_request(request);
         let ack = self.transport.submit_close_order(raw)?;
         Ok(self.mapper.map_close_ack(ack))
+    }
+
+    fn submit_order(&self, request: CloseOrderRequest) -> Result<SubmitOrderAccepted, Self::Error> {
+        let raw = self.mapper.map_close_request(request);
+        let ack = self.transport.submit_close_order(raw)?;
+        Ok(SubmitOrderAccepted {
+            remote_order_id: ack.remote_order_id,
+        })
     }
 }

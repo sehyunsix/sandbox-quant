@@ -189,3 +189,46 @@ fn target_exposure_requires_price_source_context() {
         sandbox_quant::error::execution_error::ExecutionError::MissingPriceContext
     ));
 }
+
+#[test]
+fn execution_service_submits_target_exposure_without_ui() {
+    let instrument = Instrument::new("BTCUSDT");
+    let fake = FakeExchange::new(AuthoritativeSnapshot::default());
+    let mut prices = PriceStore::default();
+    let market_data = MarketDataService;
+    let mut store = PortfolioStateStore::default();
+    store.apply_snapshot(AuthoritativeSnapshot {
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 1000.0,
+            locked: 0.0,
+        }],
+        positions: vec![PositionSnapshot {
+            instrument: instrument.clone(),
+            market: Market::Futures,
+            signed_qty: -0.25,
+            entry_price: Some(50000.0),
+        }],
+        open_orders: vec![],
+    });
+    market_data.apply_price(&mut prices, instrument.clone(), 50000.0);
+
+    let mut service = ExecutionService::default();
+    service
+        .submit_target_exposure(
+            &fake,
+            &store,
+            &prices,
+            &instrument,
+            Exposure::new(0.5).expect("bounded exposure"),
+        )
+        .expect("submit should succeed");
+
+    let requests = fake.submit_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].instrument, instrument);
+    assert_eq!(requests[0].market, Market::Futures);
+    assert_eq!(requests[0].side, Side::Buy);
+    assert!((requests[0].qty - 0.26).abs() < 1e-9);
+    assert!(!requests[0].reduce_only);
+}
