@@ -1,0 +1,31 @@
+backtest_multisymbol start
+  symbols=BTCUSDT,ETHUSDT,BNBUSDT
+  bars_dir=data
+  features_dir=/tmp/backtest_features_test
+  interval=1m
+  bars=600
+  days_back=1
+  train_bars=120
+  test_bars=60
+  embargo_bars=8
+  max_folds=10
+symbol,run_id,folds,realized_pnl,fees,trades,win,lose,maxdd,sharpe,endeq
+RUN symbol=BTCUSDT
+  bars: data/backtest_btcusdt_1m_600_1d_ext.csv
+  features: /tmp/backtest_features_test/backtest_btcusdt_1m_600_1d_ext_features.csv
+BTCUSDT,bt-BTCUSDT-1772613098296,3,0.008536,0.169910,14,3,2,0.0010,-0.0705,99.9880
+RUN symbol=ETHUSDT
+  bars: data/backtest_ethusdt_1m_600_1d_ext.csv
+  features: /tmp/backtest_features_test/backtest_ethusdt_1m_600_1d_ext_features.csv
+ETHUSDT,bt-ETHUSDT-1772613099671,3,-0.006438,0.109920,9,2,1,0.0018,-0.0980,99.9880
+RUN symbol=BNBUSDT
+  bars: data/bnbusdt_1m_600_1d_ext.csv
+  features: /tmp/backtest_features_test/bnbusdt_1m_600_1d_ext_features.csv
+BNBUSDT,bt-BNBUSDT-1772613101053,3,-0.140736,0.189938,16,3,4,0.0026,-0.0887,99.9880
+----
+symbols=3/3 succeeded, failed=0
+aggregate_realized=-0.138638000000
+aggregate_fees=0.469768000000
+aggregate_trades=39
+aggregate_wins=8
+aggregate_losses=7

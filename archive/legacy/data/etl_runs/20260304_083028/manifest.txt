@@ -1,0 +1,12 @@
+run_id=20260304_083028
+symbols=BTCUSDT,ETHUSDT,BNBUSDT
+intervals=1m
+bars=600
+days_back=1
+bars_dir=data
+features_dir=/tmp/backtest_features_test
+feature_scale=0.2
+train_bars=120
+test_bars=60
+embargo_bars=8
+max_folds=10

@@ -1,0 +1,460 @@
+# Dependency edges (non-test)
+
+- `src/binance/rest_client_requests.rs`:
+  - `use crate::error::AppError;`
+- `src/binance/rest_client_requests.rs`:
+  - `use crate::model::candle::Candle;`
+- `src/binance/rest_client_requests.rs`:
+  - `use crate::model::order::OrderSide;`
+- `src/binance/rest_client_requests.rs`:
+  - `use super::types::{`
+- `src/binance/ws.rs`:
+  - `use super::types::BinanceTradeEvent;`
+- `src/binance/ws.rs`:
+  - `use crate::event::{AppEvent, LogDomain, LogLevel, LogRecord, WsConnectionStatus};`
+- `src/binance/ws.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/binance/mod.rs`:
+  - `pub mod rest;`
+- `src/binance/mod.rs`:
+  - `pub mod types;`
+- `src/binance/mod.rs`:
+  - `pub mod ws;`
+- `src/strategy/macd_crossover.rs`:
+  - `use crate::indicator::ema::Ema;`
+- `src/strategy/macd_crossover.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/macd_crossover.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/stochastic_reversion.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/stochastic_reversion.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/roc_momentum.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/roc_momentum.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/bollinger_reversion.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/bollinger_reversion.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/regime_switch.rs`:
+  - `use crate::indicator::sma::Sma;`
+- `src/strategy/regime_switch.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/regime_switch.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/ma_crossover.rs`:
+  - `use crate::indicator::sma::Sma;`
+- `src/strategy/ma_crossover.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/ma_crossover.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/donchian_trend.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/donchian_trend.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/mod.rs`:
+  - `pub mod aroon_trend;`
+- `src/strategy/mod.rs`:
+  - `pub mod atr_expansion;`
+- `src/strategy/mod.rs`:
+  - `pub mod bollinger_reversion;`
+- `src/strategy/mod.rs`:
+  - `pub mod channel_breakout;`
+- `src/strategy/mod.rs`:
+  - `pub mod donchian_trend;`
+- `src/strategy/mod.rs`:
+  - `pub mod ema_crossover;`
+- `src/strategy/mod.rs`:
+  - `pub mod ensemble_vote;`
+- `src/strategy/mod.rs`:
+  - `pub mod ma_crossover;`
+- `src/strategy/mod.rs`:
+  - `pub mod ma_reversion;`
+- `src/strategy/mod.rs`:
+  - `pub mod macd_crossover;`
+- `src/strategy/mod.rs`:
+  - `pub mod opening_range_breakout;`
+- `src/strategy/mod.rs`:
+  - `pub mod regime_switch;`
+- `src/strategy/mod.rs`:
+  - `pub mod roc_momentum;`
+- `src/strategy/mod.rs`:
+  - `pub mod rsa;`
+- `src/strategy/mod.rs`:
+  - `pub mod stochastic_reversion;`
+- `src/strategy/mod.rs`:
+  - `pub mod volatility_compression;`
+- `src/strategy/ensemble_vote.rs`:
+  - `use crate::indicator::sma::Sma;`
+- `src/strategy/ensemble_vote.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/ensemble_vote.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/channel_breakout.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/channel_breakout.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/ema_crossover.rs`:
+  - `use crate::indicator::ema::Ema;`
+- `src/strategy/ema_crossover.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/ema_crossover.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/opening_range_breakout.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/opening_range_breakout.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/rsa.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/rsa.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/aroon_trend.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/aroon_trend.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/volatility_compression.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/volatility_compression.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy/atr_expansion.rs`:
+  - `use crate::indicator::ema::Ema;`
+- `src/strategy/atr_expansion.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/atr_expansion.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/order_manager_tests.rs`:
+  - `    use super::{`
+- `src/order_manager_tests.rs`:
+  - `    use crate::binance::rest::BinanceRestClient;`
+- `src/order_manager_tests.rs`:
+  - `    use crate::binance::types::BinanceMyTrade;`
+- `src/order_manager_tests.rs`:
+  - `    use crate::config::{EndpointRateLimitConfig, RiskConfig, SymbolExposureLimitConfig};`
+- `src/order_manager_tests.rs`:
+  - `    use crate::model::order::{Order, OrderSide, OrderStatus, OrderType};`
+- `src/order_manager_core_types.rs`:
+  - `use crate::binance::rest::BinanceRestClient;`
+- `src/order_manager_core_types.rs`:
+  - `use crate::binance::types::{BinanceMyTrade, BinanceOrderResponse};`
+- `src/order_manager_core_types.rs`:
+  - `use crate::config::RiskConfig;`
+- `src/order_manager_core_types.rs`:
+  - `use crate::model::order::{Fill, Order, OrderSide, OrderStatus, OrderType};`
+- `src/order_manager_core_types.rs`:
+  - `use crate::model::position::Position;`
+- `src/order_manager_core_types.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/order_manager_core_types.rs`:
+  - `use crate::order_store;`
+- `src/order_manager_core_types.rs`:
+  - `use crate::market_utils::source_label_from_client_order_id;`
+- `src/order_manager_core_types.rs`:
+  - `use crate::risk_module::{`
+- `src/ui_docs.rs`:
+  - `use crate::model::candle::Candle;`
+- `src/ui_docs.rs`:
+  - `use crate::ui::{self, AppState, GridTab};`
+- `src/strategy/ma_reversion.rs`:
+  - `use crate::indicator::sma::Sma;`
+- `src/strategy/ma_reversion.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/strategy/ma_reversion.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/strategy_session.rs`:
+  - `use crate::strategy_catalog::StrategyCatalog;`
+- `src/doctor.rs`:
+  - `use crate::binance::rest::BinanceRestClient;`
+- `src/doctor.rs`:
+  - `use crate::binance::types::BinanceFuturesPositionRisk;`
+- `src/doctor.rs`:
+  - `use crate::config::Config;`
+- `src/doctor.rs`:
+  - `use crate::error::AppError;`
+- `src/lifecycle/mod.rs`:
+  - `pub mod engine;`
+- `src/lifecycle/mod.rs`:
+  - `pub mod exit_orchestrator;`
+- `src/predictor/models_core.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/predictor/models_core.rs`:
+  - `use crate::order_manager::MarketKind;`
+- `src/risk_module.rs`:
+  - `use crate::market_utils::split_symbol_assets;`
+- `src/risk_module.rs`:
+  - `use crate::binance::rest::BinanceRestClient;`
+- `src/risk_module.rs`:
+  - `use crate::model::order::OrderSide;`
+- `src/lifecycle/exit_orchestrator.rs`:
+  - `use crate::lifecycle::engine::ExitTrigger;`
+- `src/lib.rs`:
+  - `pub mod backtest;`
+- `src/lib.rs`:
+  - `pub mod binance;`
+- `src/lib.rs`:
+  - `pub mod config;`
+- `src/lib.rs`:
+  - `pub mod doctor;`
+- `src/lib.rs`:
+  - `pub mod error;`
+- `src/lib.rs`:
+  - `pub mod market_utils;`
+- `src/lib.rs`:
+  - `pub mod event;`
+- `src/lib.rs`:
+  - `pub mod indicator;`
+- `src/lib.rs`:
+  - `pub mod input;`
+- `src/lib.rs`:
+  - `pub mod lifecycle;`
+- `src/lib.rs`:
+  - `pub mod model;`
+- `src/lib.rs`:
+  - `pub mod order_history_sync_gate;`
+- `src/lib.rs`:
+  - `pub mod order_manager;`
+- `src/lib.rs`:
+  - `pub mod order_store;`
+- `src/lib.rs`:
+  - `pub mod predictor;`
+- `src/lib.rs`:
+  - `pub mod risk_module;`
+- `src/lib.rs`:
+  - `pub mod runtime;`
+- `src/lib.rs`:
+  - `pub mod strategy;`
+- `src/lib.rs`:
+  - `pub mod strategy_catalog;`
+- `src/lib.rs`:
+  - `pub mod strategy_session;`
+- `src/lib.rs`:
+  - `pub mod ui;`
+- `src/lib.rs`:
+  - `pub mod ui_docs;`
+- `src/order_store.rs`:
+  - `use crate::market_utils::{parse_source_tag_from_client_order_id, source_label_from_client_order_id, split_symbol_assets};`
+- `src/order_store.rs`:
+  - `use crate::binance::types::{BinanceAllOrder, BinanceMyTrade};`
+- `src/indicator/mod.rs`:
+  - `pub mod ema;`
+- `src/indicator/mod.rs`:
+  - `pub mod sma;`
+- `src/model/position.rs`:
+  - `use super::order::{Fill, OrderSide};`
+- `src/ui/dashboard.rs`:
+  - `use crate::event::ExitPolicyEntry;`
+- `src/ui/dashboard.rs`:
+  - `use crate::model::order::OrderSide;`
+- `src/ui/dashboard.rs`:
+  - `use crate::model::position::Position;`
+- `src/ui/dashboard.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/ui/dashboard.rs`:
+  - `use crate::order_manager::OrderUpdate;`
+- `src/runtime/portfolio_sync.rs`:
+  - `use crate::binance::types::{BinanceFuturesAccountUpdatePosition, BinanceFuturesPositionRisk};`
+- `src/runtime/portfolio_sync.rs`:
+  - `use crate::event::AssetPnlEntry;`
+- `src/runtime/portfolio_sync.rs`:
+  - `use crate::model::order::OrderSide;`
+- `src/runtime/regime.rs`:
+  - `use crate::event::{MarketRegime, MarketRegimeSignal};`
+- `src/runtime/regime.rs`:
+  - `use crate::indicator::ema::Ema;`
+- `src/ui/chart.rs`:
+  - `use crate::model::candle::{Candle, CandleBuilder};`
+- `src/ui/chart.rs`:
+  - `use crate::model::order::OrderSide;`
+- `src/model/mod.rs`:
+  - `pub mod candle;`
+- `src/model/mod.rs`:
+  - `pub mod order;`
+- `src/model/mod.rs`:
+  - `pub mod position;`
+- `src/model/mod.rs`:
+  - `pub mod signal;`
+- `src/model/mod.rs`:
+  - `pub mod tick;`
+- `src/ui/ui_projection.rs`:
+  - `use super::AppState;`
+- `src/runtime/internal_exit_flow.rs`:
+  - `use crate::event::AppEvent;`
+- `src/runtime/internal_exit_flow.rs`:
+  - `use crate::runtime::{lifecycle_close_internal, order_history_refresh_failed};`
+- `src/runtime/internal_exit_flow.rs`:
+  - `use crate::lifecycle::PositionLifecycleEngine;`
+- `src/runtime/internal_exit_flow.rs`:
+  - `use crate::order_manager::{OrderHistoryStats, OrderManager, OrderUpdate};`
+- `src/backtest/mod.rs`:
+  - `pub mod core;`
+- `src/backtest/mod.rs`:
+  - `pub mod tui;`
+- `src/main/runtime_bootstrap.rs`:
+  - `mod app_helpers;`
+- `src/main/runtime_bootstrap.rs`:
+  - `mod ui_handlers;`
+- `src/ui/position_ledger.rs`:
+  - `use crate::order_store::PersistedTrade;`
+- `src/ui/render_utils.rs`:
+  - `    use super::{format_last_applied_fee, symbol_scope_candidates};`
+- `src/ui/render_utils.rs`:
+  - `    use crate::model::order::Fill;`
+- `src/ui/app_state_types.rs`:
+  - `pub mod chart;`
+- `src/ui/app_state_types.rs`:
+  - `pub mod dashboard;`
+- `src/ui/app_state_types.rs`:
+  - `pub mod network_metrics;`
+- `src/ui/app_state_types.rs`:
+  - `pub mod position_ledger;`
+- `src/ui/app_state_types.rs`:
+  - `pub mod ui_projection;`
+- `src/ui/app_state_types.rs`:
+  - `use crate::event::{`
+- `src/ui/app_state_types.rs`:
+  - `use crate::model::candle::{Candle, CandleBuilder};`
+- `src/ui/app_state_types.rs`:
+  - `use crate::model::order::{Fill, OrderSide};`
+- `src/ui/app_state_types.rs`:
+  - `use crate::model::position::Position;`
+- `src/ui/app_state_types.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/ui/app_state_types.rs`:
+  - `use crate::order_manager::{OrderHistoryFill, OrderHistoryStats, OrderUpdate};`
+- `src/ui/app_state_types.rs`:
+  - `use crate::order_store;`
+- `src/ui/app_state_types.rs`:
+  - `use crate::risk_module::RateBudgetSnapshot;`
+- `src/ui/app_state_types.rs`:
+  - `use crate::strategy_catalog::{strategy_kind_categories, strategy_kind_labels};`
+- `src/ui/app_state_types.rs`:
+  - `use crate::ui::network_metrics::{`
+- `src/ui/app_state_types.rs`:
+  - `use crate::ui::position_ledger::build_open_order_positions_from_trades;`
+- `src/event.rs`:
+  - `use crate::model::candle::Candle;`
+- `src/event.rs`:
+  - `use crate::model::order::OrderSide;`
+- `src/event.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/event.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/event.rs`:
+  - `use crate::order_manager::{OrderHistorySnapshot, OrderHistoryStats, OrderUpdate};`
+- `src/event.rs`:
+  - `use crate::risk_module::RateBudgetSnapshot;`
+- `src/backtest/backtest_types.rs`:
+  - `use crate::event::{MarketRegime, MarketRegimeSignal};`
+- `src/backtest/backtest_types.rs`:
+  - `use crate::model::candle::Candle;`
+- `src/backtest/backtest_types.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/backtest/backtest_types.rs`:
+  - `use crate::predictor::{`
+- `src/backtest/backtest_types.rs`:
+  - `use crate::runtime::alpha_portfolio::{`
+- `src/backtest/backtest_types.rs`:
+  - `use crate::runtime::predictor_eval::{`
+- `src/backtest/backtest_types.rs`:
+  - `use crate::runtime::regime::{RegimeDetector, RegimeDetectorConfig};`
+- `src/indicator/ema.rs`:
+  - `use super::sma::Sma;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::aroon_trend::AroonTrendStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::atr_expansion::AtrExpansionStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::bollinger_reversion::BollingerReversionStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::channel_breakout::ChannelBreakoutStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::donchian_trend::DonchianTrendStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::ema_crossover::EmaCrossover;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::ensemble_vote::EnsembleVoteStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::ma_crossover::MaCrossover;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::ma_reversion::MaReversionStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::macd_crossover::MacdCrossoverStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::opening_range_breakout::OpeningRangeBreakoutStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::regime_switch::RegimeSwitchStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::roc_momentum::RocMomentumStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::rsa::RsaStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::stochastic_reversion::StochasticReversionStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy::volatility_compression::VolatilityCompressionStrategy;`
+- `src/runtime/strategy_runtime.rs`:
+  - `use crate::strategy_catalog::{StrategyKind, StrategyProfile};`
+- `src/runtime/order_history_sync_flow.rs`:
+  - `use crate::event::AppEvent;`
+- `src/runtime/order_history_sync_flow.rs`:
+  - `use crate::runtime::order_history_sync_failed;`
+- `src/runtime/order_history_sync_flow.rs`:
+  - `use crate::model::order::OrderSide;`
+- `src/runtime/order_history_sync_flow.rs`:
+  - `use crate::model::position::Position;`
+- `src/runtime/order_history_sync_flow.rs`:
+  - `use crate::order_manager::{MarketKind, OrderHistoryStats, OrderManager};`
+- `src/runtime/strategy_registry.rs`:
+  - `use crate::model::tick::Tick;`
+- `src/runtime/alpha_portfolio.rs`:
+  - `use crate::event::{MarketRegime, MarketRegimeSignal};`
+- `src/runtime/alpha_portfolio.rs`:
+  - `use crate::model::signal::Signal;`
+- `src/runtime/portfolio_layer_state.rs`:
+  - `use crate::event::{AssetPnlEntry, PortfolioStateSnapshot};`
+- `src/runtime/portfolio_layer_state.rs`:
+  - `use crate::model::order::OrderSide;`
+- `src/runtime/portfolio_layer_state.rs`:
+  - `use crate::order_manager::{MarketKind, OrderManager};`
+- `src/runtime/mod.rs`:
+  - `pub mod alpha_portfolio;`
+- `src/runtime/mod.rs`:
+  - `pub mod execution_intent_flow;`
+- `src/runtime/mod.rs`:
+  - `pub mod internal_exit_flow;`
+- `src/runtime/mod.rs`:
+  - `pub mod logging;`
+- `src/runtime/mod.rs`:
+  - `pub mod manage_state_flow;`
+- `src/runtime/mod.rs`:
+  - `pub mod order_history_sync_flow;`
+- `src/runtime/mod.rs`:
+  - `pub mod portfolio_layer_state;`
+- `src/runtime/mod.rs`:
+  - `pub mod portfolio_sync;`
+- `src/runtime/mod.rs`:
+  - `pub mod predictor_eval;`
+- `src/runtime/mod.rs`:
+  - `pub mod regime;`
+- `src/runtime/mod.rs`:
+  - `pub mod strategy_registry;`
+- `src/runtime/mod.rs`:
+  - `pub mod strategy_runtime;`
+- `src/runtime/manage_state_flow.rs`:
+  - `use crate::event::{AppEvent, AssetPnlEntry};`
+- `src/runtime/manage_state_flow.rs`:
+  - `use crate::order_manager::OrderManager;`
+- `src/runtime/manage_state_flow.rs`:
+  - `use crate::runtime::portfolio_layer_state::build_portfolio_layer_state;`
+- `src/runtime/logging.rs`:
+  - `use crate::event::{AppEvent, LogDomain, LogLevel, LogRecord};`
+- `src/runtime/execution_intent_flow.rs`:
+  - `use crate::event::AppEvent;`
+- `src/runtime/execution_intent_flow.rs`:
+  - `use crate::runtime::order_history_refresh_failed;`
+- `src/runtime/execution_intent_flow.rs`:
+  - `use crate::order_manager::{OrderHistoryStats, OrderManager};`

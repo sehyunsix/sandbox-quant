@@ -32,8 +32,9 @@ Not implemented as first-class runtime features yet:
 - strategy engine
 - auto-trading loop
 - persistent analytics pipeline
-- full TUI dashboard
 - websocket-driven live market loop
+
+Legacy strategy/UI documents and historical datasets are archived under `docs/archive/legacy` and `archive/legacy/data`.
 
 ## Architecture
 
@@ -47,7 +48,6 @@ Top-level modules:
 - `src/market_data`
 - `src/portfolio`
 - `src/storage`
-- `src/ui`
 
 Core rules:
 

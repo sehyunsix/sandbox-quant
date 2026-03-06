@@ -1,0 +1,6 @@
+symbols=BTCUSDT,ETHUSDT,SOLUSDT,ADAUSDT,TRXUSDT
+intervals=1m
+bars=600
+days_back=1
+bars_dir=/Users/yuksehyun/project/sandbox-quant/data/backtest_dataset
+features_dir=/tmp/backtest_features_test

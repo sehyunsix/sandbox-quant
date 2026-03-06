@@ -1,0 +1,1 @@
+attempt,symbol_set,train_bars,test_bars,embargo_bars,max_folds,feature_scale,min_signal,feature_blend_mode,feature_columns,feature_min_samples,predictor_quality_min_samples,predictor_quality_warmup_floor,min_hold_bars,min_reentry_gap_bars,max_turnover_ratio,entry_gate_usdt,status,run_id,folds,realized_pnl,fees,trades,win,lose,maxdd,sharpe,endeq,error
