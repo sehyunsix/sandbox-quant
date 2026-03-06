@@ -8,6 +8,7 @@ use sandbox_quant::exchange::symbol_rules::SymbolRules;
 use sandbox_quant::execution::close_all::CloseAllBatchResult;
 use sandbox_quant::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
 use sandbox_quant::execution::service::ExecutionService;
+use sandbox_quant::market_data::price_store::PriceStore;
 use sandbox_quant::portfolio::store::PortfolioStateStore;
 use sandbox_quant::exchange::types::AuthoritativeSnapshot;
 use sandbox_quant::domain::identifiers::BatchId;
@@ -118,6 +119,7 @@ fn execution_service_submits_close_against_authoritative_store_without_ui() {
 fn execution_service_plans_target_exposure_from_authoritative_store() {
     let instrument = Instrument::new("BTCUSDT");
     let mut store = PortfolioStateStore::default();
+    let mut prices = PriceStore::default();
     store.apply_snapshot(AuthoritativeSnapshot {
         balances: vec![BalanceSnapshot {
             asset: "USDT".to_string(),
@@ -132,13 +134,13 @@ fn execution_service_plans_target_exposure_from_authoritative_store() {
         }],
         open_orders: vec![],
     });
-    store.set_market_price(instrument.clone(), 50000.0);
+    prices.set_price(instrument.clone(), 50000.0);
 
     let service = ExecutionService::default();
     let plan = service
         .plan_target_exposure(
             &store,
-            &store,
+            &prices,
             &instrument,
             Exposure::new(0.5).expect("bounded exposure"),
         )
@@ -154,6 +156,7 @@ fn execution_service_plans_target_exposure_from_authoritative_store() {
 fn target_exposure_requires_price_source_context() {
     let instrument = Instrument::new("ETHUSDT");
     let mut store = PortfolioStateStore::default();
+    let prices = PriceStore::default();
     store.apply_snapshot(AuthoritativeSnapshot {
         balances: vec![BalanceSnapshot {
             asset: "USDT".to_string(),
@@ -173,7 +176,7 @@ fn target_exposure_requires_price_source_context() {
     let err = service
         .plan_target_exposure(
             &store,
-            &store,
+            &prices,
             &instrument,
             Exposure::new(0.2).expect("bounded exposure"),
         )
