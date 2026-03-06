@@ -106,12 +106,13 @@ fn loop_shell(
                     }
                 }
                 KeyCode::Enter => {
+                    clear_completion_menu(&mut stdout, rendered_menu_lines)?;
+                    rendered_menu_lines = 0;
                     println!();
                     let line = buffer.clone();
                     buffer.clear();
                     completion_index = 0;
                     completion_query = None;
-                    rendered_menu_lines = 0;
                     match parse_shell_input(&line) {
                         Ok(ShellInput::Empty) => {}
                         Ok(ShellInput::Help) => println!("{}", shell_help_text()),
@@ -200,6 +201,20 @@ fn render_shell(
     }
 
     *rendered_menu_lines = menu_lines;
+    execute!(stdout, RestorePosition)?;
+    stdout.flush()
+}
+
+fn clear_completion_menu(stdout: &mut io::Stdout, rendered_menu_lines: usize) -> io::Result<()> {
+    execute!(stdout, SavePosition)?;
+    for _ in 0..rendered_menu_lines {
+        execute!(
+            stdout,
+            MoveToNextLine(1),
+            MoveToColumn(0),
+            Clear(ClearType::CurrentLine)
+        )?;
+    }
     execute!(stdout, RestorePosition)?;
     stdout.flush()
 }
