@@ -54,16 +54,21 @@ fn render_refresh_summary(store: &PortfolioStateStore, event_log: &EventLog) -> 
         .snapshot
         .positions
         .values()
+        .filter(|position| !position.is_flat())
         .take(12)
         .map(|position| {
             let side = position
                 .side()
                 .map(|side| format!("{side:?}"))
                 .unwrap_or_else(|| "Flat".to_string());
+            let market = match position.market {
+                crate::domain::market::Market::Spot => "SPOT",
+                crate::domain::market::Market::Futures => "FUTURES",
+            };
             format!(
-                "  - {} {:?} side={} qty={:.8} entry={}",
+                "  - {} market={} side={} qty={:.8} entry={}",
                 position.instrument.0,
-                position.market,
+                market,
                 side,
                 position.abs_qty(),
                 position

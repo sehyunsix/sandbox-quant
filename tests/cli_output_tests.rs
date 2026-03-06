@@ -24,6 +24,11 @@ fn refresh_output_includes_store_summary() {
             market: Market::Futures,
             signed_qty: 0.25,
             entry_price: Some(65000.0),
+        }, PositionSnapshot {
+            instrument: Instrument::new("ETHUSDT"),
+            market: Market::Futures,
+            signed_qty: 0.0,
+            entry_price: None,
         }],
         open_orders: vec![OpenOrder {
             order_id: None,
@@ -51,10 +56,11 @@ fn refresh_output_includes_store_summary() {
     assert!(output.contains("refresh completed"));
     assert!(output.contains("staleness=Fresh"));
     assert!(output.contains("balances (1)"));
-    assert!(output.contains("positions (1)"));
+    assert!(output.contains("positions (2)"));
     assert!(output.contains("open orders (1)"));
     assert!(output.contains("USDT free=100.00000000"));
-    assert!(output.contains("BTCUSDT Futures side=Buy"));
+    assert!(output.contains("BTCUSDT market=FUTURES side=Buy"));
+    assert!(!output.contains("ETHUSDT"));
     assert!(output.contains("last_event=app.portfolio.refreshed"));
 }
 
