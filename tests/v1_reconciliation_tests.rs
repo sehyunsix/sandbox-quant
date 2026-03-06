@@ -1,0 +1,70 @@
+use sandbox_quant::v1::domain::instrument::Instrument;
+use sandbox_quant::v1::domain::market::Market;
+use sandbox_quant::v1::domain::order::{OpenOrder, OrderStatus};
+use sandbox_quant::v1::domain::position::{PositionSnapshot, Side};
+use sandbox_quant::v1::exchange::fake::FakeExchange;
+use sandbox_quant::v1::exchange::types::AuthoritativeSnapshot;
+use sandbox_quant::v1::portfolio::staleness::StalenessState;
+use sandbox_quant::v1::portfolio::store::PortfolioStateStore;
+
+#[test]
+fn refresh_from_exchange_overwrites_local_state_and_clears_staleness() {
+    let btc = Instrument::new("BTCUSDT");
+    let eth = Instrument::new("ETHUSDT");
+    let fake = FakeExchange::new(AuthoritativeSnapshot {
+        balances: vec![],
+        positions: vec![PositionSnapshot {
+            instrument: btc.clone(),
+            market: Market::Futures,
+            signed_qty: 0.5,
+            entry_price: Some(65000.0),
+        }],
+        open_orders: vec![],
+    });
+
+    let mut store = PortfolioStateStore::default();
+    store.apply_snapshot(AuthoritativeSnapshot {
+        balances: vec![],
+        positions: vec![PositionSnapshot {
+            instrument: eth.clone(),
+            market: Market::Spot,
+            signed_qty: 2.0,
+            entry_price: Some(2500.0),
+        }],
+        open_orders: vec![OpenOrder {
+            order_id: None,
+            client_order_id: "old-open-order".to_string(),
+            instrument: eth.clone(),
+            market: Market::Spot,
+            side: Side::Sell,
+            orig_qty: 1.0,
+            executed_qty: 0.0,
+            reduce_only: false,
+            status: OrderStatus::Submitted,
+        }],
+    });
+    store.mark_reconciliation_stale();
+
+    store
+        .refresh_from_exchange(&fake)
+        .expect("exchange refresh should succeed");
+
+    assert_eq!(store.staleness, StalenessState::Fresh);
+    assert!(store.snapshot.positions.contains_key(&btc));
+    assert!(!store.snapshot.positions.contains_key(&eth));
+    assert!(store.snapshot.open_orders.is_empty());
+}
+
+#[test]
+fn stale_markers_transition_without_ui_dependencies() {
+    let mut store = PortfolioStateStore::default();
+
+    store.mark_market_data_stale();
+    assert_eq!(store.staleness, StalenessState::MarketDataStale);
+
+    store.mark_account_state_stale();
+    assert_eq!(store.staleness, StalenessState::AccountStateStale);
+
+    store.mark_reconciliation_stale();
+    assert_eq!(store.staleness, StalenessState::ReconciliationStale);
+}
