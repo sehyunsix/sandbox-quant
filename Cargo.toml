@@ -2,13 +2,19 @@
 name = "sandbox-quant"
 version = "0.34.0"
 edition = "2021"
-description = "Terminal-based multi-strategy crypto trading sandbox with centralized risk controls"
+description = "Exchange-truth trading core for Binance Spot and Futures"
 repository = "https://github.com/sehyunsix/sandbox-quant"
 readme = "README.md"
 documentation = "https://docs.rs/sandbox-quant"
-keywords = ["trading", "binance", "terminal", "risk", "quant"]
+keywords = ["trading", "binance", "exchange", "cli", "futures"]
 categories = ["command-line-utilities", "finance"]
 license = "MIT"
+exclude = [
+    "archive/**",
+    "docs/archive/**",
+    "config/**",
+    ".github/**",
+]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
