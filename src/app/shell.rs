@@ -15,15 +15,31 @@ use crate::app::output::render_command_output;
 use crate::app::runtime::AppRuntime;
 use crate::exchange::binance::client::BinanceExchange;
 
+pub fn shell_intro_panel(mode: &str, directory: &str) -> String {
+    let width = 46usize;
+    let title = format!(" >_ Sandbox Quant (v{})", env!("CARGO_PKG_VERSION"));
+    let mode_line = format!(" mode:      {mode:<18} /mode to change");
+    let dir_line = format!(" directory: {directory}");
+
+    format!(
+        "╭{top}╮\n│{title:<width$}│\n│{blank:<width$}│\n│{mode_line:<width$}│\n│{dir_line:<width$}│\n╰{top}╯",
+        top = "─".repeat(width),
+        title = title,
+        blank = "",
+        mode_line = mode_line,
+        dir_line = dir_line,
+        width = width,
+    )
+}
+
 pub fn run_shell(
     app: &mut AppBootstrap<BinanceExchange>,
     runtime: &mut AppRuntime,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let intro_panel = shell_intro_panel(mode_name(current_mode(app)), "~/project/sandbox-quant");
     execute!(
         io::stdout(),
-        PrintStyledContent("sandbox-quant".cyan().bold()),
-        Print(" "),
-        PrintStyledContent("interactive shell".dark_grey()),
+        PrintStyledContent(intro_panel.cyan().bold()),
         Print("\n"),
         PrintStyledContent("slash commands".dark_grey()),
         Print("\n"),

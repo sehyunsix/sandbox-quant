@@ -5,6 +5,8 @@
 
 Exchange-truth trading core for Binance Spot and Futures.
 
+![sandbox-quant shell startup](docs/assets/shell-startup.png)
+
 The current codebase is a reset `v1` architecture focused on:
 
 - authoritative account, position, and open-order sync
