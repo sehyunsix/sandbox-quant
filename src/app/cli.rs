@@ -1,4 +1,5 @@
 use crate::app::commands::AppCommand;
+use crate::app::bootstrap::BinanceMode;
 use crate::domain::exposure::Exposure;
 use crate::domain::instrument::Instrument;
 use crate::execution::command::{CommandSource, ExecutionCommand};
@@ -8,6 +9,7 @@ pub enum ShellInput {
     Empty,
     Help,
     Exit,
+    Mode(BinanceMode),
     Command(AppCommand),
 }
 
@@ -72,9 +74,73 @@ pub fn parse_shell_input(line: &str) -> Result<ShellInput, String> {
         .split_whitespace()
         .map(str::to_string)
         .collect();
+    if args.first().map(String::as_str) == Some("mode") {
+        let raw_mode = args.get(1).ok_or("usage: /mode <real|demo>")?;
+        let mode = match raw_mode.as_str() {
+            "real" => BinanceMode::Real,
+            "demo" => BinanceMode::Demo,
+            _ => return Err(format!("unsupported mode: {raw_mode}. expected real or demo")),
+        };
+        return Ok(ShellInput::Mode(mode));
+    }
     parse_app_command(&args).map(ShellInput::Command)
 }
 
 pub fn shell_help_text() -> &'static str {
-    "/refresh\n/close-all\n/close-symbol <instrument>\n/set-target-exposure <instrument> <target>\n/help\n/exit"
+    "/refresh\n/close-all\n/close-symbol <instrument>\n/set-target-exposure <instrument> <target>\n/mode <real|demo>\n/help\n/exit"
+}
+
+pub fn complete_shell_input(line: &str, instruments: &[String]) -> Vec<String> {
+    let trimmed = line.trim_start();
+    let without_prefix = trimmed.strip_prefix('/').unwrap_or(trimmed);
+    let trailing_space = without_prefix.ends_with(' ');
+    let parts: Vec<&str> = without_prefix.split_whitespace().collect();
+
+    if parts.is_empty() {
+        return shell_commands()
+            .into_iter()
+            .map(|command| format!("/{command}"))
+            .collect();
+    }
+
+    if parts.len() == 1 && !trailing_space {
+        return shell_commands()
+            .into_iter()
+            .filter(|command| command.starts_with(parts[0]))
+            .map(|command| format!("/{command}"))
+            .collect();
+    }
+
+    let command = parts[0];
+    let current = if trailing_space {
+        ""
+    } else {
+        parts.last().copied().unwrap_or_default()
+    };
+
+    match command {
+        "mode" => ["real", "demo"]
+            .into_iter()
+            .filter(|mode| mode.starts_with(current))
+            .map(|mode| format!("/mode {mode}"))
+            .collect(),
+        "close-symbol" | "set-target-exposure" => instruments
+            .iter()
+            .filter(|instrument| instrument.starts_with(current))
+            .map(|instrument| format!("/{command} {instrument}"))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn shell_commands() -> [&'static str; 7] {
+    [
+        "refresh",
+        "close-all",
+        "close-symbol",
+        "set-target-exposure",
+        "mode",
+        "help",
+        "exit",
+    ]
 }
