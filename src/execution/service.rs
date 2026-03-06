@@ -5,6 +5,7 @@ use crate::domain::market::Market;
 use crate::error::exchange_error::ExchangeError;
 use crate::error::execution_error::ExecutionError;
 use crate::exchange::facade::ExchangeFacade;
+use crate::exchange::symbol_rules::SymbolRules;
 use crate::exchange::types::CloseOrderRequest;
 use crate::execution::close_all::CloseAllBatchResult;
 use crate::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
@@ -15,6 +16,7 @@ use crate::execution::price_source::PriceSource;
 use crate::execution::spot::planner::SpotExecutionPlanner;
 use crate::execution::target_translation::exposure_to_notional;
 use crate::portfolio::store::PortfolioStateStore;
+use crate::domain::position::PositionSnapshot;
 
 #[derive(Debug, Default)]
 pub struct ExecutionService {
@@ -85,27 +87,34 @@ impl ExecutionService {
         }
     }
 
-    pub fn plan_target_exposure(
+    pub fn plan_target_exposure<E: ExchangeFacade<Error = ExchangeError>>(
         &self,
+        exchange: &E,
         store: &PortfolioStateStore,
         price_source: &impl PriceSource,
         instrument: &Instrument,
         target: Exposure,
     ) -> Result<ExecutionPlan, ExecutionError> {
-        let Some(position) = store.snapshot.positions.get(instrument) else {
-            return Err(ExecutionError::NoOpenPosition);
-        };
+        let (resolved_instrument, market, current_qty) =
+            self.resolve_target_context(exchange, store, instrument)?;
         let current_price = price_source
-            .current_price(instrument)
+            .current_price(&resolved_instrument)
+            .or_else(|| exchange.load_last_price(&resolved_instrument, market).ok())
             .ok_or(ExecutionError::MissingPriceContext)?;
         let equity_usdt: f64 = store.snapshot.balances.iter().map(|b| b.total()).sum();
         let target_notional = exposure_to_notional(target, equity_usdt);
+        let synthetic_position = PositionSnapshot {
+            instrument: resolved_instrument.clone(),
+            market,
+            signed_qty: current_qty,
+            entry_price: None,
+        };
 
-        match position.market {
+        match market {
             Market::Spot => SpotExecutionPlanner
-                .plan_target_exposure(position, current_price, target_notional.target_usdt),
+                .plan_target_exposure(&synthetic_position, current_price, target_notional.target_usdt),
             Market::Futures => FuturesExecutionPlanner
-                .plan_target_exposure(position, current_price, target_notional.target_usdt),
+                .plan_target_exposure(&synthetic_position, current_price, target_notional.target_usdt),
         }
     }
 
@@ -117,22 +126,39 @@ impl ExecutionService {
         instrument: &Instrument,
         target: Exposure,
     ) -> Result<(), ExecutionError> {
-        let plan = self.plan_target_exposure(store, price_source, instrument, target)?;
-        let market = store
-            .snapshot
-            .positions
-            .get(instrument)
-            .map(|position| position.market)
-            .ok_or(ExecutionError::NoOpenPosition)?;
+        let plan = self.plan_target_exposure(exchange, store, price_source, instrument, target)?;
+        let (_, market, _) = self.resolve_target_context(exchange, store, instrument)?;
+        let qty = self.normalize_order_qty(exchange, &plan.instrument, market, plan.qty)?;
 
         exchange.submit_order(CloseOrderRequest {
             instrument: plan.instrument,
             market,
             side: plan.side,
-            qty: plan.qty,
+            qty,
             reduce_only: plan.reduce_only,
         })?;
         Ok(())
+    }
+
+    fn resolve_target_context<E: ExchangeFacade<Error = ExchangeError>>(
+        &self,
+        exchange: &E,
+        store: &PortfolioStateStore,
+        instrument: &Instrument,
+    ) -> Result<(Instrument, Market, f64), ExecutionError> {
+        if let Some(position) = store.snapshot.positions.get(instrument) {
+            return Ok((instrument.clone(), position.market, position.signed_qty));
+        }
+
+        if exchange.load_symbol_rules(instrument, Market::Futures).is_ok() {
+            return Ok((instrument.clone(), Market::Futures, 0.0));
+        }
+
+        if exchange.load_symbol_rules(instrument, Market::Spot).is_ok() {
+            return Ok((instrument.clone(), Market::Spot, 0.0));
+        }
+
+        Err(ExecutionError::UnknownInstrument(instrument.0.clone()))
     }
 
     /// Submits a close order for the current authoritative position snapshot.
@@ -164,17 +190,19 @@ impl ExecutionService {
                 result: CloseSubmitResult::SkippedNoPosition,
             });
         }
+        let market = store
+            .snapshot
+            .positions
+            .get(instrument)
+            .map(|position| position.market)
+            .ok_or(ExecutionError::NoOpenPosition)?;
+        let qty = self.normalize_order_qty(exchange, &plan.instrument, market, plan.qty)?;
 
         exchange.submit_close_order(CloseOrderRequest {
             instrument: plan.instrument.clone(),
-            market: store
-                .snapshot
-                .positions
-                .get(instrument)
-                .map(|position| position.market)
-                .ok_or(ExecutionError::NoOpenPosition)?,
+            market,
             side: plan.side,
-            qty: plan.qty,
+            qty,
             reduce_only: plan.reduce_only,
         })?;
 
@@ -203,4 +231,42 @@ impl ExecutionService {
         }
         CloseAllBatchResult { batch_id, results }
     }
+
+    fn normalize_order_qty<E: ExchangeFacade<Error = ExchangeError>>(
+        &self,
+        exchange: &E,
+        instrument: &Instrument,
+        market: Market,
+        raw_qty: f64,
+    ) -> Result<f64, ExecutionError> {
+        let rules = exchange.load_symbol_rules(instrument, market)?;
+        let normalized_qty = floor_to_step(raw_qty, rules.step_size);
+        validate_normalized_qty(instrument, raw_qty, normalized_qty, rules)
+    }
+}
+
+fn floor_to_step(raw_qty: f64, step_size: f64) -> f64 {
+    if raw_qty <= f64::EPSILON || step_size <= f64::EPSILON {
+        return 0.0;
+    }
+    (raw_qty / step_size).floor() * step_size
+}
+
+fn validate_normalized_qty(
+    instrument: &Instrument,
+    raw_qty: f64,
+    normalized_qty: f64,
+    rules: SymbolRules,
+) -> Result<f64, ExecutionError> {
+    if normalized_qty <= f64::EPSILON || normalized_qty < rules.min_qty {
+        return Err(ExecutionError::OrderQtyTooSmall {
+            instrument: instrument.0.clone(),
+            raw_qty,
+            normalized_qty,
+            min_qty: rules.min_qty,
+            step_size: rules.step_size,
+        });
+    }
+
+    Ok(normalized_qty)
 }

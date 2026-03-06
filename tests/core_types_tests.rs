@@ -15,6 +15,7 @@ use sandbox_quant::portfolio::store::PortfolioStateStore;
 use sandbox_quant::storage::event_log::{log, EventLog};
 use sandbox_quant::exchange::types::AuthoritativeSnapshot;
 use sandbox_quant::domain::identifiers::BatchId;
+use sandbox_quant::error::execution_error::ExecutionError;
 use serde_json::json;
 
 #[test]
@@ -200,6 +201,15 @@ fn target_exposure_requires_price_source_context() {
 fn execution_service_submits_target_exposure_without_ui() {
     let instrument = Instrument::new("BTCUSDT");
     let fake = FakeExchange::new(AuthoritativeSnapshot::default());
+    fake.set_symbol_rules(
+        instrument.clone(),
+        Market::Futures,
+        SymbolRules {
+            min_qty: 0.001,
+            max_qty: 100.0,
+            step_size: 0.001,
+        },
+    );
     let mut prices = PriceStore::default();
     let market_data = MarketDataService;
     let mut store = PortfolioStateStore::default();
@@ -243,6 +253,15 @@ fn execution_service_submits_target_exposure_without_ui() {
 fn execution_service_dispatches_command_through_single_entrypoint() {
     let instrument = Instrument::new("BTCUSDT");
     let fake = FakeExchange::new(AuthoritativeSnapshot::default());
+    fake.set_symbol_rules(
+        instrument.clone(),
+        Market::Futures,
+        SymbolRules {
+            min_qty: 0.001,
+            max_qty: 100.0,
+            step_size: 0.001,
+        },
+    );
     let mut prices = PriceStore::default();
     let market_data = MarketDataService;
     let mut store = PortfolioStateStore::default();
@@ -367,6 +386,60 @@ fn execution_service_submits_target_exposure_from_flat_position() {
     assert_eq!(requests[0].market, Market::Futures);
     assert_eq!(requests[0].side, Side::Buy);
     assert!((requests[0].qty - 0.01).abs() < 1e-9);
+}
+
+#[test]
+fn execution_service_rejects_target_exposure_when_normalized_qty_is_too_small() {
+    let instrument = Instrument::new("BTCUSDT");
+    let fake = FakeExchange::new(AuthoritativeSnapshot {
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 1.0,
+            locked: 0.0,
+        }],
+        positions: vec![],
+        open_orders: vec![],
+    });
+    fake.set_symbol_rules(
+        instrument.clone(),
+        Market::Futures,
+        SymbolRules {
+            min_qty: 0.001,
+            max_qty: 100.0,
+            step_size: 0.001,
+        },
+    );
+    fake.set_last_price(instrument.clone(), Market::Futures, 100_000.0);
+
+    let prices = PriceStore::default();
+    let store = PortfolioStateStore {
+        snapshot: sandbox_quant::portfolio::snapshot::PortfolioStateSnapshot {
+            balances: vec![BalanceSnapshot {
+                asset: "USDT".to_string(),
+                free: 1.0,
+                locked: 0.0,
+            }],
+            positions: Default::default(),
+            open_orders: Default::default(),
+        },
+        staleness: sandbox_quant::portfolio::staleness::StalenessState::Fresh,
+    };
+
+    let mut service = ExecutionService::default();
+    let error = service
+        .submit_target_exposure(
+            &fake,
+            &store,
+            &prices,
+            &instrument,
+            Exposure::new(0.5).expect("bounded exposure"),
+        )
+        .expect_err("too-small qty should be rejected locally");
+
+    assert!(matches!(
+        error,
+        ExecutionError::OrderQtyTooSmall { .. }
+    ));
 }
 
 fn fake_exchange() -> FakeExchange {
