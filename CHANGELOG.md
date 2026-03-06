@@ -1,3 +1,7 @@
+## v1.0.1 - 2026-03-06
+
+- Polish shell startup panel (8f82d4c)
+
 ## v1.0.0 - 2026-03-06
 
 - Update release docs for 1.0.0 workflow (ee4d513)
