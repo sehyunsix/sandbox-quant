@@ -41,6 +41,7 @@ fn loop_shell(
     let mut stdout = io::stdout();
     let mut buffer = String::new();
     let mut completion_index = 0usize;
+    let mut completion_visible = false;
     render_prompt(&mut stdout, app, &buffer)?;
 
     loop {
@@ -56,11 +57,13 @@ fn loop_shell(
                 KeyCode::Char(ch) => {
                     buffer.push(ch);
                     completion_index = 0;
+                    completion_visible = false;
                     render_prompt(&mut stdout, app, &buffer)?;
                 }
                 KeyCode::Backspace => {
                     buffer.pop();
                     completion_index = 0;
+                    completion_visible = false;
                     render_prompt(&mut stdout, app, &buffer)?;
                 }
                 KeyCode::Tab => {
@@ -75,15 +78,14 @@ fn loop_shell(
                     if completions.len() == 1 {
                         buffer = completions[0].clone();
                         completion_index = 0;
+                        completion_visible = false;
                         render_prompt(&mut stdout, app, &buffer)?;
                     } else if !completions.is_empty() {
                         completion_index = (completion_index + 1) % completions.len();
                         buffer = completions[completion_index].clone();
+                        completion_visible = true;
                         println!();
-                        println!(
-                            "{}",
-                            format_completion_line(&completions, completion_index)
-                        );
+                        print_completion_menu(&completions, completion_index);
                         render_prompt(&mut stdout, app, &buffer)?;
                     }
                 }
@@ -92,6 +94,7 @@ fn loop_shell(
                     let line = buffer.clone();
                     buffer.clear();
                     completion_index = 0;
+                    completion_visible = false;
                     match parse_shell_input(&line)? {
                         ShellInput::Empty => {}
                         ShellInput::Help => println!("{}", shell_help_text()),
@@ -119,6 +122,10 @@ fn loop_shell(
                     render_prompt(&mut stdout, app, &buffer)?;
                 }
                 _ => {}
+            }
+
+            if completion_visible && buffer.is_empty() {
+                completion_visible = false;
             }
         }
     }
@@ -200,6 +207,21 @@ pub fn format_completion_line(completions: &[String], selected: usize) -> String
         })
         .collect::<Vec<_>>()
         .join("  ")
+}
+
+fn print_completion_menu(completions: &[String], selected: usize) {
+    println!("{}", "completions".dark_grey());
+    for (index, item) in completions.iter().enumerate() {
+        if index == selected {
+            println!(
+                "{} {}",
+                ">".cyan().bold(),
+                item.as_str().black().on_white()
+            );
+        } else {
+            println!("  {}", item.as_str().dark_grey());
+        }
+    }
 }
 
 fn print_command_output(
