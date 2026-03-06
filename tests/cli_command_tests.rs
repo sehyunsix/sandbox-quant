@@ -1,5 +1,6 @@
 use sandbox_quant::app::cli::{
-    complete_shell_input, parse_app_command, parse_shell_input, shell_help_text, ShellInput,
+    complete_shell_input, complete_shell_input_with_description, parse_app_command,
+    parse_shell_input, shell_help_text, ShellInput,
 };
 use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::app::commands::AppCommand;
@@ -130,11 +131,11 @@ fn shell_completion_suggests_commands_modes_and_instruments() {
 #[test]
 fn shell_completion_line_marks_selected_item() {
     let line = format_completion_line(
-        &["/refresh".to_string(), "/close-all".to_string()],
+        &complete_shell_input_with_description("/cl", &[]),
         1,
     );
 
-    assert_eq!(line, "/refresh  [/close-all]");
+    assert_eq!(line, "/close-all  [/close-symbol]");
 }
 
 #[test]
@@ -143,4 +144,14 @@ fn completion_index_wraps_for_up_and_down_navigation() {
     assert_eq!(next_completion_index(3, 2), 0);
     assert_eq!(previous_completion_index(3, 0), 2);
     assert_eq!(previous_completion_index(3, 2), 1);
+}
+
+#[test]
+fn described_completion_includes_help_text() {
+    let matches = complete_shell_input_with_description("/r", &[]);
+    assert!(matches.iter().any(|item| item.value == "/refresh"));
+    assert!(matches
+        .iter()
+        .any(|item| item.value == "/refresh"
+            && item.description.contains("authoritative")));
 }

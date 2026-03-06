@@ -13,6 +13,12 @@ pub enum ShellInput {
     Command(AppCommand),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellCompletion {
+    pub value: String,
+    pub description: String,
+}
+
 pub fn parse_app_command(args: &[String]) -> Result<AppCommand, String> {
     match args.first().map(String::as_str).unwrap_or("refresh") {
         "refresh" => Ok(AppCommand::RefreshAuthoritativeState),
@@ -91,6 +97,16 @@ pub fn shell_help_text() -> &'static str {
 }
 
 pub fn complete_shell_input(line: &str, instruments: &[String]) -> Vec<String> {
+    complete_shell_input_with_description(line, instruments)
+        .into_iter()
+        .map(|item| item.value)
+        .collect()
+}
+
+pub fn complete_shell_input_with_description(
+    line: &str,
+    instruments: &[String],
+) -> Vec<ShellCompletion> {
     let trimmed = line.trim_start();
     let without_prefix = trimmed.strip_prefix('/').unwrap_or(trimmed);
     let trailing_space = without_prefix.ends_with(' ');
@@ -99,15 +115,21 @@ pub fn complete_shell_input(line: &str, instruments: &[String]) -> Vec<String> {
     if parts.is_empty() {
         return shell_commands()
             .into_iter()
-            .map(|command| format!("/{command}"))
+            .map(|command| ShellCompletion {
+                value: format!("/{}", command.name),
+                description: command.description.to_string(),
+            })
             .collect();
     }
 
     if parts.len() == 1 && !trailing_space {
         return shell_commands()
             .into_iter()
-            .filter(|command| command.starts_with(parts[0]))
-            .map(|command| format!("/{command}"))
+            .filter(|command| command.name.starts_with(parts[0]))
+            .map(|command| ShellCompletion {
+                value: format!("/{}", command.name),
+                description: command.description.to_string(),
+            })
             .collect();
     }
 
@@ -122,25 +144,67 @@ pub fn complete_shell_input(line: &str, instruments: &[String]) -> Vec<String> {
         "mode" => ["real", "demo"]
             .into_iter()
             .filter(|mode| mode.starts_with(current))
-            .map(|mode| format!("/mode {mode}"))
+            .map(|mode| ShellCompletion {
+                value: format!("/mode {mode}"),
+                description: match mode {
+                    "real" => "switch to real Binance endpoints",
+                    "demo" => "switch to Binance demo endpoints",
+                    _ => "",
+                }
+                .to_string(),
+            })
             .collect(),
         "close-symbol" | "set-target-exposure" => instruments
             .iter()
             .filter(|instrument| instrument.starts_with(current))
-            .map(|instrument| format!("/{command} {instrument}"))
+            .map(|instrument| ShellCompletion {
+                value: format!("/{command} {instrument}"),
+                description: match command {
+                    "close-symbol" => "submit a close order for this instrument",
+                    "set-target-exposure" => "plan and submit toward target exposure",
+                    _ => "",
+                }
+                .to_string(),
+            })
             .collect(),
         _ => Vec::new(),
     }
 }
 
-fn shell_commands() -> [&'static str; 7] {
+struct ShellCommandSpec {
+    name: &'static str,
+    description: &'static str,
+}
+
+fn shell_commands() -> [ShellCommandSpec; 7] {
     [
-        "refresh",
-        "close-all",
-        "close-symbol",
-        "set-target-exposure",
-        "mode",
-        "help",
-        "exit",
+        ShellCommandSpec {
+            name: "refresh",
+            description: "refresh authoritative account, position, and order state",
+        },
+        ShellCommandSpec {
+            name: "close-all",
+            description: "submit close orders for all currently open instruments",
+        },
+        ShellCommandSpec {
+            name: "close-symbol",
+            description: "submit a close order for one instrument",
+        },
+        ShellCommandSpec {
+            name: "set-target-exposure",
+            description: "plan and submit toward a signed target exposure",
+        },
+        ShellCommandSpec {
+            name: "mode",
+            description: "switch between real and demo Binance endpoints",
+        },
+        ShellCommandSpec {
+            name: "help",
+            description: "show available slash commands",
+        },
+        ShellCommandSpec {
+            name: "exit",
+            description: "leave the interactive shell",
+        },
     ]
 }

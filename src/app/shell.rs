@@ -7,7 +7,10 @@ use crossterm::style::{Color, Print, PrintStyledContent, Stylize};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 
 use crate::app::bootstrap::{AppBootstrap, BinanceMode};
-use crate::app::cli::{complete_shell_input, parse_shell_input, shell_help_text, ShellInput};
+use crate::app::cli::{
+    complete_shell_input_with_description, parse_shell_input, shell_help_text, ShellCompletion,
+    ShellInput,
+};
 use crate::app::output::render_command_output;
 use crate::app::runtime::AppRuntime;
 use crate::exchange::binance::client::BinanceExchange;
@@ -71,13 +74,13 @@ fn loop_shell(
                     let query = completion_query.clone().unwrap_or_else(|| buffer.clone());
                     let completions = current_completions(app, &query);
                     if completions.len() == 1 {
-                        buffer = completions[0].clone();
+                        buffer = completions[0].value.clone();
                         completion_index = 0;
                         completion_query = Some(query);
                         render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                     } else if !completions.is_empty() {
                         completion_index = (completion_index + 1) % completions.len();
-                        buffer = completions[completion_index].clone();
+                        buffer = completions[completion_index].value.clone();
                         completion_query = Some(query);
                         render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                     }
@@ -87,7 +90,7 @@ fn loop_shell(
                     let completions = current_completions(app, &query);
                     if !completions.is_empty() {
                         completion_index = previous_completion_index(completions.len(), completion_index);
-                        buffer = completions[completion_index].clone();
+                        buffer = completions[completion_index].value.clone();
                         completion_query = Some(query);
                         render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                     }
@@ -97,7 +100,7 @@ fn loop_shell(
                     let completions = current_completions(app, &query);
                     if !completions.is_empty() {
                         completion_index = next_completion_index(completions.len(), completion_index);
-                        buffer = completions[completion_index].clone();
+                        buffer = completions[completion_index].value.clone();
                         completion_query = Some(query);
                         render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
                     }
@@ -239,15 +242,15 @@ fn staleness_label(staleness: crate::portfolio::staleness::StalenessState) -> &'
     }
 }
 
-pub fn format_completion_line(completions: &[String], selected: usize) -> String {
+pub fn format_completion_line(completions: &[ShellCompletion], selected: usize) -> String {
     completions
         .iter()
         .enumerate()
         .map(|(index, item)| {
             if index == selected {
-                format!("[{item}]")
+                format!("[{}]", item.value)
             } else {
-                item.clone()
+                item.value.clone()
             }
         })
         .collect::<Vec<_>>()
@@ -256,7 +259,7 @@ pub fn format_completion_line(completions: &[String], selected: usize) -> String
 
 fn print_completion_menu(
     stdout: &mut io::Stdout,
-    completions: &[String],
+    completions: &[ShellCompletion],
     selected: usize,
 ) -> io::Result<usize> {
     execute!(
@@ -274,13 +277,17 @@ fn print_completion_menu(
                 stdout,
                 PrintStyledContent(">".cyan().bold()),
                 Print(" "),
-                PrintStyledContent(item.as_str().black().on_white()),
+                PrintStyledContent(item.value.as_str().black().on_white()),
+                Print("  "),
+                PrintStyledContent(item.description.as_str().dark_grey()),
             )?;
         } else {
             execute!(
                 stdout,
                 Print("  "),
-                PrintStyledContent(item.as_str().dark_grey()),
+                PrintStyledContent(item.value.as_str().dark_grey()),
+                Print("  "),
+                PrintStyledContent(item.description.as_str().dark_grey()),
             )?;
         }
     }
@@ -299,7 +306,10 @@ fn print_error(error: impl std::fmt::Display) {
     println!("{} {}", "error:".red().bold(), error.to_string().red());
 }
 
-fn current_completions(app: &AppBootstrap<BinanceExchange>, buffer: &str) -> Vec<String> {
+fn current_completions(
+    app: &AppBootstrap<BinanceExchange>,
+    buffer: &str,
+) -> Vec<ShellCompletion> {
     let instruments = app
         .portfolio_store
         .snapshot
@@ -307,10 +317,10 @@ fn current_completions(app: &AppBootstrap<BinanceExchange>, buffer: &str) -> Vec
         .keys()
         .map(|instrument| instrument.0.clone())
         .collect::<Vec<_>>();
-    complete_shell_input(buffer, &instruments)
+    complete_shell_input_with_description(buffer, &instruments)
 }
 
-fn should_show_completion_menu(buffer: &str, completions: &[String]) -> bool {
+fn should_show_completion_menu(buffer: &str, completions: &[ShellCompletion]) -> bool {
     buffer.trim_start().starts_with('/') && !completions.is_empty()
 }
 
