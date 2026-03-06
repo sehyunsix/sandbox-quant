@@ -1,11 +1,11 @@
-use sandbox_quant::v1::domain::instrument::Instrument;
-use sandbox_quant::v1::domain::market::Market;
-use sandbox_quant::v1::domain::order::{OpenOrder, OrderStatus};
-use sandbox_quant::v1::domain::position::{PositionSnapshot, Side};
-use sandbox_quant::v1::exchange::fake::FakeExchange;
-use sandbox_quant::v1::exchange::types::AuthoritativeSnapshot;
-use sandbox_quant::v1::portfolio::staleness::StalenessState;
-use sandbox_quant::v1::portfolio::store::PortfolioStateStore;
+use sandbox_quant::domain::instrument::Instrument;
+use sandbox_quant::domain::market::Market;
+use sandbox_quant::domain::order::{OpenOrder, OrderStatus};
+use sandbox_quant::domain::position::{PositionSnapshot, Side};
+use sandbox_quant::exchange::fake::FakeExchange;
+use sandbox_quant::exchange::types::AuthoritativeSnapshot;
+use sandbox_quant::portfolio::staleness::StalenessState;
+use sandbox_quant::portfolio::store::PortfolioStateStore;
 
 #[test]
 fn refresh_from_exchange_overwrites_local_state_and_clears_staleness() {

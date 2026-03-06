@@ -1,15 +1,15 @@
-use sandbox_quant::v1::domain::exposure::Exposure;
-use sandbox_quant::v1::domain::instrument::Instrument;
-use sandbox_quant::v1::domain::market::Market;
-use sandbox_quant::v1::domain::position::{PositionSnapshot, Side};
-use sandbox_quant::v1::exchange::fake::FakeExchange;
-use sandbox_quant::v1::exchange::symbol_rules::SymbolRules;
-use sandbox_quant::v1::execution::close_all::CloseAllBatchResult;
-use sandbox_quant::v1::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
-use sandbox_quant::v1::execution::service::ExecutionService;
-use sandbox_quant::v1::portfolio::store::PortfolioStateStore;
-use sandbox_quant::v1::exchange::types::AuthoritativeSnapshot;
-use sandbox_quant::v1::domain::identifiers::BatchId;
+use sandbox_quant::domain::exposure::Exposure;
+use sandbox_quant::domain::instrument::Instrument;
+use sandbox_quant::domain::market::Market;
+use sandbox_quant::domain::position::{PositionSnapshot, Side};
+use sandbox_quant::exchange::fake::FakeExchange;
+use sandbox_quant::exchange::symbol_rules::SymbolRules;
+use sandbox_quant::execution::close_all::CloseAllBatchResult;
+use sandbox_quant::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
+use sandbox_quant::execution::service::ExecutionService;
+use sandbox_quant::portfolio::store::PortfolioStateStore;
+use sandbox_quant::exchange::types::AuthoritativeSnapshot;
+use sandbox_quant::domain::identifiers::BatchId;
 
 #[test]
 fn position_snapshot_derives_side_and_abs_qty_from_signed_qty() {
