@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use crossterm::cursor::{position, MoveToColumn, MoveToNextLine, RestorePosition, SavePosition};
+use crossterm::cursor::{position, MoveToColumn, MoveToNextLine, MoveUp, RestorePosition, SavePosition};
 use crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::style::{Color, Print, PrintStyledContent, Stylize};
@@ -180,14 +180,17 @@ fn render_shell(
     completion_index: usize,
     rendered_menu_lines: &mut usize,
 ) -> io::Result<()> {
-    render_prompt(stdout, app, buffer)?;
     let completions = current_completions(app, buffer);
     let expected_menu_lines = if should_show_completion_menu(buffer, &completions) {
         completions.len() + 1
     } else {
         0
     };
-    ensure_vertical_space(stdout, expected_menu_lines)?;
+    let scrolled = ensure_vertical_space(stdout, expected_menu_lines)?;
+    if scrolled > 0 {
+        execute!(stdout, MoveUp(scrolled as u16))?;
+    }
+    render_prompt(stdout, app, buffer)?;
     execute!(stdout, SavePosition)?;
     let menu_lines = if should_show_completion_menu(buffer, &completions) {
         print_completion_menu(stdout, &completions, completion_index)?
@@ -344,9 +347,9 @@ fn should_show_completion_menu(buffer: &str, completions: &[ShellCompletion]) ->
     buffer.trim_start().starts_with('/') && !completions.is_empty()
 }
 
-fn ensure_vertical_space(stdout: &mut io::Stdout, lines_needed: usize) -> io::Result<()> {
+fn ensure_vertical_space(stdout: &mut io::Stdout, lines_needed: usize) -> io::Result<usize> {
     if lines_needed == 0 {
-        return Ok(());
+        return Ok(0);
     }
 
     let (_, row) = position()?;
@@ -355,7 +358,7 @@ fn ensure_vertical_space(stdout: &mut io::Stdout, lines_needed: usize) -> io::Re
     if overflow > 0 {
         execute!(stdout, ScrollUp(overflow as u16))?;
     }
-    Ok(())
+    Ok(overflow)
 }
 
 pub fn scroll_lines_needed(current_row: u16, terminal_height: u16, lines_needed: usize) -> usize {
