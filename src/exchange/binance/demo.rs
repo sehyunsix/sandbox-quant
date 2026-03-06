@@ -5,8 +5,8 @@ use crate::exchange::binance::auth::BinanceAuth;
 use crate::exchange::binance::client::{BinanceHttpTransport, BinanceTransport};
 use crate::exchange::binance::orders::{RawCloseOrderAck, RawCloseOrderRequest, RawSymbolRules};
 
-pub const BINANCE_DEMO_SPOT_BASE_URL: &str = "https://testnet.binance.vision";
-pub const BINANCE_DEMO_FUTURES_BASE_URL: &str = "https://testnet.binancefuture.com";
+pub const BINANCE_DEMO_SPOT_BASE_URL: &str = "https://demo-api.binance.com";
+pub const BINANCE_DEMO_FUTURES_BASE_URL: &str = "https://demo-fapi.binance.com";
 
 #[derive(Debug, Clone)]
 pub struct BinanceDemoHttpTransport {
