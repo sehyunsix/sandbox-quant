@@ -1,5 +1,5 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EventRecord {
     pub kind: String,
-    pub payload: String,
+    pub payload: serde_json::Value,
 }

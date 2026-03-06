@@ -15,8 +15,6 @@ use crate::execution::price_source::PriceSource;
 use crate::execution::spot::planner::SpotExecutionPlanner;
 use crate::execution::target_translation::exposure_to_notional;
 use crate::portfolio::store::PortfolioStateStore;
-use crate::storage::event_log::EventLog;
-use crate::storage::models::EventRecord;
 
 #[derive(Debug, Default)]
 pub struct ExecutionService {
@@ -69,69 +67,6 @@ impl ExecutionService {
                     self.close_all(exchange, store, batch_id),
                 ))
             }
-        }
-    }
-
-    pub fn execute_and_log<E: ExchangeFacade<Error = ExchangeError>>(
-        &mut self,
-        exchange: &E,
-        store: &PortfolioStateStore,
-        price_source: &impl PriceSource,
-        event_log: &mut EventLog,
-        command: ExecutionCommand,
-    ) -> Result<ExecutionOutcome, ExecutionError> {
-        let outcome = self.execute(exchange, store, price_source, command.clone())?;
-        event_log.append(self.build_event_record(command, &outcome));
-        Ok(outcome)
-    }
-
-    fn build_event_record(
-        &self,
-        command: ExecutionCommand,
-        outcome: &ExecutionOutcome,
-    ) -> EventRecord {
-        match (command, outcome) {
-            (
-                ExecutionCommand::SetTargetExposure {
-                    instrument,
-                    target,
-                    source,
-                },
-                ExecutionOutcome::TargetExposureSubmitted { .. },
-            ) => EventRecord {
-                kind: "execution.target_exposure.submitted".to_string(),
-                payload: format!(
-                    "instrument={} target={:.6} source={:?}",
-                    instrument.0,
-                    target.value(),
-                    source
-                ),
-            },
-            (
-                ExecutionCommand::CloseSymbol { instrument, source },
-                ExecutionOutcome::CloseSymbol(result),
-            ) => EventRecord {
-                kind: "execution.close_symbol.completed".to_string(),
-                payload: format!(
-                    "instrument={} source={:?} result={:?}",
-                    instrument.0, source, result.result
-                ),
-            },
-            (ExecutionCommand::CloseAll { source }, ExecutionOutcome::CloseAll(result)) => {
-                EventRecord {
-                    kind: "execution.close_all.completed".to_string(),
-                    payload: format!(
-                        "batch_id={} source={:?} symbols={}",
-                        result.batch_id.0,
-                        source,
-                        result.results.len()
-                    ),
-                }
-            }
-            _ => EventRecord {
-                kind: "execution.unknown".to_string(),
-                payload: "command/outcome mismatch".to_string(),
-            },
         }
     }
 

@@ -12,9 +12,10 @@ use sandbox_quant::execution::service::{ExecutionOutcome, ExecutionService};
 use sandbox_quant::market_data::price_store::PriceStore;
 use sandbox_quant::market_data::service::MarketDataService;
 use sandbox_quant::portfolio::store::PortfolioStateStore;
-use sandbox_quant::storage::event_log::EventLog;
+use sandbox_quant::storage::event_log::{log, EventLog};
 use sandbox_quant::exchange::types::AuthoritativeSnapshot;
 use sandbox_quant::domain::identifiers::BatchId;
+use serde_json::json;
 
 #[test]
 fn position_snapshot_derives_side_and_abs_qty_from_signed_qty() {
@@ -289,49 +290,22 @@ fn execution_service_dispatches_command_through_single_entrypoint() {
 }
 
 #[test]
-fn execution_service_writes_structured_event_log_records() {
+fn generic_log_function_accepts_structured_payloads() {
     let instrument = Instrument::new("BTCUSDT");
-    let fake = FakeExchange::new(AuthoritativeSnapshot::default());
-    let mut prices = PriceStore::default();
-    let market_data = MarketDataService;
-    let mut store = PortfolioStateStore::default();
-    let mut log = EventLog::default();
-    store.apply_snapshot(AuthoritativeSnapshot {
-        balances: vec![BalanceSnapshot {
-            asset: "USDT".to_string(),
-            free: 1000.0,
-            locked: 0.0,
-        }],
-        positions: vec![PositionSnapshot {
-            instrument: instrument.clone(),
-            market: Market::Futures,
-            signed_qty: -0.25,
-            entry_price: Some(50000.0),
-        }],
-        open_orders: vec![],
-    });
-    market_data.apply_price(&mut prices, instrument.clone(), 50000.0);
+    let mut event_log = EventLog::default();
 
-    let mut service = ExecutionService::default();
-    let outcome = service
-        .execute_and_log(
-            &fake,
-            &store,
-            &prices,
-            &mut log,
-            ExecutionCommand::SetTargetExposure {
-                instrument: instrument.clone(),
-                target: Exposure::new(0.5).expect("bounded exposure"),
-                source: CommandSource::User,
-            },
-        )
-        .expect("execute and log should succeed");
-
-    assert_eq!(
-        outcome,
-        ExecutionOutcome::TargetExposureSubmitted { instrument }
+    log(
+        &mut event_log,
+        "execution.target_exposure.submitted",
+        json!({
+            "instrument": instrument.0,
+            "target": 0.5,
+            "source": "user"
+        }),
     );
-    assert_eq!(log.records.len(), 1);
-    assert_eq!(log.records[0].kind, "execution.target_exposure.submitted");
-    assert!(log.records[0].payload.contains("BTCUSDT"));
+
+    assert_eq!(event_log.records.len(), 1);
+    assert_eq!(event_log.records[0].kind, "execution.target_exposure.submitted");
+    assert_eq!(event_log.records[0].payload["instrument"], "BTCUSDT");
+    assert_eq!(event_log.records[0].payload["target"], 0.5);
 }
