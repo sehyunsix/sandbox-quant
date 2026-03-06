@@ -55,13 +55,12 @@ fn app_runtime_executes_command_and_logs_event() {
             step_size: 0.001,
         },
     );
+    exchange.set_last_price(instrument.clone(), Market::Futures, 50000.0);
 
     let mut app = AppBootstrap::new(exchange, PortfolioStateStore::default());
     app.portfolio_store
         .refresh_from_exchange(&app.exchange)
         .expect("seed snapshot");
-    app.market_data
-        .apply_price(&mut app.price_store, instrument.clone(), 50000.0);
 
     let mut runtime = AppRuntime::default();
     runtime
@@ -75,8 +74,10 @@ fn app_runtime_executes_command_and_logs_event() {
         )
         .expect("execution command should succeed");
 
-    assert_eq!(app.event_log.records.len(), 1);
-    assert_eq!(app.event_log.records[0].kind, "app.execution.completed");
+    assert_eq!(app.event_log.records.len(), 2);
+    assert_eq!(app.event_log.records[0].kind, "app.market_data.price_refreshed");
+    assert_eq!(app.event_log.records[1].kind, "app.execution.completed");
+    assert_eq!(app.event_log.records[0].payload["price"], 50000.0);
 }
 
 #[test]

@@ -49,6 +49,13 @@ impl BinanceTransport for StubTransport {
         }
     }
 
+    fn load_last_price(&self, _symbol: &str, market: Market) -> Result<f64, ExchangeError> {
+        match market {
+            Market::Spot => Ok(50000.0),
+            Market::Futures => Ok(65000.0),
+        }
+    }
+
     fn load_symbol_rules(
         &self,
         _symbol: &str,
@@ -111,4 +118,15 @@ fn binance_exchange_routes_close_submit_through_raw_transport_shape() {
     assert_eq!(requests[0].side, "BUY");
     assert_eq!(requests[0].market, Market::Futures);
     assert!(requests[0].reduce_only);
+}
+
+#[test]
+fn binance_exchange_loads_last_price_through_transport() {
+    let exchange = BinanceExchange::new(Arc::new(StubTransport::default()));
+
+    let price = exchange
+        .load_last_price(&Instrument::new("BTCUSDT"), Market::Futures)
+        .expect("last price should load");
+
+    assert_eq!(price, 65000.0);
 }

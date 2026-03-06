@@ -14,6 +14,7 @@ use crate::exchange::types::{
 pub struct FakeExchange {
     snapshot: Mutex<AuthoritativeSnapshot>,
     symbol_rules: Mutex<BTreeMap<(Instrument, Market), SymbolRules>>,
+    last_prices: Mutex<BTreeMap<(Instrument, Market), f64>>,
     close_requests: Mutex<Vec<CloseOrderRequest>>,
     submit_requests: Mutex<Vec<CloseOrderRequest>>,
     next_submit_result: Mutex<Option<Result<CloseOrderAccepted, ExchangeError>>>,
@@ -24,6 +25,7 @@ impl FakeExchange {
         Self {
             snapshot: Mutex::new(snapshot),
             symbol_rules: Mutex::new(BTreeMap::new()),
+            last_prices: Mutex::new(BTreeMap::new()),
             close_requests: Mutex::new(Vec::new()),
             submit_requests: Mutex::new(Vec::new()),
             next_submit_result: Mutex::new(None),
@@ -40,6 +42,13 @@ impl FakeExchange {
             .lock()
             .expect("lock symbol_rules")
             .insert((instrument, market), rules);
+    }
+
+    pub fn set_last_price(&self, instrument: Instrument, market: Market, price: f64) {
+        self.last_prices
+            .lock()
+            .expect("lock last_prices")
+            .insert((instrument, market), price);
     }
 
     pub fn set_next_submit_result(
@@ -76,6 +85,19 @@ impl ExchangeFacade for FakeExchange {
 
     fn load_authoritative_snapshot(&self) -> Result<AuthoritativeSnapshot, Self::Error> {
         Ok(self.snapshot.lock().expect("lock snapshot").clone())
+    }
+
+    fn load_last_price(
+        &self,
+        instrument: &Instrument,
+        market: Market,
+    ) -> Result<f64, Self::Error> {
+        self.last_prices
+            .lock()
+            .expect("lock last_prices")
+            .get(&(instrument.clone(), market))
+            .copied()
+            .ok_or(ExchangeError::InvalidResponse)
     }
 
     fn load_symbol_rules(

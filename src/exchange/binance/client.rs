@@ -19,6 +19,7 @@ use serde_json::Value;
 
 pub trait BinanceTransport: Send + Sync {
     fn load_account_state(&self, market: Market) -> Result<RawAccountState, ExchangeError>;
+    fn load_last_price(&self, symbol: &str, market: Market) -> Result<f64, ExchangeError>;
     fn load_symbol_rules(
         &self,
         symbol: &str,
@@ -155,6 +156,15 @@ impl BinanceTransport for BinanceHttpTransport {
         }
     }
 
+    fn load_last_price(&self, symbol: &str, market: Market) -> Result<f64, ExchangeError> {
+        let path = match market {
+            Market::Spot => "/api/v3/ticker/price",
+            Market::Futures => "/fapi/v1/ticker/price",
+        };
+        let value = self.public_get(market, path, &[("symbol", symbol.to_string())])?;
+        parse_last_price(value)
+    }
+
     fn load_symbol_rules(
         &self,
         symbol: &str,
@@ -204,6 +214,14 @@ impl ExchangeFacade for BinanceExchange {
         spot.positions.extend(futures.positions);
         spot.balances.extend(futures.balances);
         Ok(spot)
+    }
+
+    fn load_last_price(
+        &self,
+        instrument: &Instrument,
+        market: Market,
+    ) -> Result<f64, Self::Error> {
+        self.transport.load_last_price(&instrument.0, market)
     }
 
     fn load_symbol_rules(
@@ -394,6 +412,13 @@ fn parse_symbol_rules(value: Value) -> Result<RawSymbolRules, ExchangeError> {
                 .ok_or(ExchangeError::InvalidResponse)?,
         )?,
     })
+}
+
+fn parse_last_price(value: Value) -> Result<f64, ExchangeError> {
+    let price = value["price"]
+        .as_str()
+        .ok_or(ExchangeError::InvalidResponse)?;
+    parse_decimal(price)
 }
 
 fn parse_order_ack(value: Value) -> Result<RawCloseOrderAck, ExchangeError> {

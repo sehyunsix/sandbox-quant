@@ -1,5 +1,6 @@
 use crate::app::commands::AppCommand;
 use crate::app::bootstrap::AppBootstrap;
+use crate::execution::command::ExecutionCommand;
 use crate::storage::event_log::log;
 use serde_json::json;
 
@@ -22,6 +23,25 @@ impl AppRuntime {
 
         match command {
             AppCommand::Execution(command) => {
+                if let ExecutionCommand::SetTargetExposure { instrument, .. } = &command {
+                    if let Some(position) = app.portfolio_store.snapshot.positions.get(instrument) {
+                        let price = app.market_data.refresh_price(
+                            &app.exchange,
+                            &mut app.price_store,
+                            instrument.clone(),
+                            position.market,
+                        )?;
+                        log(
+                            &mut app.event_log,
+                            "app.market_data.price_refreshed",
+                            json!({
+                                "instrument": instrument.0,
+                                "market": format!("{:?}", position.market),
+                                "price": price,
+                            }),
+                        );
+                    }
+                }
                 let outcome = app.execution.execute(
                     &app.exchange,
                     &app.portfolio_store,
