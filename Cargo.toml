@@ -2,17 +2,23 @@
 name = "sandbox-quant"
 version = "0.35.0"
 edition = "2021"
-description = "Terminal-based multi-strategy crypto trading sandbox with centralized risk controls"
+description = "Exchange-truth trading core for Binance Spot and Futures"
 repository = "https://github.com/sehyunsix/sandbox-quant"
 readme = "README.md"
 documentation = "https://docs.rs/sandbox-quant"
-keywords = ["trading", "binance", "terminal", "risk", "quant"]
+keywords = ["trading", "binance", "exchange", "cli", "futures"]
 categories = ["command-line-utilities", "finance"]
 license = "MIT"
+exclude = [
+    "archive/**",
+    "docs/archive/**",
+    "config/**",
+    ".github/**",
+]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -32,6 +38,8 @@ uuid = { version = "1", features = ["v4"] }
 toml = "0.8"
 rustls = { version = "0.23", features = ["ring"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+duckdb = { version = "1.1.1", features = ["bundled"] }
+url = "2"
 
 [dev-dependencies]
 tokio-test = "0.4"

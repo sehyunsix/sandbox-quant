@@ -3,180 +3,184 @@
 [![docs.rs](docs/assets/docsrs-badge.svg)](https://docs.rs/sandbox-quant)
 [![crates.io](docs/assets/cratesio-badge.svg)](https://crates.io/crates/sandbox-quant)
 
-Terminal-based Rust trading sandbox for Binance Spot Testnet.
+Exchange-truth trading core for Binance Spot and Futures.
 
-It provides real-time market streaming, strategy-driven order execution, cumulative trade history, and a `ratatui` dashboard for monitoring positions and performance.
+The current codebase is a reset `v1` architecture focused on:
 
-## What Is sandbox-quant?
+- authoritative account, position, and open-order sync
+- typed execution commands
+- safe close primitives
+- Binance adapter with signed HTTP transport
+- UI-independent core testing
 
-![cargo run multi terminal snapshot](docs/assets/cargo-run-multi-terminal-snapshot.png)
+The old strategy-heavy terminal dashboard described in earlier revisions is no longer the active implementation.
 
-- Real-time market + strategy loop (WebSocket + REST)
-- Multi-view terminal dashboard (chart, positions, orders, history, logs)
-- Persistent history with SQLite and incremental recovery
-- Per-strategy and manual-performance attribution (`W/L/T/PnL`)
-- Fill markers and strategy-aware UI telemetry
-- Operational safeguards for time sync and rate-limit pressure
+## Current Scope
 
-## Quick Start
+Implemented today:
 
-1. Create `.env`:
+- `refresh` of authoritative exchange state
+- `close-all`
+- `close-symbol <instrument>`
+- `set-target-exposure <instrument> <target>`
+- Binance signed REST transport
+- runtime event logging
+- CLI summaries for refresh and execution results
 
-```bash
-cp .env.example .env
-```
+Not implemented as first-class runtime features yet:
 
-2. Set Binance Spot Testnet credentials:
+- strategy engine
+- auto-trading loop
+- persistent analytics pipeline
+- websocket-driven live market loop
 
-```bash
-BINANCE_API_KEY=your_testnet_api_key_here
-BINANCE_API_SECRET=your_testnet_api_secret_here
-```
+Legacy strategy/UI documents are archived under `docs/archive/legacy`.
 
-3. Run app:
+## Architecture
 
-```bash
-cargo run --bin sandbox-quant
-```
+Top-level modules:
 
-## Diagnostics CLI (Headless)
+- `src/app`
+- `src/domain`
+- `src/error`
+- `src/exchange`
+- `src/execution`
+- `src/market_data`
+- `src/portfolio`
+- `src/storage`
 
-Use `doctor` commands when TUI-based verification is inconvenient (CI, remote shell, or rapid triage).
+Core rules:
 
-```bash
-# Auth and endpoint alignment checks (signed endpoints)
-cargo run --bin sandbox-quant -- doctor auth
+- exchange state is the source of truth
+- local storage is not authoritative trading state
+- canonical position representation is `signed_qty`
+- execution is command-driven
+- tests live in `tests/`
 
-# JSON output for automation
-cargo run --bin sandbox-quant -- doctor auth --json
+The design rationale is documented in [0056-v1-reset-exchange-truth-architecture.md](docs/rfcs/0056-v1-reset-exchange-truth-architecture.md).
 
-# Live futures positions from exchange
-cargo run --bin sandbox-quant -- doctor positions --market futures --json
+## Environment
 
-# PnL derivation breakdown (API value vs fallback recomputation)
-cargo run --bin sandbox-quant -- doctor pnl --market futures --symbol BTCUSDT --json
-
-# Order/trade history health for one symbol
-cargo run --bin sandbox-quant -- doctor history --market futures --symbol BTCUSDT --json
-
-# One-shot headless sync summary
-cargo run --bin sandbox-quant -- doctor sync --once --market futures --symbol BTCUSDT --json
-
-# Help
-cargo run --bin sandbox-quant -- doctor help
-```
-
-## Key Controls
-
-| Area | Keys | Description |
-|---|---|---|
-| App | `Q` | Quit |
-| Strategy Runtime | `P` / `R` | Pause / Resume |
-| Manual Orders | `B` / `S` | Manual Buy / Sell |
-| Selector | `T` / `Y` | Open Symbol / Strategy Selector |
-| Timeframe | `0/1/H/D/W/M` | `1s/1m/1h/1d/1w/1M` |
-| Grid | `G` | Open/Close Portfolio Grid |
-
-## Strategy Status
-
-Current strategy implementation status (code-based):
-
-| Strategy | Category | Status | Source | Test | Doc |
-|---|---|---|---|---|---|
-| MA Crossover | Trend | ✅ | [src/strategy/ma_crossover.rs](src/strategy/ma_crossover.rs) | [tests/ma_crossover_tests.rs](tests/ma_crossover_tests.rs) | [docs/strategy/ma-crossover.md](docs/strategy/ma-crossover.md) |
-| EMA Crossover | Trend | ✅ | [src/strategy/ema_crossover.rs](src/strategy/ema_crossover.rs) | [tests/ema_crossover_tests.rs](tests/ema_crossover_tests.rs) | [docs/strategy/ema-crossover.md](docs/strategy/ema-crossover.md) |
-| MACD Crossover | Trend | ✅ | [src/strategy/macd_crossover.rs](src/strategy/macd_crossover.rs) | [tests/macd_crossover_tests.rs](tests/macd_crossover_tests.rs) | [docs/strategy/macd-crossover.md](docs/strategy/macd-crossover.md) |
-| ROC Momentum | Trend | ✅ | [src/strategy/roc_momentum.rs](src/strategy/roc_momentum.rs) | [tests/roc_momentum_tests.rs](tests/roc_momentum_tests.rs) | [docs/strategy/roc-momentum.md](docs/strategy/roc-momentum.md) |
-| Aroon Trend | Trend | ✅ | [src/strategy/aroon_trend.rs](src/strategy/aroon_trend.rs) | [tests/aroon_trend_tests.rs](tests/aroon_trend_tests.rs) | [docs/strategy/aroon-trend.md](docs/strategy/aroon-trend.md) |
-| ATR Expansion | Volatility | ✅ | [src/strategy/atr_expansion.rs](src/strategy/atr_expansion.rs) | [tests/atr_expansion_tests.rs](tests/atr_expansion_tests.rs) | [docs/strategy/atr-expansion.md](docs/strategy/atr-expansion.md) |
-| Channel Breakout | Breakout | ✅ | [src/strategy/channel_breakout.rs](src/strategy/channel_breakout.rs) | [tests/channel_breakout_tests.rs](tests/channel_breakout_tests.rs) | [docs/strategy/channel-breakout.md](docs/strategy/channel-breakout.md) |
-| RSA | Hybrid | ✅ | [src/strategy/rsa.rs](src/strategy/rsa.rs) | [tests/rsa_strategy_tests.rs](tests/rsa_strategy_tests.rs) | [docs/strategy/rsa.md](docs/strategy/rsa.md) |
-| Donchian Trend | Trend | ✅ | [src/strategy/donchian_trend.rs](src/strategy/donchian_trend.rs) | [tests/donchian_trend_tests.rs](tests/donchian_trend_tests.rs) | [docs/strategy/donchian-trend.md](docs/strategy/donchian-trend.md) |
-| MA Reversion | MeanReversion | ✅ | [src/strategy/ma_reversion.rs](src/strategy/ma_reversion.rs) | [tests/ma_reversion_tests.rs](tests/ma_reversion_tests.rs) | [docs/strategy/ma-reversion.md](docs/strategy/ma-reversion.md) |
-| Bollinger Reversion | MeanReversion | ✅ | [src/strategy/bollinger_reversion.rs](src/strategy/bollinger_reversion.rs) | [tests/bollinger_reversion_tests.rs](tests/bollinger_reversion_tests.rs) | [docs/strategy/bollinger-reversion.md](docs/strategy/bollinger-reversion.md) |
-| Stochastic Reversion | MeanReversion | ✅ | [src/strategy/stochastic_reversion.rs](src/strategy/stochastic_reversion.rs) | [tests/stochastic_reversion_tests.rs](tests/stochastic_reversion_tests.rs) | [docs/strategy/stochastic-reversion.md](docs/strategy/stochastic-reversion.md) |
-| Volatility Compression | Volatility | ✅ | [src/strategy/volatility_compression.rs](src/strategy/volatility_compression.rs) | [tests/volatility_compression_tests.rs](tests/volatility_compression_tests.rs) | [docs/strategy/volatility-compression.md](docs/strategy/volatility-compression.md) |
-| Opening Range Breakout | Breakout | ✅ | [src/strategy/opening_range_breakout.rs](src/strategy/opening_range_breakout.rs) | [tests/opening_range_breakout_tests.rs](tests/opening_range_breakout_tests.rs) | [docs/strategy/opening-range-breakout.md](docs/strategy/opening-range-breakout.md) |
-| Regime Switch | Hybrid | ✅ | [src/strategy/regime_switch.rs](src/strategy/regime_switch.rs) | [tests/regime_switch_tests.rs](tests/regime_switch_tests.rs) | [docs/strategy/regime-switch.md](docs/strategy/regime-switch.md) |
-| Ensemble Vote | Hybrid | ✅ | [src/strategy/ensemble_vote.rs](src/strategy/ensemble_vote.rs) | [tests/ensemble_vote_tests.rs](tests/ensemble_vote_tests.rs) | [docs/strategy/ensemble-vote.md](docs/strategy/ensemble-vote.md) |
-
-## UI Overview
-
-- **Main Dashboard**: Live chart view with active position summary, strategy metrics, and runtime logs.
-![Main Dashboard](docs/ui/screenshots/dashboard-main.png)
-
-- **Portfolio Grid - Assets Tab**: Consolidated asset balances, position quantities, and realized/unrealized PnL.
-![Portfolio Grid - Assets Tab](docs/ui/screenshots/grid-assets.png)
-
-- **Portfolio Grid - Strategies Tab**: ON/OFF strategy panels with per-strategy stats (`W/L/T/PnL`) and running time.
-![Portfolio Grid - Strategies Tab](docs/ui/screenshots/grid-strategies.png)
-
-- **Portfolio Grid - Strategies + Config Popup**: Strategy configuration editor for symbol and parameter tuning.
-![Portfolio Grid - Strategies + Config Popup](docs/ui/screenshots/grid-strategies-config.png)
-
-- **Portfolio Grid - Network Tab**: Operational network health panel (latency, drop rates, reconnect signals).
-![Portfolio Grid - Network Tab](docs/ui/screenshots/grid-network.png)
-
-- **Account Popup**: Quick account balance overview for available assets and quote holdings.
-![Account Popup](docs/ui/screenshots/popup-account.png)
-
-
-<!-- UI_DOCS:END -->
-
-## Configuration
-
-Edit `config/default.toml` for runtime behavior.
-
-Common knobs:
-- Strategy parameters (`fast/slow/cooldown`)
-- Order sizing and risk limits
-- Default symbols and market behavior
-
-## Documentation Links
-
-- API Docs (`docs.rs`): https://docs.rs/sandbox-quant
-- Crate Page (`crates.io`): https://crates.io/crates/sandbox-quant
-- Strategy Docs Index: [docs/strategy/README.md](docs/strategy/README.md)
-- Markdown Book (`docs-site`):
+Required:
 
 ```bash
-cargo install mdbook
-mdbook serve docs-site --open
+BINANCE_API_KEY=your_key
+BINANCE_SECRET_KEY=your_secret
 ```
 
-- Rustdoc local:
+Optional:
 
 ```bash
-cargo doc --no-deps --open
+BINANCE_SPOT_BASE_URL=https://api.binance.com
+BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 ```
 
-## Development Workflow
+The default runtime mode is `demo`. Optional base URLs are useful for explicit testnet or custom routing.
 
-Useful commands:
+## Running
+
+Refresh authoritative state:
 
 ```bash
-cargo test -q
+cargo run -- refresh
 ```
 
-Testing references:
-- `TESTING.md`
-- `tests/`
+Close all currently open positions:
 
-## AI PR Policy
+```bash
+cargo run -- close-all
+```
 
-- Gemini-assisted PR workflow: `.github/workflows/gemini-pr.yml`
-- Review and safety guide: `GEMINI.md`
-- Gemini automation lane is limited to RFC/issue proposal docs (no runtime strategy code generation).
+Close one symbol:
 
-## Appendix: Run Capture
+```bash
+cargo run -- close-symbol BTCUSDT
+```
 
-Terminal screenshot from a real run:
+Set target exposure:
 
-![cargo run terminal snapshot](docs/assets/cargo-run-terminal-snapshot.png)
+```bash
+cargo run -- set-target-exposure BTCUSDT 0.25
+```
 
-Captured raw output:
-- `docs/assets/cargo-run-output.txt`
+`target exposure` must be in `-1.0..=1.0`.
 
-Note:
-- This is a TUI app. Running in non-interactive output redirection contexts can fail terminal initialization.
-- For normal usage, run directly in an interactive terminal.
+## Output
+
+`refresh` prints a summary like:
+
+```text
+refresh completed
+staleness=Fresh
+balances=1
+positions=2
+open_order_groups=1
+last_event=app.portfolio.refreshed
+```
+
+Execution commands print a summary like:
+
+```text
+execution completed
+command=close-all
+batch_id=1
+submitted=2
+skipped=0
+rejected=0
+outcome=batch_completed
+```
+
+or:
+
+```text
+execution completed
+command=set-target-exposure
+instrument=BTCUSDT
+target=0.25
+outcome=submitted
+```
+
+## Testing
+
+Library:
+
+```bash
+cargo test -q --lib
+```
+
+Current integration suite:
+
+```bash
+cargo test -q \
+  --test core_types_tests \
+  --test reconciliation_tests \
+  --test binance_adapter_tests \
+  --test app_runtime_tests \
+  --test binance_http_transport_tests \
+  --test bootstrap_tests \
+  --test cli_command_tests \
+  --test cli_output_tests
+```
+
+## Release
+
+Release automation is driven by GitHub Actions on `main`.
+
+- default bump: `patch`
+- merge commit with `#minor`: `minor`
+- merge commit with `#major` or `BREAKING CHANGE`: `major`
+
+For the `1.0.0` release, the final merge into `main` should include `#major`.
+
+Automation outputs:
+
+- bump `Cargo.toml` and `Cargo.lock`
+- create git tag `vX.Y.Z`
+- create GitHub release
+- publish to crates.io
+
+## Notes
+
+- `set-target-exposure` refreshes authoritative portfolio state before planning and can open from flat if the exchange symbol resolves.
+- execution and refresh flows are tested without any UI dependency.
+- README examples reflect the current runtime surface, not the removed legacy system.
