@@ -91,7 +91,7 @@ impl BinanceHttpTransport {
             .header("X-MBX-APIKEY", self.auth.api_key())
             .send()
             .map_err(map_reqwest_error)?;
-        parse_json_response(response)
+        parse_json_response(response, path)
     }
 
     fn public_get(
@@ -109,7 +109,7 @@ impl BinanceHttpTransport {
             format!("{}{}?{}", self.base_url(market), path, query)
         };
         let response = self.client.get(url).send().map_err(map_reqwest_error)?;
-        parse_json_response(response)
+        parse_json_response(response, path)
     }
 
     fn signed_post(
@@ -130,7 +130,7 @@ impl BinanceHttpTransport {
             .body(body)
             .send()
             .map_err(map_reqwest_error)?;
-        parse_json_response(response)
+        parse_json_response(response, path)
     }
 
     fn base_url(&self, market: Market) -> &str {
@@ -257,17 +257,38 @@ struct BinanceErrorBody {
     msg: String,
 }
 
-pub fn map_binance_http_error(status: u16, body: &str) -> ExchangeError {
+pub fn map_binance_http_error(status: u16, body: &str, endpoint: &str) -> ExchangeError {
     if status == 429 || status == 418 {
-        return ExchangeError::RateLimited;
+        let (code, message) = parse_error_body(body)
+            .map(|error| (Some(error.code), error.msg))
+            .unwrap_or((None, body.to_string()));
+        return ExchangeError::RateLimited {
+            status,
+            code,
+            endpoint: endpoint.to_string(),
+            message,
+        };
     }
     if status == 401 || status == 403 {
-        return ExchangeError::AuthenticationFailed;
+        let (code, message) = parse_error_body(body)
+            .map(|error| (Some(error.code), error.msg))
+            .unwrap_or((None, body.to_string()));
+        return ExchangeError::AuthenticationFailed {
+            status,
+            code,
+            endpoint: endpoint.to_string(),
+            message,
+        };
     }
-    if let Ok(error) = serde_json::from_str::<BinanceErrorBody>(body) {
+    if let Some(error) = parse_error_body(body) {
         return match error.code {
             -1021 => ExchangeError::InvalidTimestamp,
-            -2014 | -2015 => ExchangeError::AuthenticationFailed,
+            -2014 | -2015 => ExchangeError::AuthenticationFailed {
+                status,
+                code: Some(error.code),
+                endpoint: endpoint.to_string(),
+                message: error.msg,
+            },
             _ => ExchangeError::RemoteReject {
                 code: error.code,
                 message: error.msg,
@@ -285,13 +306,17 @@ fn map_reqwest_error(error: reqwest::Error) -> ExchangeError {
     }
 }
 
-fn parse_json_response(response: Response) -> Result<Value, ExchangeError> {
+fn parse_json_response(response: Response, endpoint: &str) -> Result<Value, ExchangeError> {
     let status = response.status();
     let body = response.text().map_err(map_reqwest_error)?;
     if !status.is_success() {
-        return Err(map_binance_http_error(status.as_u16(), &body));
+        return Err(map_binance_http_error(status.as_u16(), &body, endpoint));
     }
     serde_json::from_str(&body).map_err(|_| ExchangeError::InvalidResponse)
+}
+
+fn parse_error_body(body: &str) -> Option<BinanceErrorBody> {
+    serde_json::from_str::<BinanceErrorBody>(body).ok()
 }
 
 fn parse_spot_account_state(value: Value) -> Result<RawAccountState, ExchangeError> {

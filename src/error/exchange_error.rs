@@ -4,10 +4,20 @@ use thiserror::Error;
 pub enum ExchangeError {
     #[error("network timeout")]
     NetworkTimeout,
-    #[error("rate limited")]
-    RateLimited,
-    #[error("authentication failed")]
-    AuthenticationFailed,
+    #[error("rate limited: status={status} code={code:?} endpoint={endpoint} message={message}")]
+    RateLimited {
+        status: u16,
+        code: Option<i64>,
+        endpoint: String,
+        message: String,
+    },
+    #[error("authentication failed: status={status} code={code:?} endpoint={endpoint} message={message}")]
+    AuthenticationFailed {
+        status: u16,
+        code: Option<i64>,
+        endpoint: String,
+        message: String,
+    },
     #[error("missing configuration: {0}")]
     MissingConfiguration(&'static str),
     #[error("invalid timestamp")]
