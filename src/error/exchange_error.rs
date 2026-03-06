@@ -8,6 +8,8 @@ pub enum ExchangeError {
     RateLimited,
     #[error("authentication failed")]
     AuthenticationFailed,
+    #[error("missing configuration: {0}")]
+    MissingConfiguration(&'static str),
     #[error("invalid timestamp")]
     InvalidTimestamp,
     #[error("invalid response")]
