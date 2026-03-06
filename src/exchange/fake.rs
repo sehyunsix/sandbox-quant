@@ -17,7 +17,8 @@ pub struct FakeExchange {
     last_prices: Mutex<BTreeMap<(Instrument, Market), f64>>,
     close_requests: Mutex<Vec<CloseOrderRequest>>,
     submit_requests: Mutex<Vec<CloseOrderRequest>>,
-    next_submit_result: Mutex<Option<Result<CloseOrderAccepted, ExchangeError>>>,
+    next_close_submit_result: Mutex<Option<Result<CloseOrderAccepted, ExchangeError>>>,
+    next_order_submit_result: Mutex<Option<Result<SubmitOrderAccepted, ExchangeError>>>,
 }
 
 impl FakeExchange {
@@ -28,7 +29,8 @@ impl FakeExchange {
             last_prices: Mutex::new(BTreeMap::new()),
             close_requests: Mutex::new(Vec::new()),
             submit_requests: Mutex::new(Vec::new()),
-            next_submit_result: Mutex::new(None),
+            next_close_submit_result: Mutex::new(None),
+            next_order_submit_result: Mutex::new(None),
         }
     }
 
@@ -56,9 +58,19 @@ impl FakeExchange {
         result: Result<CloseOrderAccepted, ExchangeError>,
     ) {
         *self
-            .next_submit_result
+            .next_close_submit_result
             .lock()
-            .expect("lock next_submit_result") = Some(result);
+            .expect("lock next_close_submit_result") = Some(result);
+    }
+
+    pub fn set_next_order_submit_result(
+        &self,
+        result: Result<SubmitOrderAccepted, ExchangeError>,
+    ) {
+        *self
+            .next_order_submit_result
+            .lock()
+            .expect("lock next_order_submit_result") = Some(result);
     }
 
     pub fn close_requests(&self) -> Vec<CloseOrderRequest> {
@@ -123,9 +135,9 @@ impl ExchangeFacade for FakeExchange {
             .push(request);
 
         if let Some(result) = self
-            .next_submit_result
+            .next_close_submit_result
             .lock()
-            .expect("lock next_submit_result")
+            .expect("lock next_close_submit_result")
             .take()
         {
             result
@@ -141,8 +153,17 @@ impl ExchangeFacade for FakeExchange {
             .lock()
             .expect("lock submit_requests")
             .push(request);
-        Ok(SubmitOrderAccepted {
-            remote_order_id: "fake-submit-1".to_string(),
-        })
+        if let Some(result) = self
+            .next_order_submit_result
+            .lock()
+            .expect("lock next_order_submit_result")
+            .take()
+        {
+            result
+        } else {
+            Ok(SubmitOrderAccepted {
+                remote_order_id: "fake-submit-1".to_string(),
+            })
+        }
     }
 }
