@@ -75,7 +75,7 @@ BINANCE_SPOT_BASE_URL=https://api.binance.com
 BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 ```
 
-The optional base URLs are useful for testnet or custom routing.
+The default runtime mode is `demo`. Optional base URLs are useful for explicit testnet or custom routing.
 
 ## Running
 
@@ -162,8 +162,25 @@ cargo test -q \
   --test cli_output_tests
 ```
 
+## Release
+
+Release automation is driven by GitHub Actions on `main`.
+
+- default bump: `patch`
+- merge commit with `#minor`: `minor`
+- merge commit with `#major` or `BREAKING CHANGE`: `major`
+
+For the `1.0.0` release, the final merge into `main` should include `#major`.
+
+Automation outputs:
+
+- bump `Cargo.toml` and `Cargo.lock`
+- create git tag `vX.Y.Z`
+- create GitHub release
+- publish to crates.io
+
 ## Notes
 
-- `set-target-exposure` currently relies on an existing authoritative position and fetched last price.
+- `set-target-exposure` refreshes authoritative portfolio state before planning and can open from flat if the exchange symbol resolves.
 - execution and refresh flows are tested without any UI dependency.
 - README examples reflect the current runtime surface, not the removed legacy system.
