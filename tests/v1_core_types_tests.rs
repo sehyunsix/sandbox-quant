@@ -1,4 +1,5 @@
 use sandbox_quant::domain::exposure::Exposure;
+use sandbox_quant::domain::balance::BalanceSnapshot;
 use sandbox_quant::domain::instrument::Instrument;
 use sandbox_quant::domain::market::Market;
 use sandbox_quant::domain::position::{PositionSnapshot, Side};
@@ -111,4 +112,34 @@ fn execution_service_submits_close_against_authoritative_store_without_ui() {
     assert_eq!(requests[0].side, Side::Buy);
     assert!((requests[0].qty - 0.3).abs() < 1e-9);
     assert!(requests[0].reduce_only);
+}
+
+#[test]
+fn execution_service_plans_target_exposure_from_authoritative_store() {
+    let instrument = Instrument::new("BTCUSDT");
+    let mut store = PortfolioStateStore::default();
+    store.apply_snapshot(AuthoritativeSnapshot {
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 1000.0,
+            locked: 0.0,
+        }],
+        positions: vec![PositionSnapshot {
+            instrument: instrument.clone(),
+            market: Market::Futures,
+            signed_qty: -0.25,
+            entry_price: Some(50000.0),
+        }],
+        open_orders: vec![],
+    });
+
+    let service = ExecutionService::default();
+    let plan = service
+        .plan_target_exposure(&store, &instrument, Exposure::new(0.5).expect("bounded exposure"))
+        .expect("planning should succeed");
+
+    assert_eq!(plan.instrument, instrument);
+    assert_eq!(plan.side, Side::Buy);
+    assert!((plan.qty - 0.26).abs() < 1e-9);
+    assert!(!plan.reduce_only);
 }

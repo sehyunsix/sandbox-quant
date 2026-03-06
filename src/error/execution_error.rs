@@ -8,6 +8,8 @@ pub enum ExecutionError {
     CloseQtyTooSmall,
     #[error("no open position")]
     NoOpenPosition,
+    #[error("missing price context")]
+    MissingPriceContext,
     #[error("exchange submit failed")]
     SubmitFailed(#[from] ExchangeError),
 }
