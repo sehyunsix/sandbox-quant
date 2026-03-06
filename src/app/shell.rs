@@ -41,7 +41,7 @@ fn loop_shell(
     let mut stdout = io::stdout();
     let mut buffer = String::new();
     let mut completion_index = 0usize;
-    render_prompt(&mut stdout, current_mode(app), &buffer)?;
+    render_prompt(&mut stdout, app, &buffer)?;
 
     loop {
         if let Event::Key(key) = read()? {
@@ -56,12 +56,12 @@ fn loop_shell(
                 KeyCode::Char(ch) => {
                     buffer.push(ch);
                     completion_index = 0;
-                    render_prompt(&mut stdout, current_mode(app), &buffer)?;
+                    render_prompt(&mut stdout, app, &buffer)?;
                 }
                 KeyCode::Backspace => {
                     buffer.pop();
                     completion_index = 0;
-                    render_prompt(&mut stdout, current_mode(app), &buffer)?;
+                    render_prompt(&mut stdout, app, &buffer)?;
                 }
                 KeyCode::Tab => {
                     let instruments = app
@@ -75,7 +75,7 @@ fn loop_shell(
                     if completions.len() == 1 {
                         buffer = completions[0].clone();
                         completion_index = 0;
-                        render_prompt(&mut stdout, current_mode(app), &buffer)?;
+                        render_prompt(&mut stdout, app, &buffer)?;
                     } else if !completions.is_empty() {
                         completion_index = (completion_index + 1) % completions.len();
                         buffer = completions[completion_index].clone();
@@ -84,7 +84,7 @@ fn loop_shell(
                             "{}",
                             format_completion_line(&completions, completion_index)
                         );
-                        render_prompt(&mut stdout, current_mode(app), &buffer)?;
+                        render_prompt(&mut stdout, app, &buffer)?;
                     }
                 }
                 KeyCode::Enter => {
@@ -116,7 +116,7 @@ fn loop_shell(
                             }
                         }
                     }
-                    render_prompt(&mut stdout, current_mode(app), &buffer)?;
+                    render_prompt(&mut stdout, app, &buffer)?;
                 }
                 _ => {}
             }
@@ -126,13 +126,21 @@ fn loop_shell(
     Ok(())
 }
 
-fn render_prompt(stdout: &mut io::Stdout, mode: BinanceMode, buffer: &str) -> io::Result<()> {
+fn render_prompt(
+    stdout: &mut io::Stdout,
+    app: &AppBootstrap<BinanceExchange>,
+    buffer: &str,
+) -> io::Result<()> {
+    let mode = current_mode(app);
+    let status = prompt_status(app);
     execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
     execute!(
         stdout,
         PrintStyledContent("●".with(mode_color(mode))),
         Print(" "),
         PrintStyledContent(format!("[{}]", mode_name(mode)).with(mode_color(mode)).bold()),
+        Print(" "),
+        PrintStyledContent(status.dark_grey()),
         Print(" "),
         PrintStyledContent("›".cyan().bold()),
         Print(" "),
@@ -159,6 +167,23 @@ fn mode_color(mode: BinanceMode) -> Color {
     match mode {
         BinanceMode::Real => Color::Green,
         BinanceMode::Demo => Color::Yellow,
+    }
+}
+
+fn prompt_status(app: &AppBootstrap<BinanceExchange>) -> String {
+    format!(
+        "[{}|{} pos]",
+        staleness_label(app.portfolio_store.staleness),
+        app.portfolio_store.snapshot.positions.len()
+    )
+}
+
+fn staleness_label(staleness: crate::portfolio::staleness::StalenessState) -> &'static str {
+    match staleness {
+        crate::portfolio::staleness::StalenessState::Fresh => "fresh",
+        crate::portfolio::staleness::StalenessState::MarketDataStale => "market-stale",
+        crate::portfolio::staleness::StalenessState::AccountStateStale => "account-stale",
+        crate::portfolio::staleness::StalenessState::ReconciliationStale => "reconcile-stale",
     }
 }
 
