@@ -3,6 +3,14 @@ use crate::domain::exposure::Exposure;
 use crate::domain::instrument::Instrument;
 use crate::execution::command::{CommandSource, ExecutionCommand};
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShellInput {
+    Empty,
+    Help,
+    Exit,
+    Command(AppCommand),
+}
+
 pub fn parse_app_command(args: &[String]) -> Result<AppCommand, String> {
     match args.first().map(String::as_str).unwrap_or("refresh") {
         "refresh" => Ok(AppCommand::RefreshAuthoritativeState),
@@ -45,4 +53,28 @@ pub fn parse_app_command(args: &[String]) -> Result<AppCommand, String> {
             "unsupported command: {other}. supported commands: refresh, close-all, close-symbol, set-target-exposure"
         )),
     }
+}
+
+pub fn parse_shell_input(line: &str) -> Result<ShellInput, String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(ShellInput::Empty);
+    }
+
+    let without_prefix = trimmed.strip_prefix('/').unwrap_or(trimmed);
+    match without_prefix {
+        "help" => return Ok(ShellInput::Help),
+        "exit" | "quit" => return Ok(ShellInput::Exit),
+        _ => {}
+    }
+
+    let args: Vec<String> = without_prefix
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    parse_app_command(&args).map(ShellInput::Command)
+}
+
+pub fn shell_help_text() -> &'static str {
+    "/refresh\n/close-all\n/close-symbol <instrument>\n/set-target-exposure <instrument> <target>\n/help\n/exit"
 }

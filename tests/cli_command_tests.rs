@@ -1,4 +1,6 @@
-use sandbox_quant::app::cli::parse_app_command;
+use sandbox_quant::app::cli::{
+    parse_app_command, parse_shell_input, shell_help_text, ShellInput,
+};
 use sandbox_quant::app::commands::AppCommand;
 use sandbox_quant::domain::instrument::Instrument;
 use sandbox_quant::execution::command::{CommandSource, ExecutionCommand};
@@ -70,4 +72,29 @@ fn parse_rejects_out_of_range_target_exposure() {
     .expect_err("out of range exposure should fail");
 
     assert!(error.contains("out of range"));
+}
+
+#[test]
+fn parse_shell_input_supports_slash_commands() {
+    let parsed = parse_shell_input("/close-all").expect("slash command should parse");
+
+    assert_eq!(
+        parsed,
+        ShellInput::Command(AppCommand::Execution(ExecutionCommand::CloseAll {
+            source: CommandSource::User,
+        }))
+    );
+}
+
+#[test]
+fn parse_shell_input_supports_help_and_exit() {
+    assert_eq!(
+        parse_shell_input("/help").expect("help should parse"),
+        ShellInput::Help
+    );
+    assert_eq!(
+        parse_shell_input("/exit").expect("exit should parse"),
+        ShellInput::Exit
+    );
+    assert!(shell_help_text().contains("/refresh"));
 }
