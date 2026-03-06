@@ -8,7 +8,7 @@ use crate::exchange::facade::ExchangeFacade;
 use crate::exchange::types::CloseOrderRequest;
 use crate::execution::close_all::CloseAllBatchResult;
 use crate::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
-use crate::execution::command::ExecutionCommand;
+use crate::execution::command::{CommandSource, ExecutionCommand};
 use crate::execution::futures::planner::FuturesExecutionPlanner;
 use crate::execution::planner::ExecutionPlan;
 use crate::execution::price_source::PriceSource;
@@ -21,9 +21,53 @@ pub struct ExecutionService {
     pub last_command: Option<ExecutionCommand>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExecutionOutcome {
+    TargetExposureSubmitted {
+        instrument: Instrument,
+    },
+    CloseSymbol(CloseSymbolResult),
+    CloseAll(CloseAllBatchResult),
+}
+
 impl ExecutionService {
-    pub fn accept(&mut self, command: ExecutionCommand) {
+    fn record(&mut self, command: ExecutionCommand) {
         self.last_command = Some(command);
+    }
+
+    pub fn execute<E: ExchangeFacade<Error = ExchangeError>>(
+        &mut self,
+        exchange: &E,
+        store: &PortfolioStateStore,
+        price_source: &impl PriceSource,
+        command: ExecutionCommand,
+    ) -> Result<ExecutionOutcome, ExecutionError> {
+        self.record(command.clone());
+        match command {
+            ExecutionCommand::SetTargetExposure {
+                instrument,
+                target,
+                source: _source,
+            } => {
+                self.submit_target_exposure(exchange, store, price_source, &instrument, target)?;
+                Ok(ExecutionOutcome::TargetExposureSubmitted { instrument })
+            }
+            ExecutionCommand::CloseSymbol {
+                instrument,
+                source: _source,
+            } => Ok(ExecutionOutcome::CloseSymbol(
+                self.close_symbol(exchange, store, &instrument)?,
+            )),
+            ExecutionCommand::CloseAll { source } => {
+                let batch_id = match source {
+                    CommandSource::User => BatchId(1),
+                    CommandSource::System => BatchId(2),
+                };
+                Ok(ExecutionOutcome::CloseAll(
+                    self.close_all(exchange, store, batch_id),
+                ))
+            }
+        }
     }
 
     fn plan_close(

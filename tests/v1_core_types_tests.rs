@@ -7,7 +7,8 @@ use sandbox_quant::exchange::fake::FakeExchange;
 use sandbox_quant::exchange::symbol_rules::SymbolRules;
 use sandbox_quant::execution::close_all::CloseAllBatchResult;
 use sandbox_quant::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
-use sandbox_quant::execution::service::ExecutionService;
+use sandbox_quant::execution::command::{CommandSource, ExecutionCommand};
+use sandbox_quant::execution::service::{ExecutionOutcome, ExecutionService};
 use sandbox_quant::market_data::price_store::PriceStore;
 use sandbox_quant::market_data::service::MarketDataService;
 use sandbox_quant::portfolio::store::PortfolioStateStore;
@@ -231,4 +232,57 @@ fn execution_service_submits_target_exposure_without_ui() {
     assert_eq!(requests[0].side, Side::Buy);
     assert!((requests[0].qty - 0.26).abs() < 1e-9);
     assert!(!requests[0].reduce_only);
+}
+
+#[test]
+fn execution_service_dispatches_command_through_single_entrypoint() {
+    let instrument = Instrument::new("BTCUSDT");
+    let fake = FakeExchange::new(AuthoritativeSnapshot::default());
+    let mut prices = PriceStore::default();
+    let market_data = MarketDataService;
+    let mut store = PortfolioStateStore::default();
+    store.apply_snapshot(AuthoritativeSnapshot {
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 1000.0,
+            locked: 0.0,
+        }],
+        positions: vec![PositionSnapshot {
+            instrument: instrument.clone(),
+            market: Market::Futures,
+            signed_qty: -0.25,
+            entry_price: Some(50000.0),
+        }],
+        open_orders: vec![],
+    });
+    market_data.apply_price(&mut prices, instrument.clone(), 50000.0);
+
+    let mut service = ExecutionService::default();
+    let outcome = service
+        .execute(
+            &fake,
+            &store,
+            &prices,
+            ExecutionCommand::SetTargetExposure {
+                instrument: instrument.clone(),
+                target: Exposure::new(0.5).expect("bounded exposure"),
+                source: CommandSource::User,
+            },
+        )
+        .expect("execute should succeed");
+
+    assert_eq!(
+        outcome,
+        ExecutionOutcome::TargetExposureSubmitted {
+            instrument: instrument.clone(),
+        }
+    );
+    assert_eq!(
+        service.last_command,
+        Some(ExecutionCommand::SetTargetExposure {
+            instrument,
+            target: Exposure::new(0.5).expect("bounded exposure"),
+            source: CommandSource::User,
+        })
+    );
 }
