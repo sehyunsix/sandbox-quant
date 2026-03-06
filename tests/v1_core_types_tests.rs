@@ -9,6 +9,7 @@ use sandbox_quant::execution::close_all::CloseAllBatchResult;
 use sandbox_quant::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
 use sandbox_quant::execution::service::ExecutionService;
 use sandbox_quant::market_data::price_store::PriceStore;
+use sandbox_quant::market_data::service::MarketDataService;
 use sandbox_quant::portfolio::store::PortfolioStateStore;
 use sandbox_quant::exchange::types::AuthoritativeSnapshot;
 use sandbox_quant::domain::identifiers::BatchId;
@@ -120,6 +121,7 @@ fn execution_service_plans_target_exposure_from_authoritative_store() {
     let instrument = Instrument::new("BTCUSDT");
     let mut store = PortfolioStateStore::default();
     let mut prices = PriceStore::default();
+    let market_data = MarketDataService;
     store.apply_snapshot(AuthoritativeSnapshot {
         balances: vec![BalanceSnapshot {
             asset: "USDT".to_string(),
@@ -134,7 +136,7 @@ fn execution_service_plans_target_exposure_from_authoritative_store() {
         }],
         open_orders: vec![],
     });
-    prices.set_price(instrument.clone(), 50000.0);
+    market_data.apply_price(&mut prices, instrument.clone(), 50000.0);
 
     let service = ExecutionService::default();
     let plan = service
