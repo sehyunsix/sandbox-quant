@@ -51,10 +51,7 @@ impl AppRuntime {
                 log(
                     &mut app.event_log,
                     "app.execution.completed",
-                    json!({
-                        "command": format!("{command:?}"),
-                        "outcome": format!("{outcome:?}"),
-                    }),
+                    execution_payload(&command, &outcome),
                 );
             }
             AppCommand::RefreshAuthoritativeState => {
@@ -74,5 +71,64 @@ impl AppRuntime {
         }
 
         Ok(())
+    }
+}
+
+fn execution_payload(
+    command: &ExecutionCommand,
+    outcome: &crate::execution::service::ExecutionOutcome,
+) -> serde_json::Value {
+    match (command, outcome) {
+        (
+            ExecutionCommand::SetTargetExposure {
+                instrument, target, ..
+            },
+            crate::execution::service::ExecutionOutcome::TargetExposureSubmitted { .. },
+        ) => json!({
+            "command_kind": "set_target_exposure",
+            "instrument": instrument.0,
+            "target": target.value(),
+            "outcome_kind": "submitted",
+        }),
+        (
+            ExecutionCommand::CloseSymbol { instrument, .. },
+            crate::execution::service::ExecutionOutcome::CloseSymbol(result),
+        ) => json!({
+            "command_kind": "close_symbol",
+            "instrument": instrument.0,
+            "outcome_kind": format!("{:?}", result.result),
+        }),
+        (
+            ExecutionCommand::CloseAll { .. },
+            crate::execution::service::ExecutionOutcome::CloseAll(result),
+        ) => {
+            let submitted = result
+                .results
+                .iter()
+                .filter(|item| matches!(item.result, crate::execution::close_symbol::CloseSubmitResult::Submitted))
+                .count();
+            let skipped = result
+                .results
+                .iter()
+                .filter(|item| matches!(item.result, crate::execution::close_symbol::CloseSubmitResult::SkippedNoPosition))
+                .count();
+            let rejected = result
+                .results
+                .iter()
+                .filter(|item| matches!(item.result, crate::execution::close_symbol::CloseSubmitResult::Rejected))
+                .count();
+            json!({
+                "command_kind": "close_all",
+                "batch_id": result.batch_id.0,
+                "submitted": submitted,
+                "skipped": skipped,
+                "rejected": rejected,
+                "outcome_kind": "batch_completed",
+            })
+        }
+        _ => json!({
+            "command_kind": "unknown",
+            "outcome_kind": "unknown",
+        }),
     }
 }
