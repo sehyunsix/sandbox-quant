@@ -1,6 +1,7 @@
 use crate::app::commands::AppCommand;
 use crate::portfolio::store::PortfolioStateStore;
 use crate::storage::event_log::EventLog;
+use std::collections::BTreeMap;
 
 pub fn render_command_output(
     command: &AppCommand,
@@ -19,23 +20,28 @@ fn render_refresh_summary(store: &PortfolioStateStore, event_log: &EventLog) -> 
         .last()
         .map(|event| event.kind.as_str())
         .unwrap_or("none");
+    let aggregated_balances = aggregate_visible_balances(store);
+    let visible_positions = store
+        .snapshot
+        .positions
+        .values()
+        .filter(|position| !position.is_flat())
+        .collect::<Vec<_>>();
+
     let mut lines = vec![
         "refresh completed".to_string(),
         format!("staleness={:?}", store.staleness),
         format!("last_event={last_event}"),
-        format!("balances ({})", store.snapshot.balances.len()),
+        format!("balances ({})", aggregated_balances.len()),
     ];
 
-    let balance_lines = store
-        .snapshot
-        .balances
+    let balance_lines = aggregated_balances
         .iter()
-        .filter(|balance| balance.total().abs() > f64::EPSILON)
         .take(8)
-        .map(|balance| {
+        .map(|(asset, balance)| {
             format!(
                 "  - {} free={:.8} locked={:.8} total={:.8}",
-                balance.asset,
+                asset,
                 balance.free,
                 balance.locked,
                 balance.total()
@@ -49,12 +55,9 @@ fn render_refresh_summary(store: &PortfolioStateStore, event_log: &EventLog) -> 
         lines.extend(balance_lines);
     }
 
-    lines.push(format!("positions ({})", store.snapshot.positions.len()));
-    let position_lines = store
-        .snapshot
-        .positions
-        .values()
-        .filter(|position| !position.is_flat())
+    lines.push(format!("positions ({})", visible_positions.len()));
+    let position_lines = visible_positions
+        .into_iter()
         .take(12)
         .map(|position| {
             let side = position
@@ -114,6 +117,31 @@ fn render_refresh_summary(store: &PortfolioStateStore, event_log: &EventLog) -> 
     }
 
     lines.join("\n")
+}
+
+fn aggregate_visible_balances(
+    store: &PortfolioStateStore,
+) -> BTreeMap<String, crate::domain::balance::BalanceSnapshot> {
+    let mut aggregated = BTreeMap::new();
+
+    for balance in store
+        .snapshot
+        .balances
+        .iter()
+        .filter(|balance| balance.total().abs() > f64::EPSILON)
+    {
+        let entry = aggregated
+            .entry(balance.asset.clone())
+            .or_insert(crate::domain::balance::BalanceSnapshot {
+                asset: balance.asset.clone(),
+                free: 0.0,
+                locked: 0.0,
+            });
+        entry.free += balance.free;
+        entry.locked += balance.locked;
+    }
+
+    aggregated
 }
 
 fn render_execution_summary(event_log: &EventLog) -> String {

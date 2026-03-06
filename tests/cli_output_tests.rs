@@ -56,7 +56,7 @@ fn refresh_output_includes_store_summary() {
     assert!(output.contains("refresh completed"));
     assert!(output.contains("staleness=Fresh"));
     assert!(output.contains("balances (1)"));
-    assert!(output.contains("positions (2)"));
+    assert!(output.contains("positions (1)"));
     assert!(output.contains("open orders (1)"));
     assert!(output.contains("USDT free=100.00000000"));
     assert!(output.contains("BTCUSDT market=FUTURES side=Buy"));
