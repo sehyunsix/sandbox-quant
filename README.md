@@ -34,7 +34,7 @@ Not implemented as first-class runtime features yet:
 - persistent analytics pipeline
 - websocket-driven live market loop
 
-Legacy strategy/UI documents and historical datasets are archived under `docs/archive/legacy` and `archive/legacy/data`.
+Legacy strategy/UI documents are archived under `docs/archive/legacy`.
 
 ## Architecture
 
