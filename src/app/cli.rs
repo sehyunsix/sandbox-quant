@@ -31,7 +31,7 @@ pub fn parse_app_command(args: &[String]) -> Result<AppCommand, String> {
                 .ok_or("usage: close-symbol <instrument>")?
                 .clone();
             Ok(AppCommand::Execution(ExecutionCommand::CloseSymbol {
-                instrument: Instrument::new(instrument),
+                instrument: Instrument::new(normalize_instrument_symbol(&instrument)),
                 source: CommandSource::User,
             }))
         }
@@ -51,7 +51,7 @@ pub fn parse_app_command(args: &[String]) -> Result<AppCommand, String> {
             ))?;
             Ok(AppCommand::Execution(
                 ExecutionCommand::SetTargetExposure {
-                    instrument: Instrument::new(instrument),
+                    instrument: Instrument::new(normalize_instrument_symbol(&instrument)),
                     target: exposure,
                     source: CommandSource::User,
                 },
@@ -139,6 +139,7 @@ pub fn complete_shell_input_with_description(
     } else {
         parts.last().copied().unwrap_or_default()
     };
+    let current_upper = current.trim().to_ascii_uppercase();
 
     match command {
         "mode" => ["real", "demo"]
@@ -154,21 +155,61 @@ pub fn complete_shell_input_with_description(
                 .to_string(),
             })
             .collect(),
-        "close-symbol" | "set-target-exposure" => instruments
-            .iter()
-            .filter(|instrument| instrument.starts_with(current))
-            .map(|instrument| ShellCompletion {
-                value: format!("/{command} {instrument}"),
-                description: match command {
-                    "close-symbol" => "submit a close order for this instrument",
-                    "set-target-exposure" => "plan and submit toward target exposure",
-                    _ => "",
-                }
-                .to_string(),
-            })
-            .collect(),
+        "close-symbol" | "set-target-exposure" => {
+            let mut known_matches: Vec<String> = instruments
+                .iter()
+                .filter(|instrument| {
+                    current_upper.is_empty()
+                        || instrument.starts_with(&current_upper)
+                        || instrument.starts_with(&normalize_instrument_symbol(current))
+                })
+                .cloned()
+                .collect();
+
+            if known_matches.is_empty() {
+                known_matches.extend(fallback_instrument_suggestions(current));
+            }
+
+            known_matches
+                .into_iter()
+                .map(|instrument| ShellCompletion {
+                    value: format!("/{command} {instrument}"),
+                    description: match command {
+                        "close-symbol" => "submit a close order for this instrument",
+                        "set-target-exposure" => "plan and submit toward target exposure",
+                        _ => "",
+                    }
+                    .to_string(),
+                })
+                .fold(Vec::<ShellCompletion>::new(), |mut acc, item| {
+                    if !acc.iter().any(|existing| existing.value == item.value) {
+                        acc.push(item);
+                    }
+                    acc
+                })
+        }
         _ => Vec::new(),
     }
+}
+
+pub fn normalize_instrument_symbol(raw: &str) -> String {
+    let upper = raw.trim().to_ascii_uppercase();
+    let known_quotes = ["USDT", "USDC", "BUSD", "FDUSD"];
+    if known_quotes.iter().any(|quote| upper.ends_with(quote)) {
+        upper
+    } else {
+        format!("{upper}USDT")
+    }
+}
+
+fn fallback_instrument_suggestions(prefix: &str) -> impl Iterator<Item = String> {
+    let base = prefix.trim().to_ascii_uppercase();
+    let mut suggestions = Vec::new();
+    if !base.is_empty() {
+        suggestions.push(normalize_instrument_symbol(&base));
+        suggestions.push(format!("{base}USDC"));
+    }
+    suggestions.into_iter()
 }
 
 struct ShellCommandSpec {

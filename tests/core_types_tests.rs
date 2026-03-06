@@ -122,6 +122,7 @@ fn execution_service_submits_close_against_authoritative_store_without_ui() {
 #[test]
 fn execution_service_plans_target_exposure_from_authoritative_store() {
     let instrument = Instrument::new("BTCUSDT");
+    let fake = fake_exchange();
     let mut store = PortfolioStateStore::default();
     let mut prices = PriceStore::default();
     let market_data = MarketDataService;
@@ -144,6 +145,7 @@ fn execution_service_plans_target_exposure_from_authoritative_store() {
     let service = ExecutionService::default();
     let plan = service
         .plan_target_exposure(
+            &fake,
             &store,
             &prices,
             &instrument,
@@ -180,6 +182,7 @@ fn target_exposure_requires_price_source_context() {
     let service = ExecutionService::default();
     let err = service
         .plan_target_exposure(
+            &fake_exchange(),
             &store,
             &prices,
             &instrument,
@@ -308,4 +311,64 @@ fn generic_log_function_accepts_structured_payloads() {
     assert_eq!(event_log.records[0].kind, "execution.target_exposure.submitted");
     assert_eq!(event_log.records[0].payload["instrument"], "BTCUSDT");
     assert_eq!(event_log.records[0].payload["target"], 0.5);
+}
+
+#[test]
+fn execution_service_submits_target_exposure_from_flat_position() {
+    let instrument = Instrument::new("BTCUSDT");
+    let fake = FakeExchange::new(AuthoritativeSnapshot {
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 1000.0,
+            locked: 0.0,
+        }],
+        positions: vec![],
+        open_orders: vec![],
+    });
+    fake.set_symbol_rules(
+        instrument.clone(),
+        Market::Futures,
+        SymbolRules {
+            min_qty: 0.001,
+            max_qty: 100.0,
+            step_size: 0.001,
+        },
+    );
+    fake.set_last_price(instrument.clone(), Market::Futures, 50000.0);
+
+    let prices = PriceStore::default();
+    let store = PortfolioStateStore {
+        snapshot: sandbox_quant::portfolio::snapshot::PortfolioStateSnapshot {
+            balances: vec![BalanceSnapshot {
+                asset: "USDT".to_string(),
+                free: 1000.0,
+                locked: 0.0,
+            }],
+            positions: Default::default(),
+            open_orders: Default::default(),
+        },
+        staleness: sandbox_quant::portfolio::staleness::StalenessState::Fresh,
+    };
+
+    let mut service = ExecutionService::default();
+    service
+        .submit_target_exposure(
+            &fake,
+            &store,
+            &prices,
+            &instrument,
+            Exposure::new(0.5).expect("bounded exposure"),
+        )
+        .expect("flat open submit should succeed");
+
+    let requests = fake.submit_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].instrument, instrument);
+    assert_eq!(requests[0].market, Market::Futures);
+    assert_eq!(requests[0].side, Side::Buy);
+    assert!((requests[0].qty - 0.01).abs() < 1e-9);
+}
+
+fn fake_exchange() -> FakeExchange {
+    FakeExchange::new(AuthoritativeSnapshot::default())
 }

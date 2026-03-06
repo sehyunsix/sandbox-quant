@@ -1,6 +1,6 @@
 use sandbox_quant::app::cli::{
-    complete_shell_input, complete_shell_input_with_description, parse_app_command,
-    parse_shell_input, shell_help_text, ShellInput,
+    complete_shell_input, complete_shell_input_with_description, normalize_instrument_symbol,
+    parse_app_command, parse_shell_input, shell_help_text, ShellInput,
 };
 use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::app::commands::AppCommand;
@@ -46,6 +46,20 @@ fn parse_close_symbol_command() {
 }
 
 #[test]
+fn parse_close_symbol_normalizes_base_symbol() {
+    let command = parse_app_command(&["close-symbol".to_string(), "btc".to_string()])
+        .expect("close-symbol should normalize base symbol");
+
+    assert_eq!(
+        command,
+        AppCommand::Execution(ExecutionCommand::CloseSymbol {
+            instrument: Instrument::new("BTCUSDT"),
+            source: CommandSource::User,
+        })
+    );
+}
+
+#[test]
 fn parse_set_target_exposure_command() {
     let command = parse_app_command(&[
         "set-target-exposure".to_string(),
@@ -53,6 +67,29 @@ fn parse_set_target_exposure_command() {
         "0.25".to_string(),
     ])
     .expect("set-target-exposure should parse");
+
+    match command {
+        AppCommand::Execution(ExecutionCommand::SetTargetExposure {
+            instrument,
+            target,
+            source,
+        }) => {
+            assert_eq!(instrument, Instrument::new("ETHUSDT"));
+            assert_eq!(target.value(), 0.25);
+            assert_eq!(source, CommandSource::User);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
+fn parse_set_target_exposure_normalizes_base_symbol() {
+    let command = parse_app_command(&[
+        "set-target-exposure".to_string(),
+        "eth".to_string(),
+        "0.25".to_string(),
+    ])
+    .expect("set-target-exposure should normalize base symbol");
 
     match command {
         AppCommand::Execution(ExecutionCommand::SetTargetExposure {
@@ -127,6 +164,15 @@ fn shell_completion_suggests_commands_modes_and_instruments() {
         &["BTCUSDT".to_string(), "ETHUSDT".to_string()],
     );
     assert_eq!(instrument_matches, vec!["/close-symbol BTCUSDT".to_string()]);
+
+    let fallback_matches = complete_shell_input("/set-target-exposure BTC", &[]);
+    assert_eq!(
+        fallback_matches,
+        vec![
+            "/set-target-exposure BTCUSDT".to_string(),
+            "/set-target-exposure BTCUSDC".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -161,4 +207,10 @@ fn described_completion_includes_help_text() {
         .iter()
         .any(|item| item.value == "/refresh"
             && item.description.contains("authoritative")));
+}
+
+#[test]
+fn normalize_instrument_symbol_appends_usdt_for_base_symbol() {
+    assert_eq!(normalize_instrument_symbol("btc"), "BTCUSDT");
+    assert_eq!(normalize_instrument_symbol("BTCUSDC"), "BTCUSDC");
 }

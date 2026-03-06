@@ -95,3 +95,47 @@ fn app_runtime_refreshes_portfolio_and_logs_event() {
     assert_eq!(app.event_log.records[0].kind, "app.portfolio.refreshed");
     assert_eq!(app.event_log.records[0].payload["positions"], 1);
 }
+
+#[test]
+fn app_runtime_executes_target_exposure_from_flat_position() {
+    let instrument = Instrument::new("BTCUSDT");
+    let exchange = FakeExchange::new(AuthoritativeSnapshot {
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 1000.0,
+            locked: 0.0,
+        }],
+        positions: vec![],
+        open_orders: vec![],
+    });
+    exchange.set_symbol_rules(
+        instrument.clone(),
+        Market::Futures,
+        SymbolRules {
+            min_qty: 0.001,
+            max_qty: 100.0,
+            step_size: 0.001,
+        },
+    );
+    exchange.set_last_price(instrument.clone(), Market::Futures, 50000.0);
+
+    let mut app = AppBootstrap::new(exchange, PortfolioStateStore::default());
+    app.portfolio_store
+        .refresh_from_exchange(&app.exchange)
+        .expect("seed snapshot");
+
+    let mut runtime = AppRuntime::default();
+    runtime
+        .run(
+            &mut app,
+            AppCommand::Execution(ExecutionCommand::SetTargetExposure {
+                instrument,
+                target: Exposure::new(0.5).expect("bounded exposure"),
+                source: CommandSource::User,
+            }),
+        )
+        .expect("flat target exposure should succeed");
+
+    assert_eq!(app.event_log.records.len(), 1);
+    assert_eq!(app.event_log.records[0].kind, "app.execution.completed");
+}
