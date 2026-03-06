@@ -23,20 +23,57 @@ impl AppRuntime {
 
         match command {
             AppCommand::Execution(command) => {
+                let report = app
+                    .portfolio_sync
+                    .refresh_authoritative(&app.exchange, &mut app.portfolio_store)?;
+                log(
+                    &mut app.event_log,
+                    "app.portfolio.refreshed",
+                    json!({
+                        "positions": report.positions,
+                        "open_order_groups": report.open_order_groups,
+                        "balances": report.balances,
+                    }),
+                );
+
                 if let ExecutionCommand::SetTargetExposure { instrument, .. } = &command {
-                    if let Some(position) = app.portfolio_store.snapshot.positions.get(instrument) {
+                    let market = app
+                        .portfolio_store
+                        .snapshot
+                        .positions
+                        .get(instrument)
+                        .map(|position| position.market)
+                        .or_else(|| {
+                            if app
+                                .exchange
+                                .load_symbol_rules(instrument, crate::domain::market::Market::Futures)
+                                .is_ok()
+                            {
+                                Some(crate::domain::market::Market::Futures)
+                            } else if app
+                                .exchange
+                                .load_symbol_rules(instrument, crate::domain::market::Market::Spot)
+                                .is_ok()
+                            {
+                                Some(crate::domain::market::Market::Spot)
+                            } else {
+                                None
+                            }
+                        });
+
+                    if let Some(market) = market {
                         let price = app.market_data.refresh_price(
                             &app.exchange,
                             &mut app.price_store,
                             instrument.clone(),
-                            position.market,
+                            market,
                         )?;
                         log(
                             &mut app.event_log,
                             "app.market_data.price_refreshed",
                             json!({
                                 "instrument": instrument.0,
-                                "market": format!("{:?}", position.market),
+                                "market": format!("{market:?}"),
                                 "price": price,
                             }),
                         );

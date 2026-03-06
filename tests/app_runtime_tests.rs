@@ -75,10 +75,11 @@ fn app_runtime_executes_command_and_logs_event() {
         )
         .expect("execution command should succeed");
 
-    assert_eq!(app.event_log.records.len(), 2);
-    assert_eq!(app.event_log.records[0].kind, "app.market_data.price_refreshed");
-    assert_eq!(app.event_log.records[1].kind, "app.execution.completed");
-    assert_eq!(app.event_log.records[0].payload["price"], 50000.0);
+    assert_eq!(app.event_log.records.len(), 3);
+    assert_eq!(app.event_log.records[0].kind, "app.portfolio.refreshed");
+    assert_eq!(app.event_log.records[1].kind, "app.market_data.price_refreshed");
+    assert_eq!(app.event_log.records[2].kind, "app.execution.completed");
+    assert_eq!(app.event_log.records[1].payload["price"], 50000.0);
 }
 
 #[test]
@@ -137,8 +138,10 @@ fn app_runtime_executes_target_exposure_from_flat_position() {
         )
         .expect("flat target exposure should succeed");
 
-    assert_eq!(app.event_log.records.len(), 1);
-    assert_eq!(app.event_log.records[0].kind, "app.execution.completed");
+    assert_eq!(app.event_log.records.len(), 3);
+    assert_eq!(app.event_log.records[0].kind, "app.portfolio.refreshed");
+    assert_eq!(app.event_log.records[1].kind, "app.market_data.price_refreshed");
+    assert_eq!(app.event_log.records[2].kind, "app.execution.completed");
 }
 
 #[test]

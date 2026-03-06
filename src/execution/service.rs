@@ -126,9 +126,36 @@ impl ExecutionService {
         instrument: &Instrument,
         target: Exposure,
     ) -> Result<(), ExecutionError> {
-        let plan = self.plan_target_exposure(exchange, store, price_source, instrument, target)?;
-        let (_, market, _) = self.resolve_target_context(exchange, store, instrument)?;
-        let qty = self.normalize_order_qty(exchange, &plan.instrument, market, plan.qty)?;
+        let (resolved_instrument, market, current_qty) =
+            self.resolve_target_context(exchange, store, instrument)?;
+        let current_price = price_source
+            .current_price(&resolved_instrument)
+            .or_else(|| exchange.load_last_price(&resolved_instrument, market).ok())
+            .ok_or(ExecutionError::MissingPriceContext)?;
+        let equity_usdt: f64 = store.snapshot.balances.iter().map(|b| b.total()).sum();
+        let target_notional = exposure_to_notional(target, equity_usdt);
+        let synthetic_position = PositionSnapshot {
+            instrument: resolved_instrument.clone(),
+            market,
+            signed_qty: current_qty,
+            entry_price: None,
+        };
+        let plan = match market {
+            Market::Spot => SpotExecutionPlanner
+                .plan_target_exposure(&synthetic_position, current_price, target_notional.target_usdt),
+            Market::Futures => FuturesExecutionPlanner
+                .plan_target_exposure(&synthetic_position, current_price, target_notional.target_usdt),
+        }?;
+        let qty = self.normalize_order_qty(
+            exchange,
+            &plan.instrument,
+            market,
+            plan.qty,
+            target.value(),
+            equity_usdt,
+            current_price,
+            target_notional.target_usdt,
+        )?;
 
         exchange.submit_order(CloseOrderRequest {
             instrument: plan.instrument,
@@ -196,8 +223,16 @@ impl ExecutionService {
             .get(instrument)
             .map(|position| position.market)
             .ok_or(ExecutionError::NoOpenPosition)?;
-        let qty = self.normalize_order_qty(exchange, &plan.instrument, market, plan.qty)?;
-
+        let qty = self.normalize_order_qty(
+            exchange,
+            &plan.instrument,
+            market,
+            plan.qty,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )?;
         exchange.submit_close_order(CloseOrderRequest {
             instrument: plan.instrument.clone(),
             market,
@@ -238,10 +273,24 @@ impl ExecutionService {
         instrument: &Instrument,
         market: Market,
         raw_qty: f64,
+        target_exposure: f64,
+        equity_usdt: f64,
+        current_price: f64,
+        target_notional_usdt: f64,
     ) -> Result<f64, ExecutionError> {
         let rules = exchange.load_symbol_rules(instrument, market)?;
         let normalized_qty = floor_to_step(raw_qty, rules.step_size);
-        validate_normalized_qty(instrument, raw_qty, normalized_qty, rules)
+        validate_normalized_qty(
+            instrument,
+            market,
+            raw_qty,
+            normalized_qty,
+            rules,
+            target_exposure,
+            equity_usdt,
+            current_price,
+            target_notional_usdt,
+        )
     }
 }
 
@@ -254,13 +303,23 @@ fn floor_to_step(raw_qty: f64, step_size: f64) -> f64 {
 
 fn validate_normalized_qty(
     instrument: &Instrument,
+    market: Market,
     raw_qty: f64,
     normalized_qty: f64,
     rules: SymbolRules,
+    target_exposure: f64,
+    equity_usdt: f64,
+    current_price: f64,
+    target_notional_usdt: f64,
 ) -> Result<f64, ExecutionError> {
     if normalized_qty <= f64::EPSILON || normalized_qty < rules.min_qty {
         return Err(ExecutionError::OrderQtyTooSmall {
             instrument: instrument.0.clone(),
+            market: format!("{market:?}"),
+            target_exposure,
+            equity_usdt,
+            current_price,
+            target_notional_usdt,
             raw_qty,
             normalized_qty,
             min_qty: rules.min_qty,

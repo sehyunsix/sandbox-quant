@@ -42,3 +42,19 @@ fn binance_env_config_reads_demo_mode() {
 
     assert_eq!(config.mode, BinanceMode::Demo);
 }
+
+#[test]
+fn binance_env_config_defaults_to_demo_mode() {
+    let _guard = env_lock().lock().expect("env lock");
+    unsafe {
+        std::env::set_var("BINANCE_API_KEY", "demo-key");
+        std::env::set_var("BINANCE_SECRET_KEY", "demo-secret");
+        std::env::remove_var("BINANCE_MODE");
+        std::env::remove_var("BINANCE_SPOT_BASE_URL");
+        std::env::remove_var("BINANCE_FUTURES_BASE_URL");
+    }
+
+    let config = BinanceEnvConfig::from_env().expect("default config should parse");
+
+    assert_eq!(config.mode, BinanceMode::Demo);
+}

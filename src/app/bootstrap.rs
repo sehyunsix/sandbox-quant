@@ -86,7 +86,7 @@ impl BinanceEnvConfig {
         let secret_key = env::var("BINANCE_SECRET_KEY")
             .map_err(|_| ExchangeError::MissingConfiguration("BINANCE_SECRET_KEY"))?;
         let mode = match env::var("BINANCE_MODE")
-            .unwrap_or_else(|_| "real".to_string())
+            .unwrap_or_else(|_| "demo".to_string())
             .to_ascii_lowercase()
             .as_str()
         {
