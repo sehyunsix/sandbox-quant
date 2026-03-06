@@ -3,6 +3,7 @@ use sandbox_quant::app::cli::{
     parse_app_command, parse_shell_input, shell_help_text, ShellInput,
 };
 use sandbox_quant::app::bootstrap::BinanceMode;
+use sandbox_quant::app::shell::shell_intro_panel;
 use sandbox_quant::app::commands::AppCommand;
 use sandbox_quant::app::shell::{
     format_completion_line, next_completion_index, previous_completion_index,
@@ -213,4 +214,14 @@ fn described_completion_includes_help_text() {
 fn normalize_instrument_symbol_appends_usdt_for_base_symbol() {
     assert_eq!(normalize_instrument_symbol("btc"), "BTCUSDT");
     assert_eq!(normalize_instrument_symbol("BTCUSDC"), "BTCUSDC");
+}
+
+#[test]
+fn shell_intro_panel_contains_version_mode_and_directory() {
+    let panel = shell_intro_panel("demo", "~/project/sandbox-quant");
+
+    assert!(panel.contains("Sandbox Quant"));
+    assert!(panel.contains("v"));
+    assert!(panel.contains("mode:"));
+    assert!(panel.contains("directory: ~/project/sandbox-quant"));
 }
