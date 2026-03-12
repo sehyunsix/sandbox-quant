@@ -6,10 +6,7 @@ use crate::execution::planner::ExecutionPlan;
 pub struct SpotExecutionPlanner;
 
 impl SpotExecutionPlanner {
-    pub fn plan_close(
-        &self,
-        position: &PositionSnapshot,
-    ) -> Result<ExecutionPlan, ExecutionError> {
+    pub fn plan_close(&self, position: &PositionSnapshot) -> Result<ExecutionPlan, ExecutionError> {
         if position.is_flat() {
             return Err(ExecutionError::NoOpenPosition);
         }

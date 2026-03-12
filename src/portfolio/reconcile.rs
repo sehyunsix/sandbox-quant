@@ -8,6 +8,7 @@ pub fn apply_authoritative_snapshot(snapshot: AuthoritativeSnapshot) -> Portfoli
     let positions = snapshot
         .positions
         .into_iter()
+        .filter(|position| !position.is_flat())
         .map(|position| (position.instrument.clone(), position))
         .collect();
 

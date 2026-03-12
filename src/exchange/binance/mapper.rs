@@ -1,14 +1,16 @@
 use crate::domain::balance::BalanceSnapshot;
 use crate::domain::instrument::Instrument;
 use crate::domain::market::Market;
+use crate::domain::order::{OpenOrder, OrderStatus};
 use crate::domain::position::PositionSnapshot;
+use crate::domain::position::Side;
 use crate::exchange::symbol_rules::SymbolRules;
-use crate::exchange::types::{
-    AuthoritativeSnapshot, CloseOrderAccepted, CloseOrderRequest,
-};
+use crate::exchange::types::{AuthoritativeSnapshot, CloseOrderAccepted, CloseOrderRequest};
 
 use crate::exchange::binance::account::{RawAccountState, RawBalance, RawPosition};
-use crate::exchange::binance::orders::{RawCloseOrderAck, RawCloseOrderRequest, RawSymbolRules};
+use crate::exchange::binance::orders::{
+    RawCloseOrderAck, RawCloseOrderRequest, RawOpenOrder, RawSymbolRules,
+};
 
 #[derive(Debug, Default, Clone)]
 pub struct BinanceMapper;
@@ -26,7 +28,7 @@ impl BinanceMapper {
                 .into_iter()
                 .map(|position| map_position(market, position))
                 .collect(),
-            open_orders: Vec::new(),
+            open_orders: state.open_orders.into_iter().map(map_open_order).collect(),
         }
     }
 
@@ -46,7 +48,8 @@ impl BinanceMapper {
                 crate::domain::position::Side::Buy => "BUY",
                 crate::domain::position::Side::Sell => "SELL",
             },
-            qty: request.qty,
+            qty: request.qty_text,
+            order_type: request.order_type,
             reduce_only: request.reduce_only,
         }
     }
@@ -72,5 +75,35 @@ fn map_position(market: Market, position: RawPosition) -> PositionSnapshot {
         market,
         signed_qty: position.signed_qty,
         entry_price: position.entry_price,
+    }
+}
+
+fn map_open_order(order: RawOpenOrder) -> OpenOrder {
+    OpenOrder {
+        order_id: order
+            .order_id
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(crate::domain::identifiers::OrderId),
+        client_order_id: order.client_order_id,
+        instrument: Instrument::new(order.symbol),
+        market: order.market,
+        side: match order.side {
+            "SELL" => Side::Sell,
+            _ => Side::Buy,
+        },
+        orig_qty: order.orig_qty,
+        executed_qty: order.executed_qty,
+        reduce_only: order.reduce_only,
+        status: map_order_status(&order.status),
+    }
+}
+
+fn map_order_status(status: &str) -> OrderStatus {
+    match status {
+        "NEW" | "ACCEPTED" => OrderStatus::Submitted,
+        "FILLED" => OrderStatus::Filled,
+        "CANCELED" | "CANCELLED" => OrderStatus::Cancelled,
+        "REJECTED" => OrderStatus::Rejected,
+        _ => OrderStatus::PendingSubmit,
     }
 }

@@ -1,5 +1,5 @@
-use sandbox_quant::app::cli::parse_app_command;
 use sandbox_quant::app::bootstrap::AppBootstrap;
+use sandbox_quant::app::cli::parse_app_command;
 use sandbox_quant::app::output::render_command_output;
 use sandbox_quant::app::runtime::AppRuntime;
 use sandbox_quant::app::shell::run_shell;
@@ -20,7 +20,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         runtime.run(&mut app, command)?;
         println!(
             "{}",
-            render_command_output(&rendered_command, &app.portfolio_store, &app.event_log)
+            render_command_output(
+                &rendered_command,
+                &app.portfolio_store,
+                &app.price_store,
+                &app.event_log,
+                &app.strategy_store,
+                app.mode,
+            )
         );
     }
 

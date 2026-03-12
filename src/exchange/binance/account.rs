@@ -1,3 +1,5 @@
+use crate::exchange::binance::orders::RawOpenOrder;
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RawBalance {
     pub asset: String,
@@ -16,4 +18,5 @@ pub struct RawPosition {
 pub struct RawAccountState {
     pub balances: Vec<RawBalance>,
     pub positions: Vec<RawPosition>,
+    pub open_orders: Vec<RawOpenOrder>,
 }

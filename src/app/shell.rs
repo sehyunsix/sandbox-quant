@@ -1,437 +1,283 @@
-use std::io::{self, Write};
-
-use crossterm::cursor::{position, MoveToColumn, MoveToNextLine, MoveUp, RestorePosition, SavePosition};
-use crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::execute;
-use crossterm::style::{Color, Print, PrintStyledContent, Stylize};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType, ScrollUp};
-
 use crate::app::bootstrap::{AppBootstrap, BinanceMode};
 use crate::app::cli::{
-    complete_shell_input_with_description, parse_shell_input, shell_help_text, ShellCompletion,
-    ShellInput,
+    complete_shell_input_with_market_data, parse_shell_input, shell_help_text, ShellInput,
 };
 use crate::app::output::render_command_output;
 use crate::app::runtime::AppRuntime;
 use crate::exchange::binance::client::BinanceExchange;
-
-pub fn shell_intro_panel(mode: &str, directory: &str) -> String {
-    let width = 46usize;
-    let title = format!(" >_ Sandbox Quant (v{})", env!("CARGO_PKG_VERSION"));
-    let mode_line = format!(" mode:      {mode:<18} /mode to change");
-    let dir_line = format!(" directory: {directory}");
-
-    format!(
-        "╭{top}╮\n│{title:<width$}│\n│{blank:<width$}│\n│{mode_line:<width$}│\n│{dir_line:<width$}│\n╰{top}╯",
-        top = "─".repeat(width),
-        title = title,
-        blank = "",
-        mode_line = mode_line,
-        dir_line = dir_line,
-        width = width,
-    )
-}
+use crate::terminal::app::{TerminalApp, TerminalEvent};
+use crate::terminal::completion::ShellCompletion;
+pub use crate::terminal::completion::{
+    format_completion_line, next_completion_index, previous_completion_index, scroll_lines_needed,
+};
+use crate::terminal::loop_shell::run_terminal;
+use crate::ui::operator_terminal::{
+    mode_name, operator_prompt, prompt_status_from_store, shell_intro_panel,
+};
+use std::collections::BTreeSet;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub fn run_shell(
     app: &mut AppBootstrap<BinanceExchange>,
     runtime: &mut AppRuntime,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let intro_panel = shell_intro_panel(mode_name(current_mode(app)), "~/project/sandbox-quant");
-    execute!(
-        io::stdout(),
-        PrintStyledContent(intro_panel.cyan().bold()),
-        Print("\n"),
-        PrintStyledContent("slash commands".dark_grey()),
-        Print("\n"),
-        Print(shell_help_text()),
-        Print("\n")
-    )?;
-
-    enable_raw_mode()?;
-    let result = loop_shell(app, runtime);
-    disable_raw_mode()?;
-    result
+    let mut terminal = OperatorTerminal { app, runtime };
+    run_terminal(&mut terminal)
 }
 
-fn loop_shell(
-    app: &mut AppBootstrap<BinanceExchange>,
-    runtime: &mut AppRuntime,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut stdout = io::stdout();
-    let mut buffer = String::new();
-    let mut completion_index = 0usize;
-    let mut rendered_menu_lines = 0usize;
-    let mut completion_query: Option<String> = None;
-    render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
+struct OperatorTerminal<'a> {
+    app: &'a mut AppBootstrap<BinanceExchange>,
+    runtime: &'a mut AppRuntime,
+}
 
-    loop {
-        if let Event::Key(key) = read()? {
-            if key.kind != KeyEventKind::Press {
-                continue;
+impl TerminalApp for OperatorTerminal<'_> {
+    fn intro_panel(&self) -> String {
+        shell_intro_panel(mode_name(current_mode(self.app)), "~/project/sandbox-quant")
+    }
+
+    fn help_text(&self) -> String {
+        shell_help_text().to_string()
+    }
+
+    fn prompt(&self) -> String {
+        let mode = current_mode(self.app);
+        let status = prompt_status(self.app);
+        operator_prompt(mode, &status)
+    }
+
+    fn complete(&self, line: &str) -> Vec<ShellCompletion> {
+        current_completions(self.app, line)
+    }
+
+    fn execute_line(&mut self, line: &str) -> Result<TerminalEvent, String> {
+        match parse_shell_input(line) {
+            Ok(ShellInput::Empty) => Ok(TerminalEvent::NoOutput),
+            Ok(ShellInput::Help) => Ok(TerminalEvent::Output(shell_help_text().to_string())),
+            Ok(ShellInput::Exit) => Ok(TerminalEvent::Exit),
+            Ok(ShellInput::Mode(mode)) => self
+                .app
+                .switch_mode(mode)
+                .map(|_| TerminalEvent::Output(format!("mode switched to {}", mode_name(mode))))
+                .map_err(|error| error.to_string()),
+            Ok(ShellInput::Command(command)) => {
+                let rendered_command = command.clone();
+                self.runtime
+                    .run(self.app, command)
+                    .map_err(|error| error.to_string())?;
+                Ok(TerminalEvent::Output(render_command_output(
+                    &rendered_command,
+                    &self.app.portfolio_store,
+                    &self.app.price_store,
+                    &self.app.event_log,
+                    &self.app.strategy_store,
+                    self.app.mode,
+                )))
             }
-            match key.code {
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    println!();
-                    break;
-                }
-                KeyCode::Char(ch) => {
-                    buffer.push(ch);
-                    completion_index = 0;
-                    completion_query = Some(buffer.clone());
-                    render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
-                }
-                KeyCode::Backspace => {
-                    buffer.pop();
-                    completion_index = 0;
-                    completion_query = Some(buffer.clone());
-                    render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
-                }
-                KeyCode::Tab => {
-                    let query = completion_query.clone().unwrap_or_else(|| buffer.clone());
-                    let completions = current_completions(app, &query);
-                    if completions.len() == 1 {
-                        buffer = completions[0].value.clone();
-                        completion_index = 0;
-                        completion_query = Some(query);
-                        render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
-                    } else if !completions.is_empty() {
-                        completion_index = (completion_index + 1) % completions.len();
-                        buffer = completions[completion_index].value.clone();
-                        completion_query = Some(query);
-                        render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
-                    }
-                }
-                KeyCode::Up => {
-                    let query = completion_query.clone().unwrap_or_else(|| buffer.clone());
-                    let completions = current_completions(app, &query);
-                    if !completions.is_empty() {
-                        completion_index = previous_completion_index(completions.len(), completion_index);
-                        buffer = completions[completion_index].value.clone();
-                        completion_query = Some(query);
-                        render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
-                    }
-                }
-                KeyCode::Down => {
-                    let query = completion_query.clone().unwrap_or_else(|| buffer.clone());
-                    let completions = current_completions(app, &query);
-                    if !completions.is_empty() {
-                        completion_index = next_completion_index(completions.len(), completion_index);
-                        buffer = completions[completion_index].value.clone();
-                        completion_query = Some(query);
-                        render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
-                    }
-                }
-                KeyCode::Enter => {
-                    clear_completion_menu(&mut stdout, rendered_menu_lines)?;
-                    rendered_menu_lines = 0;
-                    println!();
-                    let line = buffer.clone();
-                    buffer.clear();
-                    completion_index = 0;
-                    completion_query = None;
-                    match parse_shell_input(&line) {
-                        Ok(ShellInput::Empty) => {}
-                        Ok(ShellInput::Help) => print_plain_block(shell_help_text())?,
-                        Ok(ShellInput::Exit) => break,
-                        Ok(ShellInput::Mode(mode)) => {
-                            match app.switch_mode(mode) {
-                                Ok(()) => print_mode_switched(&mut stdout, mode)?,
-                                Err(error) => print_error(&mut stdout, error)?,
-                            }
-                        }
-                        Ok(ShellInput::Command(command)) => {
-                            let rendered_command = command.clone();
-                            match runtime.run(app, command) {
-                                Ok(()) => print_command_output(
-                                    &mut stdout,
-                                    &rendered_command,
-                                    &app.portfolio_store,
-                                    &app.event_log,
-                                )?,
-                                Err(error) => print_error(&mut stdout, error)?,
-                            }
-                        }
-                        Err(error) => print_error(&mut stdout, error)?,
-                    }
-                    render_shell(&mut stdout, app, &buffer, completion_index, &mut rendered_menu_lines)?;
-                }
-                _ => {}
-            }
+            Err(error) => Err(error),
         }
-    }
-
-    Ok(())
-}
-
-fn render_prompt(
-    stdout: &mut io::Stdout,
-    app: &AppBootstrap<BinanceExchange>,
-    buffer: &str,
-) -> io::Result<()> {
-    let mode = current_mode(app);
-    let status = prompt_status(app);
-    execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
-    execute!(
-        stdout,
-        PrintStyledContent("●".with(mode_color(mode))),
-        Print(" "),
-        PrintStyledContent(format!("[{}]", mode_name(mode)).with(mode_color(mode)).bold()),
-        Print(" "),
-        PrintStyledContent(status.dark_grey()),
-        Print(" "),
-        PrintStyledContent("›".cyan().bold()),
-        Print(" "),
-        Print(buffer)
-    )?;
-    stdout.flush()
-}
-
-fn render_shell(
-    stdout: &mut io::Stdout,
-    app: &AppBootstrap<BinanceExchange>,
-    buffer: &str,
-    completion_index: usize,
-    rendered_menu_lines: &mut usize,
-) -> io::Result<()> {
-    let completions = current_completions(app, buffer);
-    let expected_menu_lines = if should_show_completion_menu(buffer, &completions) {
-        completions.len() + 1
-    } else {
-        0
-    };
-    let scrolled = ensure_vertical_space(stdout, expected_menu_lines)?;
-    if scrolled > 0 {
-        execute!(stdout, MoveUp(scrolled as u16))?;
-    }
-    render_prompt(stdout, app, buffer)?;
-    execute!(stdout, SavePosition)?;
-    let menu_lines = if should_show_completion_menu(buffer, &completions) {
-        print_completion_menu(stdout, &completions, completion_index)?
-    } else {
-        0
-    };
-
-    let lines_to_clear = (*rendered_menu_lines).saturating_sub(menu_lines);
-    for _ in 0..lines_to_clear {
-        execute!(
-            stdout,
-            MoveToNextLine(1),
-            MoveToColumn(0),
-            Clear(ClearType::CurrentLine)
-        )?;
-    }
-
-    *rendered_menu_lines = menu_lines;
-    execute!(stdout, RestorePosition)?;
-    stdout.flush()
-}
-
-fn clear_completion_menu(stdout: &mut io::Stdout, rendered_menu_lines: usize) -> io::Result<()> {
-    execute!(stdout, SavePosition)?;
-    for _ in 0..rendered_menu_lines {
-        execute!(
-            stdout,
-            MoveToNextLine(1),
-            MoveToColumn(0),
-            Clear(ClearType::CurrentLine)
-        )?;
-    }
-    execute!(stdout, RestorePosition)?;
-    stdout.flush()
-}
-
-fn mode_name(mode: BinanceMode) -> &'static str {
-    match mode {
-        BinanceMode::Real => "real",
-        BinanceMode::Demo => "demo",
     }
 }
 
 fn current_mode(app: &AppBootstrap<BinanceExchange>) -> BinanceMode {
-    match app.exchange.transport_name() {
-        "demo" => BinanceMode::Demo,
-        _ => BinanceMode::Real,
-    }
-}
-
-fn mode_color(mode: BinanceMode) -> Color {
-    match mode {
-        BinanceMode::Real => Color::Green,
-        BinanceMode::Demo => Color::Yellow,
-    }
+    app.mode
 }
 
 fn prompt_status(app: &AppBootstrap<BinanceExchange>) -> String {
-    format!(
-        "[{}|{} pos]",
-        staleness_label(app.portfolio_store.staleness),
-        app.portfolio_store.snapshot.positions.len()
-    )
+    prompt_status_from_store(&app.portfolio_store)
 }
 
-fn staleness_label(staleness: crate::portfolio::staleness::StalenessState) -> &'static str {
-    match staleness {
-        crate::portfolio::staleness::StalenessState::Fresh => "fresh",
-        crate::portfolio::staleness::StalenessState::MarketDataStale => "market-stale",
-        crate::portfolio::staleness::StalenessState::AccountStateStale => "account-stale",
-        crate::portfolio::staleness::StalenessState::ReconciliationStale => "reconcile-stale",
+fn current_completions(app: &AppBootstrap<BinanceExchange>, buffer: &str) -> Vec<ShellCompletion> {
+    let mut instruments = completion_instruments(&app.portfolio_store, &app.event_log);
+    if should_include_option_symbols(buffer) {
+        instruments.extend(option_completion_symbols(&app.exchange));
+        instruments.sort();
+        instruments.dedup();
     }
+    let priced_instruments = app
+        .price_store
+        .snapshot()
+        .into_iter()
+        .map(|(instrument, price)| (instrument.0, price))
+        .collect::<Vec<_>>();
+    complete_shell_input_with_market_data(buffer, &instruments, &priced_instruments)
 }
 
-pub fn format_completion_line(completions: &[ShellCompletion], selected: usize) -> String {
-    completions
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            if index == selected {
-                format!("[{}]", item.value)
-            } else {
-                item.value.clone()
-            }
+#[derive(Debug, Clone)]
+struct OptionCompletionCache {
+    transport_name: String,
+    fetched_at: Instant,
+    symbols: Vec<String>,
+}
+
+fn option_completion_symbols(exchange: &BinanceExchange) -> Vec<String> {
+    static CACHE: OnceLock<Mutex<Option<OptionCompletionCache>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let transport_name = exchange.transport_name().to_string();
+
+    if let Some(cached) = cache
+        .lock()
+        .expect("lock option completion cache")
+        .as_ref()
+        .filter(|cached| {
+            cached.transport_name == transport_name
+                && cached.fetched_at.elapsed() < Duration::from_secs(300)
         })
-        .collect::<Vec<_>>()
-        .join("  ")
-}
-
-fn print_completion_menu(
-    stdout: &mut io::Stdout,
-    completions: &[ShellCompletion],
-    selected: usize,
-) -> io::Result<usize> {
-    execute!(
-        stdout,
-        MoveToNextLine(1),
-        MoveToColumn(0),
-        Clear(ClearType::CurrentLine),
-        PrintStyledContent("completions".dark_grey()),
-    )?;
-
-    for (index, item) in completions.iter().enumerate() {
-        execute!(stdout, MoveToNextLine(1), MoveToColumn(0), Clear(ClearType::CurrentLine))?;
-        if index == selected {
-            execute!(
-                stdout,
-                PrintStyledContent(">".cyan().bold()),
-                Print(" "),
-                PrintStyledContent(item.value.as_str().black().on_white()),
-                Print("  "),
-                PrintStyledContent(item.description.as_str().dark_grey()),
-            )?;
-        } else {
-            execute!(
-                stdout,
-                Print("  "),
-                PrintStyledContent(item.value.as_str().dark_grey()),
-                Print("  "),
-                PrintStyledContent(item.description.as_str().dark_grey()),
-            )?;
-        }
+        .cloned()
+    {
+        return cached.symbols;
     }
-    Ok(completions.len() + 1)
+
+    let symbols = exchange.load_option_symbols().unwrap_or_default();
+    *cache.lock().expect("lock option completion cache") = Some(OptionCompletionCache {
+        transport_name,
+        fetched_at: Instant::now(),
+        symbols: symbols.clone(),
+    });
+    symbols
 }
 
-fn print_command_output(
-    stdout: &mut io::Stdout,
-    command: &crate::app::commands::AppCommand,
+fn should_include_option_symbols(buffer: &str) -> bool {
+    let trimmed = buffer.trim_start();
+    let without_prefix = trimmed.strip_prefix('/').unwrap_or(trimmed);
+    let trailing_space = without_prefix.ends_with(' ');
+    let parts: Vec<&str> = without_prefix.split_whitespace().collect();
+    if parts.first().copied() != Some("option-order") {
+        return false;
+    }
+    let arg_index = if trailing_space {
+        parts.len()
+    } else {
+        parts.len().saturating_sub(1)
+    };
+    arg_index <= 1
+}
+
+fn completion_instruments(
     store: &crate::portfolio::store::PortfolioStateStore,
     event_log: &crate::storage::event_log::EventLog,
-) -> io::Result<()> {
-    print_multiline_block(stdout, &render_command_output(command, store, event_log), true)
-}
+) -> Vec<String> {
+    let mut instruments = BTreeSet::new();
 
-fn print_error(stdout: &mut io::Stdout, error: impl std::fmt::Display) -> io::Result<()> {
-    print_multiline_block(stdout, &format!("error: {error}"), false)
-}
+    for instrument in store.snapshot.positions.keys() {
+        instruments.insert(instrument.0.clone());
+    }
 
-fn current_completions(
-    app: &AppBootstrap<BinanceExchange>,
-    buffer: &str,
-) -> Vec<ShellCompletion> {
-    let instruments = app
-        .portfolio_store
-        .snapshot
-        .positions
-        .keys()
-        .map(|instrument| instrument.0.clone())
-        .collect::<Vec<_>>();
-    complete_shell_input_with_description(buffer, &instruments)
-}
+    for instrument in store.snapshot.open_orders.keys() {
+        instruments.insert(instrument.0.clone());
+    }
 
-fn should_show_completion_menu(buffer: &str, completions: &[ShellCompletion]) -> bool {
-    buffer.trim_start().starts_with('/') && !completions.is_empty()
-}
-
-fn begin_output_block(stdout: &mut io::Stdout) -> io::Result<()> {
-    execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
-    Ok(())
-}
-
-fn print_plain_block(text: &str) -> io::Result<()> {
-    let mut stdout = io::stdout();
-    print_multiline_block(&mut stdout, text, false)
-}
-
-fn print_mode_switched(stdout: &mut io::Stdout, mode: BinanceMode) -> io::Result<()> {
-    print_multiline_block(stdout, &format!("mode switched to {}", mode_name(mode)), false)
-}
-
-fn print_multiline_block(stdout: &mut io::Stdout, text: &str, cyan_output: bool) -> io::Result<()> {
-    for (index, line) in text.lines().enumerate() {
-        if index == 0 {
-            begin_output_block(stdout)?;
-        } else {
-            execute!(stdout, MoveToColumn(0))?;
+    for event in event_log.records.iter().rev() {
+        if event.kind != "app.execution.completed" {
+            continue;
         }
-
-        if cyan_output {
-            writeln!(stdout, "{}", line.cyan())?;
-        } else if let Some(rest) = line.strip_prefix("error: ") {
-            writeln!(stdout, "{} {}", "error:".red().bold(), rest.red())?;
-        } else {
-            writeln!(stdout, "{line}")?;
+        if let Some(instrument) = event.payload["instrument"].as_str() {
+            instruments.insert(instrument.to_string());
         }
     }
-    Ok(())
+
+    instruments.into_iter().collect()
 }
 
-fn ensure_vertical_space(stdout: &mut io::Stdout, lines_needed: usize) -> io::Result<usize> {
-    if lines_needed == 0 {
-        return Ok(0);
+#[cfg(test)]
+mod tests {
+    use super::{completion_instruments, prompt_status_from_store};
+    use crate::domain::balance::BalanceSnapshot;
+    use crate::domain::instrument::Instrument;
+    use crate::domain::market::Market;
+    use crate::domain::order::{OpenOrder, OrderStatus};
+    use crate::domain::position::{PositionSnapshot, Side};
+    use crate::portfolio::store::PortfolioStateStore;
+    use crate::storage::event_log::{log, EventLog};
+    use serde_json::json;
+
+    #[test]
+    fn completion_instruments_include_positions_open_orders_and_recent_execution_symbols() {
+        let mut store = PortfolioStateStore::default();
+        store.apply_snapshot(crate::exchange::types::AuthoritativeSnapshot {
+            balances: vec![BalanceSnapshot {
+                asset: "USDT".to_string(),
+                free: 1000.0,
+                locked: 0.0,
+            }],
+            positions: vec![PositionSnapshot {
+                instrument: Instrument::new("BTCUSDT"),
+                market: Market::Futures,
+                signed_qty: 0.25,
+                entry_price: Some(65000.0),
+            }],
+            open_orders: vec![OpenOrder {
+                order_id: None,
+                client_order_id: "eth-order".to_string(),
+                instrument: Instrument::new("ETHUSDT"),
+                market: Market::Futures,
+                side: Side::Sell,
+                orig_qty: 1.0,
+                executed_qty: 0.0,
+                reduce_only: false,
+                status: OrderStatus::Submitted,
+            }],
+        });
+
+        let mut event_log = EventLog::default();
+        log(
+            &mut event_log,
+            "app.execution.completed",
+            json!({
+                "command_kind": "set_target_exposure",
+                "instrument": "SOLUSDT",
+                "outcome_kind": "submitted",
+            }),
+        );
+
+        let instruments = completion_instruments(&store, &event_log);
+
+        assert_eq!(
+            instruments,
+            vec![
+                "BTCUSDT".to_string(),
+                "ETHUSDT".to_string(),
+                "SOLUSDT".to_string(),
+            ]
+        );
     }
 
-    let (_, row) = position()?;
-    let (_, height) = size()?;
-    let overflow = scroll_lines_needed(row, height, lines_needed);
-    if overflow > 0 {
-        execute!(stdout, ScrollUp(overflow as u16))?;
-    }
-    Ok(overflow)
-}
+    #[test]
+    fn prompt_status_uses_non_flat_positions_and_open_order_count() {
+        let mut store = PortfolioStateStore::default();
+        store.apply_snapshot(crate::exchange::types::AuthoritativeSnapshot {
+            balances: vec![BalanceSnapshot {
+                asset: "USDT".to_string(),
+                free: 1000.0,
+                locked: 0.0,
+            }],
+            positions: vec![
+                PositionSnapshot {
+                    instrument: Instrument::new("BTCUSDT"),
+                    market: Market::Futures,
+                    signed_qty: 0.25,
+                    entry_price: Some(65000.0),
+                },
+                PositionSnapshot {
+                    instrument: Instrument::new("ETHUSDT"),
+                    market: Market::Futures,
+                    signed_qty: 0.0,
+                    entry_price: None,
+                },
+            ],
+            open_orders: vec![OpenOrder {
+                order_id: None,
+                client_order_id: "btc-order".to_string(),
+                instrument: Instrument::new("BTCUSDT"),
+                market: Market::Futures,
+                side: Side::Sell,
+                orig_qty: 0.25,
+                executed_qty: 0.0,
+                reduce_only: false,
+                status: OrderStatus::Submitted,
+            }],
+        });
 
-pub fn scroll_lines_needed(current_row: u16, terminal_height: u16, lines_needed: usize) -> usize {
-    if terminal_height == 0 {
-        return 0;
-    }
-
-    let last_row = terminal_height.saturating_sub(1) as usize;
-    let current_row = current_row as usize;
-    current_row.saturating_add(lines_needed).saturating_sub(last_row)
-}
-
-pub fn next_completion_index(len: usize, current: usize) -> usize {
-    if len == 0 {
-        0
-    } else {
-        (current + 1) % len
-    }
-}
-
-pub fn previous_completion_index(len: usize, current: usize) -> usize {
-    if len == 0 {
-        0
-    } else if current == 0 {
-        len - 1
-    } else {
-        current - 1
+        assert_eq!(prompt_status_from_store(&store), "[fresh|1 pos|1 ord]");
     }
 }

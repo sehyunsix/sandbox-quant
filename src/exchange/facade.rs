@@ -9,11 +9,10 @@ pub trait ExchangeFacade {
     type Error;
 
     fn load_authoritative_snapshot(&self) -> Result<AuthoritativeSnapshot, Self::Error>;
-    fn load_last_price(
-        &self,
-        instrument: &Instrument,
-        market: Market,
-    ) -> Result<f64, Self::Error>;
+    fn load_today_realized_pnl_usdt(&self) -> Result<f64, Self::Error>;
+    fn load_today_funding_pnl_usdt(&self) -> Result<f64, Self::Error>;
+    fn load_margin_ratio(&self) -> Result<Option<f64>, Self::Error>;
+    fn load_last_price(&self, instrument: &Instrument, market: Market) -> Result<f64, Self::Error>;
     fn load_symbol_rules(
         &self,
         instrument: &Instrument,

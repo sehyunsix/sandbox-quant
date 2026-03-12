@@ -7,6 +7,7 @@ use crate::exchange::binance::orders::{RawCloseOrderAck, RawCloseOrderRequest, R
 
 pub const BINANCE_DEMO_SPOT_BASE_URL: &str = "https://demo-api.binance.com";
 pub const BINANCE_DEMO_FUTURES_BASE_URL: &str = "https://demo-fapi.binance.com";
+pub const BINANCE_DEMO_OPTIONS_BASE_URL: &str = "https://testnet.binancefuture.com";
 
 #[derive(Debug, Clone)]
 pub struct BinanceDemoHttpTransport {
@@ -20,6 +21,7 @@ impl BinanceDemoHttpTransport {
                 auth,
                 BINANCE_DEMO_SPOT_BASE_URL,
                 BINANCE_DEMO_FUTURES_BASE_URL,
+                BINANCE_DEMO_OPTIONS_BASE_URL,
             ),
         }
     }
@@ -46,10 +48,26 @@ impl BinanceTransport for BinanceDemoHttpTransport {
         self.inner.load_symbol_rules(symbol, market)
     }
 
+    fn load_option_symbols(&self) -> Result<Vec<String>, ExchangeError> {
+        self.inner.load_option_symbols()
+    }
+
     fn submit_close_order(
         &self,
         request: RawCloseOrderRequest,
     ) -> Result<RawCloseOrderAck, ExchangeError> {
         self.inner.submit_close_order(request)
+    }
+
+    fn load_today_realized_pnl_usdt(&self) -> Result<f64, ExchangeError> {
+        self.inner.load_today_realized_pnl_usdt()
+    }
+
+    fn load_today_funding_pnl_usdt(&self) -> Result<f64, ExchangeError> {
+        self.inner.load_today_funding_pnl_usdt()
+    }
+
+    fn load_margin_ratio(&self) -> Result<Option<f64>, ExchangeError> {
+        self.inner.load_margin_ratio()
     }
 }

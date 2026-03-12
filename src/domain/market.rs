@@ -2,4 +2,5 @@
 pub enum Market {
     Spot,
     Futures,
+    Options,
 }

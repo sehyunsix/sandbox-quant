@@ -26,6 +26,18 @@ impl ExchangeFacade for AuthFailExchange {
         })
     }
 
+    fn load_today_realized_pnl_usdt(&self) -> Result<f64, Self::Error> {
+        Err(ExchangeError::UnsupportedMarketOperation)
+    }
+
+    fn load_today_funding_pnl_usdt(&self) -> Result<f64, Self::Error> {
+        Err(ExchangeError::UnsupportedMarketOperation)
+    }
+
+    fn load_margin_ratio(&self) -> Result<Option<f64>, Self::Error> {
+        Err(ExchangeError::UnsupportedMarketOperation)
+    }
+
     fn load_last_price(
         &self,
         _instrument: &Instrument,

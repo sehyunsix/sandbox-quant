@@ -66,18 +66,23 @@ The design rationale is documented in [0056-v1-reset-exchange-truth-architecture
 Required:
 
 ```bash
-BINANCE_API_KEY=your_key
-BINANCE_SECRET_KEY=your_secret
+BINANCE_DEMO_API_KEY=your_demo_key
+BINANCE_DEMO_SECRET_KEY=your_demo_secret
+BINANCE_REAL_API_KEY=your_real_key
+BINANCE_REAL_SECRET_KEY=your_real_secret
 ```
 
 Optional:
 
 ```bash
+BINANCE_API_KEY=legacy_shared_key
+BINANCE_SECRET_KEY=legacy_shared_secret
 BINANCE_SPOT_BASE_URL=https://api.binance.com
 BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
+BINANCE_OPTIONS_BASE_URL=https://eapi.binance.com
 ```
 
-The default runtime mode is `demo`. Optional base URLs are useful for explicit testnet or custom routing.
+The runtime reads demo and real credentials separately based on `BINANCE_MODE` and when using `/mode real|demo`. The legacy shared key names are still accepted as a fallback. The default runtime mode is `demo`. Optional base URLs are useful for explicit testnet or custom routing.
 
 ## Running
 
@@ -106,6 +111,14 @@ cargo run -- set-target-exposure BTCUSDT 0.25
 ```
 
 `target exposure` must be in `-1.0..=1.0`.
+
+Submit an options limit order:
+
+```bash
+cargo run -- option-order BTC-260327-200000-C buy 0.01 5
+```
+
+Options orders are handled as a separate workflow. They appear in portfolio positions and open orders, but they are not integrated into `set-target-exposure`.
 
 ## Output
 

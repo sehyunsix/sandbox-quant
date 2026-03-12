@@ -107,3 +107,36 @@ fn sync_service_refreshes_authoritative_state_and_reports_counts() {
     assert_eq!(report.open_order_groups, 1);
     assert_eq!(report.balances, 0);
 }
+
+#[test]
+fn authoritative_refresh_filters_flat_positions_from_store() {
+    let sync = PortfolioSyncService;
+    let btc = Instrument::new("BTCUSDT");
+    let fake = FakeExchange::new(AuthoritativeSnapshot {
+        balances: vec![],
+        positions: vec![
+            PositionSnapshot {
+                instrument: btc.clone(),
+                market: Market::Futures,
+                signed_qty: 0.0,
+                entry_price: Some(64000.0),
+            },
+            PositionSnapshot {
+                instrument: Instrument::new("ETHUSDT"),
+                market: Market::Futures,
+                signed_qty: 0.25,
+                entry_price: Some(2400.0),
+            },
+        ],
+        open_orders: vec![],
+    });
+    let mut store = PortfolioStateStore::default();
+
+    let report = sync
+        .refresh_authoritative(&fake, &mut store)
+        .expect("refresh should succeed");
+
+    assert!(!store.snapshot.positions.contains_key(&btc));
+    assert_eq!(store.snapshot.positions.len(), 1);
+    assert_eq!(report.positions, 1);
+}

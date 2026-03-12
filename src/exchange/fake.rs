@@ -19,6 +19,9 @@ pub struct FakeExchange {
     submit_requests: Mutex<Vec<CloseOrderRequest>>,
     next_close_submit_result: Mutex<Option<Result<CloseOrderAccepted, ExchangeError>>>,
     next_order_submit_result: Mutex<Option<Result<SubmitOrderAccepted, ExchangeError>>>,
+    today_realized_pnl_usdt: Mutex<f64>,
+    today_funding_pnl_usdt: Mutex<f64>,
+    margin_ratio: Mutex<Option<f64>>,
 }
 
 impl FakeExchange {
@@ -31,15 +34,13 @@ impl FakeExchange {
             submit_requests: Mutex::new(Vec::new()),
             next_close_submit_result: Mutex::new(None),
             next_order_submit_result: Mutex::new(None),
+            today_realized_pnl_usdt: Mutex::new(0.0),
+            today_funding_pnl_usdt: Mutex::new(0.0),
+            margin_ratio: Mutex::new(None),
         }
     }
 
-    pub fn set_symbol_rules(
-        &self,
-        instrument: Instrument,
-        market: Market,
-        rules: SymbolRules,
-    ) {
+    pub fn set_symbol_rules(&self, instrument: Instrument, market: Market, rules: SymbolRules) {
         self.symbol_rules
             .lock()
             .expect("lock symbol_rules")
@@ -53,20 +54,14 @@ impl FakeExchange {
             .insert((instrument, market), price);
     }
 
-    pub fn set_next_submit_result(
-        &self,
-        result: Result<CloseOrderAccepted, ExchangeError>,
-    ) {
+    pub fn set_next_submit_result(&self, result: Result<CloseOrderAccepted, ExchangeError>) {
         *self
             .next_close_submit_result
             .lock()
             .expect("lock next_close_submit_result") = Some(result);
     }
 
-    pub fn set_next_order_submit_result(
-        &self,
-        result: Result<SubmitOrderAccepted, ExchangeError>,
-    ) {
+    pub fn set_next_order_submit_result(&self, result: Result<SubmitOrderAccepted, ExchangeError>) {
         *self
             .next_order_submit_result
             .lock()
@@ -90,6 +85,24 @@ impl FakeExchange {
     pub fn replace_snapshot(&self, snapshot: AuthoritativeSnapshot) {
         *self.snapshot.lock().expect("lock snapshot") = snapshot;
     }
+
+    pub fn set_today_realized_pnl_usdt(&self, value: f64) {
+        *self
+            .today_realized_pnl_usdt
+            .lock()
+            .expect("lock today_realized_pnl_usdt") = value;
+    }
+
+    pub fn set_today_funding_pnl_usdt(&self, value: f64) {
+        *self
+            .today_funding_pnl_usdt
+            .lock()
+            .expect("lock today_funding_pnl_usdt") = value;
+    }
+
+    pub fn set_margin_ratio(&self, value: Option<f64>) {
+        *self.margin_ratio.lock().expect("lock margin_ratio") = value;
+    }
 }
 
 impl ExchangeFacade for FakeExchange {
@@ -99,11 +112,25 @@ impl ExchangeFacade for FakeExchange {
         Ok(self.snapshot.lock().expect("lock snapshot").clone())
     }
 
-    fn load_last_price(
-        &self,
-        instrument: &Instrument,
-        market: Market,
-    ) -> Result<f64, Self::Error> {
+    fn load_today_realized_pnl_usdt(&self) -> Result<f64, Self::Error> {
+        Ok(*self
+            .today_realized_pnl_usdt
+            .lock()
+            .expect("lock today_realized_pnl_usdt"))
+    }
+
+    fn load_today_funding_pnl_usdt(&self) -> Result<f64, Self::Error> {
+        Ok(*self
+            .today_funding_pnl_usdt
+            .lock()
+            .expect("lock today_funding_pnl_usdt"))
+    }
+
+    fn load_margin_ratio(&self) -> Result<Option<f64>, Self::Error> {
+        Ok(*self.margin_ratio.lock().expect("lock margin_ratio"))
+    }
+
+    fn load_last_price(&self, instrument: &Instrument, market: Market) -> Result<f64, Self::Error> {
         self.last_prices
             .lock()
             .expect("lock last_prices")

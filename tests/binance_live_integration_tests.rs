@@ -6,9 +6,8 @@ use sandbox_quant::exchange::facade::ExchangeFacade;
 use std::sync::Arc;
 
 fn integration_auth() -> Option<BinanceAuth> {
-    let api_key = std::env::var("BINANCE_API_KEY").ok()?;
-    let secret_key = std::env::var("BINANCE_SECRET_KEY").ok()?;
-    Some(BinanceAuth::new(api_key, secret_key))
+    let config = BinanceEnvConfig::from_env().ok()?;
+    Some(BinanceAuth::new(config.api_key, config.secret_key))
 }
 
 #[test]
@@ -45,8 +44,8 @@ fn live_or_demo_refresh_hits_real_signed_account_endpoint() {
 #[test]
 fn env_config_parses_mode_for_live_network_integration() {
     unsafe {
-        std::env::set_var("BINANCE_API_KEY", "k");
-        std::env::set_var("BINANCE_SECRET_KEY", "s");
+        std::env::set_var("BINANCE_DEMO_API_KEY", "k");
+        std::env::set_var("BINANCE_DEMO_SECRET_KEY", "s");
         std::env::set_var("BINANCE_MODE", "demo");
         std::env::remove_var("BINANCE_SPOT_BASE_URL");
         std::env::remove_var("BINANCE_FUTURES_BASE_URL");

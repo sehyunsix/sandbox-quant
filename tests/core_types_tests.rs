@@ -1,10 +1,14 @@
-use sandbox_quant::domain::exposure::Exposure;
 use sandbox_quant::domain::balance::BalanceSnapshot;
+use sandbox_quant::domain::exposure::Exposure;
+use sandbox_quant::domain::identifiers::BatchId;
 use sandbox_quant::domain::instrument::Instrument;
 use sandbox_quant::domain::market::Market;
+use sandbox_quant::domain::order_type::OrderType;
 use sandbox_quant::domain::position::{PositionSnapshot, Side};
+use sandbox_quant::error::execution_error::ExecutionError;
 use sandbox_quant::exchange::fake::FakeExchange;
 use sandbox_quant::exchange::symbol_rules::SymbolRules;
+use sandbox_quant::exchange::types::AuthoritativeSnapshot;
 use sandbox_quant::execution::close_all::CloseAllBatchResult;
 use sandbox_quant::execution::close_symbol::{CloseSubmitResult, CloseSymbolResult};
 use sandbox_quant::execution::command::{CommandSource, ExecutionCommand};
@@ -13,9 +17,6 @@ use sandbox_quant::market_data::price_store::PriceStore;
 use sandbox_quant::market_data::service::MarketDataService;
 use sandbox_quant::portfolio::store::PortfolioStateStore;
 use sandbox_quant::storage::event_log::{log, EventLog};
-use sandbox_quant::exchange::types::AuthoritativeSnapshot;
-use sandbox_quant::domain::identifiers::BatchId;
-use sandbox_quant::error::execution_error::ExecutionError;
 use serde_json::json;
 
 #[test]
@@ -55,7 +56,10 @@ fn authoritative_snapshot_populates_positions_and_open_orders_in_store() {
 
     store.apply_snapshot(snapshot);
 
-    assert!(store.snapshot.positions.contains_key(&Instrument::new("ETHUSDT")));
+    assert!(store
+        .snapshot
+        .positions
+        .contains_key(&Instrument::new("ETHUSDT")));
     assert!(store.snapshot.open_orders.is_empty());
 }
 
@@ -77,7 +81,10 @@ fn close_all_batch_result_collects_per_symbol_submit_outcomes() {
 
     assert_eq!(batch.results.len(), 2);
     assert_eq!(batch.results[0].result, CloseSubmitResult::Submitted);
-    assert_eq!(batch.results[1].result, CloseSubmitResult::SkippedNoPosition);
+    assert_eq!(
+        batch.results[1].result,
+        CloseSubmitResult::SkippedNoPosition
+    );
 }
 
 #[test]
@@ -151,6 +158,7 @@ fn execution_service_plans_target_exposure_from_authoritative_store() {
             &prices,
             &instrument,
             Exposure::new(0.5).expect("bounded exposure"),
+            OrderType::Market,
         )
         .expect("planning should succeed");
 
@@ -188,6 +196,7 @@ fn target_exposure_requires_price_source_context() {
             &prices,
             &instrument,
             Exposure::new(0.2).expect("bounded exposure"),
+            OrderType::Market,
         )
         .expect_err("price source should be required");
 
@@ -237,6 +246,7 @@ fn execution_service_submits_target_exposure_without_ui() {
             &prices,
             &instrument,
             Exposure::new(0.5).expect("bounded exposure"),
+            OrderType::Market,
         )
         .expect("submit should succeed");
 
@@ -246,7 +256,63 @@ fn execution_service_submits_target_exposure_without_ui() {
     assert_eq!(requests[0].market, Market::Futures);
     assert_eq!(requests[0].side, Side::Buy);
     assert!((requests[0].qty - 0.26).abs() < 1e-9);
+    assert_eq!(requests[0].qty_text, "0.260");
+    assert_eq!(requests[0].order_type, OrderType::Market);
     assert!(!requests[0].reduce_only);
+}
+
+#[test]
+fn execution_service_treats_below_min_step_target_delta_as_already_at_target() {
+    let instrument = Instrument::new("BTCUSDT");
+    let fake = FakeExchange::new(AuthoritativeSnapshot::default());
+    fake.set_symbol_rules(
+        instrument.clone(),
+        Market::Futures,
+        SymbolRules {
+            min_qty: 0.001,
+            max_qty: 100.0,
+            step_size: 0.001,
+        },
+    );
+    let mut prices = PriceStore::default();
+    let market_data = MarketDataService;
+    let mut store = PortfolioStateStore::default();
+    store.apply_snapshot(AuthoritativeSnapshot {
+        balances: vec![BalanceSnapshot {
+            asset: "USDT".to_string(),
+            free: 19984.52485212,
+            locked: 0.0,
+        }],
+        positions: vec![PositionSnapshot {
+            instrument: instrument.clone(),
+            market: Market::Futures,
+            signed_qty: 0.087,
+            entry_price: Some(68256.2),
+        }],
+        open_orders: vec![],
+    });
+    market_data.apply_price(&mut prices, instrument.clone(), 68256.2);
+
+    let mut service = ExecutionService::default();
+    let outcome = service
+        .execute(
+            &fake,
+            &store,
+            &prices,
+            ExecutionCommand::SetTargetExposure {
+                instrument: instrument.clone(),
+                target: Exposure::new(0.3).expect("bounded exposure"),
+                order_type: OrderType::Market,
+                source: CommandSource::User,
+            },
+        )
+        .expect("delta below step should not fail");
+
+    assert_eq!(
+        outcome,
+        ExecutionOutcome::TargetExposureAlreadyAtTarget { instrument }
+    );
+    assert!(fake.submit_requests().is_empty());
 }
 
 #[test]
@@ -290,6 +356,7 @@ fn execution_service_dispatches_command_through_single_entrypoint() {
             ExecutionCommand::SetTargetExposure {
                 instrument: instrument.clone(),
                 target: Exposure::new(0.5).expect("bounded exposure"),
+                order_type: OrderType::Market,
                 source: CommandSource::User,
             },
         )
@@ -306,6 +373,7 @@ fn execution_service_dispatches_command_through_single_entrypoint() {
         Some(ExecutionCommand::SetTargetExposure {
             instrument,
             target: Exposure::new(0.5).expect("bounded exposure"),
+            order_type: OrderType::Market,
             source: CommandSource::User,
         })
     );
@@ -327,7 +395,10 @@ fn generic_log_function_accepts_structured_payloads() {
     );
 
     assert_eq!(event_log.records.len(), 1);
-    assert_eq!(event_log.records[0].kind, "execution.target_exposure.submitted");
+    assert_eq!(
+        event_log.records[0].kind,
+        "execution.target_exposure.submitted"
+    );
     assert_eq!(event_log.records[0].payload["instrument"], "BTCUSDT");
     assert_eq!(event_log.records[0].payload["target"], 0.5);
 }
@@ -377,6 +448,7 @@ fn execution_service_submits_target_exposure_from_flat_position() {
             &prices,
             &instrument,
             Exposure::new(0.5).expect("bounded exposure"),
+            OrderType::Market,
         )
         .expect("flat open submit should succeed");
 
@@ -386,6 +458,7 @@ fn execution_service_submits_target_exposure_from_flat_position() {
     assert_eq!(requests[0].market, Market::Futures);
     assert_eq!(requests[0].side, Side::Buy);
     assert!((requests[0].qty - 0.01).abs() < 1e-9);
+    assert_eq!(requests[0].order_type, OrderType::Market);
 }
 
 #[test]
@@ -433,13 +506,11 @@ fn execution_service_rejects_target_exposure_when_normalized_qty_is_too_small() 
             &prices,
             &instrument,
             Exposure::new(0.5).expect("bounded exposure"),
+            OrderType::Market,
         )
         .expect_err("too-small qty should be rejected locally");
 
-    assert!(matches!(
-        error,
-        ExecutionError::OrderQtyTooSmall { .. }
-    ));
+    assert!(matches!(error, ExecutionError::OrderQtyTooSmall { .. }));
 }
 
 fn fake_exchange() -> FakeExchange {

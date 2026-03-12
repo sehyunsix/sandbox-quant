@@ -1,8 +1,16 @@
 pub mod app;
+pub mod backtest_app;
+pub mod command;
+pub mod dataset;
 pub mod domain;
 pub mod error;
 pub mod exchange;
 pub mod execution;
 pub mod market_data;
 pub mod portfolio;
+pub mod record;
+pub mod recorder_app;
 pub mod storage;
+pub mod strategy;
+pub mod terminal;
+pub mod ui;

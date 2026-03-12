@@ -2,6 +2,7 @@ use crate::domain::balance::BalanceSnapshot;
 use crate::domain::instrument::Instrument;
 use crate::domain::market::Market;
 use crate::domain::order::OpenOrder;
+use crate::domain::order_type::OrderType;
 use crate::domain::position::{PositionSnapshot, Side};
 use crate::execution::planner::ExecutionPlan;
 
@@ -18,6 +19,8 @@ pub struct CloseOrderRequest {
     pub market: Market,
     pub side: Side,
     pub qty: f64,
+    pub qty_text: String,
+    pub order_type: OrderType,
     pub reduce_only: bool,
 }
 
@@ -38,6 +41,8 @@ impl From<ExecutionPlan> for CloseOrderRequest {
             market: Market::Spot,
             side: plan.side,
             qty: plan.qty,
+            qty_text: plan.qty.to_string(),
+            order_type: OrderType::Market,
             reduce_only: plan.reduce_only,
         }
     }

@@ -14,6 +14,13 @@ impl PriceStore {
             self.prices.insert(instrument, price);
         }
     }
+
+    pub fn snapshot(&self) -> Vec<(Instrument, f64)> {
+        self.prices
+            .iter()
+            .map(|(instrument, price)| (instrument.clone(), *price))
+            .collect()
+    }
 }
 
 impl PriceSource for PriceStore {

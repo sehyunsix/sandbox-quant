@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use sandbox_quant::domain::instrument::Instrument;
 use sandbox_quant::domain::market::Market;
+use sandbox_quant::domain::order_type::OrderType;
 use sandbox_quant::domain::position::Side;
 use sandbox_quant::error::exchange_error::ExchangeError;
 use sandbox_quant::exchange::binance::account::{RawAccountState, RawBalance, RawPosition};
@@ -19,7 +20,10 @@ struct StubTransport {
 
 impl StubTransport {
     fn close_requests(&self) -> Vec<RawCloseOrderRequest> {
-        self.close_requests.lock().expect("lock close_requests").clone()
+        self.close_requests
+            .lock()
+            .expect("lock close_requests")
+            .clone()
     }
 }
 
@@ -33,6 +37,7 @@ impl BinanceTransport for StubTransport {
                     locked: 0.0,
                 }],
                 positions: vec![],
+                open_orders: vec![],
             }),
             Market::Futures => Ok(RawAccountState {
                 balances: vec![RawBalance {
@@ -45,6 +50,12 @@ impl BinanceTransport for StubTransport {
                     signed_qty: -0.25,
                     entry_price: Some(65000.0),
                 }],
+                open_orders: vec![],
+            }),
+            Market::Options => Ok(RawAccountState {
+                balances: vec![],
+                positions: vec![],
+                open_orders: vec![],
             }),
         }
     }
@@ -53,6 +64,7 @@ impl BinanceTransport for StubTransport {
         match market {
             Market::Spot => Ok(50000.0),
             Market::Futures => Ok(65000.0),
+            Market::Options => Ok(5.0),
         }
     }
 
@@ -68,6 +80,10 @@ impl BinanceTransport for StubTransport {
         })
     }
 
+    fn load_option_symbols(&self) -> Result<Vec<String>, ExchangeError> {
+        Ok(vec!["BTC-260327-200000-C".to_string()])
+    }
+
     fn submit_close_order(
         &self,
         request: RawCloseOrderRequest,
@@ -79,6 +95,18 @@ impl BinanceTransport for StubTransport {
         Ok(RawCloseOrderAck {
             remote_order_id: "binance-close-1".to_string(),
         })
+    }
+
+    fn load_today_realized_pnl_usdt(&self) -> Result<f64, ExchangeError> {
+        Ok(12.34)
+    }
+
+    fn load_today_funding_pnl_usdt(&self) -> Result<f64, ExchangeError> {
+        Ok(5.67)
+    }
+
+    fn load_margin_ratio(&self) -> Result<Option<f64>, ExchangeError> {
+        Ok(Some(0.1234))
     }
 }
 
@@ -107,6 +135,8 @@ fn binance_exchange_routes_close_submit_through_raw_transport_shape() {
             market: Market::Futures,
             side: Side::Buy,
             qty: 0.25,
+            qty_text: "0.25".to_string(),
+            order_type: OrderType::Limit { price: 65000.0 },
             reduce_only: true,
         })
         .expect("close submit should succeed");
@@ -117,6 +147,8 @@ fn binance_exchange_routes_close_submit_through_raw_transport_shape() {
     assert_eq!(requests[0].symbol, "BTCUSDT");
     assert_eq!(requests[0].side, "BUY");
     assert_eq!(requests[0].market, Market::Futures);
+    assert_eq!(requests[0].qty, "0.25");
+    assert_eq!(requests[0].order_type, OrderType::Limit { price: 65000.0 });
     assert!(requests[0].reduce_only);
 }
 
