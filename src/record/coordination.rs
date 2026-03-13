@@ -37,8 +37,10 @@ impl RecorderCoordination {
         mode: BinanceMode,
         strategy_symbols: Vec<String>,
     ) -> Result<(), StorageError> {
-        fs::create_dir_all(&self.base_dir).map_err(|error| StorageError::WriteFailedWithContext {
-            message: error.to_string(),
+        fs::create_dir_all(&self.base_dir).map_err(|error| {
+            StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            }
         })?;
         let payload = StrategySymbolFile {
             mode: mode.as_str().to_string(),
@@ -70,7 +72,8 @@ impl RecorderCoordination {
     }
 
     pub fn db_path(&self, mode: BinanceMode) -> PathBuf {
-        self.base_dir.join(format!("market-v2-{}.duckdb", mode.as_str()))
+        self.base_dir
+            .join(format!("market-v2-{}.duckdb", mode.as_str()))
     }
 
     pub fn base_dir(&self) -> &Path {

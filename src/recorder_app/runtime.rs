@@ -452,7 +452,10 @@ async fn run_market_data_worker(
             Some(url) => match connect_async(url).await {
                 Ok((stream, _)) => Some(stream),
                 Err(error) => {
-                    record_worker_error(&snapshot, format!("symbol stream connect failed: {error}"));
+                    record_worker_error(
+                        &snapshot,
+                        format!("symbol stream connect failed: {error}"),
+                    );
                     eprintln!(
                         "market recorder: failed to connect symbol streams mode={} symbols={} error={}",
                         mode.as_str(),
@@ -873,8 +876,8 @@ where
             .ok_or_else(|| serde::de::Error::custom("invalid numeric value"))
             .map(Some),
         Some(other) => Err(serde::de::Error::custom(format!(
-        "expected string or number, got {other}"
-    ))),
+            "expected string or number, got {other}"
+        ))),
     }
 }
 
@@ -897,13 +900,19 @@ fn record_force_order_event(snapshot: &Arc<Mutex<WorkerSnapshot>>, connection: &
         snapshot.last_error = None;
         snapshot.metrics.liquidation_events += 1;
         snapshot.metrics.last_liquidation_event_time =
-            query_latest_timestamp(connection, "raw_liquidation_events", "event_time").ok().flatten();
+            query_latest_timestamp(connection, "raw_liquidation_events", "event_time")
+                .ok()
+                .flatten();
         snapshot.metrics.top_liquidation_symbols =
             query_top_symbols(connection, "raw_liquidation_events").unwrap_or_default();
     }
 }
 
-fn record_book_ticker_event(snapshot: &Arc<Mutex<WorkerSnapshot>>, symbol: &str, event_time_ms: i64) {
+fn record_book_ticker_event(
+    snapshot: &Arc<Mutex<WorkerSnapshot>>,
+    symbol: &str,
+    event_time_ms: i64,
+) {
     if let Ok(mut snapshot) = snapshot.lock() {
         snapshot.updated_at = Utc::now();
         snapshot.last_error = None;
@@ -958,7 +967,12 @@ fn increment_top_symbol(top_symbols: &mut Vec<String>, symbol: &str) {
 fn timestamp_string(event_time_ms: i64) -> Option<String> {
     Utc.timestamp_millis_opt(event_time_ms)
         .single()
-        .map(|value| value.naive_utc().format("%Y-%m-%d %H:%M:%S%.3f").to_string())
+        .map(|value| {
+            value
+                .naive_utc()
+                .format("%Y-%m-%d %H:%M:%S%.3f")
+                .to_string()
+        })
 }
 
 fn query_latest_timestamp(
@@ -973,11 +987,11 @@ fn query_latest_timestamp(
             .map_err(|error| StorageError::WriteFailedWithContext {
                 message: error.to_string(),
             })?;
-    statement
-        .query_row([], |row| row.get(0))
-        .map_err(|error| StorageError::WriteFailedWithContext {
+    statement.query_row([], |row| row.get(0)).map_err(|error| {
+        StorageError::WriteFailedWithContext {
             message: error.to_string(),
-        })
+        }
+    })
 }
 
 fn query_top_symbols(connection: &Connection, table: &str) -> Result<Vec<String>, StorageError> {

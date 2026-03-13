@@ -25,7 +25,10 @@ pub fn render_backtest_run(report: &BacktestReport) -> String {
         format!("liquidation_events={}", report.dataset.liquidation_events),
         format!("book_ticker_events={}", report.dataset.book_ticker_events),
         format!("agg_trade_events={}", report.dataset.agg_trade_events),
-        format!("derived_kline_1s_bars={}", report.dataset.derived_kline_1s_bars),
+        format!(
+            "derived_kline_1s_bars={}",
+            report.dataset.derived_kline_1s_bars
+        ),
         format!("trigger_count={}", report.trigger_count),
         format!("closed_trades={}", realized_trade_count),
         format!("open_trades={}", report.open_trades),

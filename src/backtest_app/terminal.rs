@@ -72,7 +72,8 @@ impl TerminalApp for BacktestTerminal {
                     from,
                     to,
                 } => {
-                    let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
+                    let db_path =
+                        RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
                     init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
                     let report = run_backtest_for_path(
                         &db_path,
@@ -84,32 +85,37 @@ impl TerminalApp for BacktestTerminal {
                         BacktestConfig::default(),
                     )
                     .map_err(|error| error.to_string())?;
-                    let run_id =
-                        persist_backtest_report(&db_path, &report).map_err(|error| error.to_string())?;
+                    let run_id = persist_backtest_report(&db_path, &report)
+                        .map_err(|error| error.to_string())?;
                     let mut report = report;
                     report.run_id = Some(run_id);
                     Ok(TerminalEvent::Output(render_backtest_run(&report)))
                 }
                 BacktestCommand::List => {
-                    let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
+                    let db_path =
+                        RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
                     init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
-                    let runs =
-                        load_backtest_run_summaries(&db_path, 20).map_err(|error| error.to_string())?;
+                    let runs = load_backtest_run_summaries(&db_path, 20)
+                        .map_err(|error| error.to_string())?;
                     Ok(TerminalEvent::Output(render_backtest_run_list(&runs)))
                 }
                 BacktestCommand::ReportLatest => {
-                    let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
+                    let db_path =
+                        RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
                     init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
                     let report =
                         load_backtest_report(&db_path, None).map_err(|error| error.to_string())?;
                     if let Some(report) = report {
                         Ok(TerminalEvent::Output(render_backtest_run(&report)))
                     } else {
-                        Ok(TerminalEvent::Output("backtest report\nstate=missing".to_string()))
+                        Ok(TerminalEvent::Output(
+                            "backtest report\nstate=missing".to_string(),
+                        ))
                     }
                 }
                 BacktestCommand::ReportShow { run_id } => {
-                    let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
+                    let db_path =
+                        RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
                     init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
                     let report = load_backtest_report(&db_path, Some(run_id))
                         .map_err(|error| error.to_string())?;

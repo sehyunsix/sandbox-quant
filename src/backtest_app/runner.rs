@@ -209,14 +209,16 @@ fn run_backtest_on_events(
                     continue;
                 }
                 liquidation_window.push_back(event.clone());
-                while liquidation_window
-                    .front()
-                    .is_some_and(|front| front.event_time_ms < event_time_ms - config.cluster_lookback_secs * 1_000)
-                {
+                while liquidation_window.front().is_some_and(|front| {
+                    front.event_time_ms < event_time_ms - config.cluster_lookback_secs * 1_000
+                }) {
                     let _ = liquidation_window.pop_front();
                 }
 
-                let total_notional = liquidation_window.iter().map(|item| item.notional).sum::<f64>();
+                let total_notional = liquidation_window
+                    .iter()
+                    .map(|item| item.notional)
+                    .sum::<f64>();
                 if open_trade.is_none()
                     && event_time_ms >= next_allowed_entry_ms
                     && total_notional >= config.min_cluster_notional
@@ -294,11 +296,14 @@ fn run_backtest_on_events(
                 if open_trade.is_some() || tick.event_time_ms < next_allowed_entry_ms {
                     continue;
                 }
-                if tick.event_time_ms > cluster.formed_at_ms + config.failed_hold_timeout_secs * 1_000 {
+                if tick.event_time_ms
+                    > cluster.formed_at_ms + config.failed_hold_timeout_secs * 1_000
+                {
                     pending_cluster = None;
                     continue;
                 }
-                let breakdown_price = cluster.zone_low * (1.0 - config.breakdown_confirm_bps / 10_000.0);
+                let breakdown_price =
+                    cluster.zone_low * (1.0 - config.breakdown_confirm_bps / 10_000.0);
                 if tick.bid > breakdown_price {
                     continue;
                 }
@@ -384,11 +389,11 @@ fn run_backtest_on_events(
         .iter()
         .filter(|trade| trade.exit_reason == Some(BacktestExitReason::StopLoss))
         .count();
-    let net_pnl = trades
+    let net_pnl = trades.iter().filter_map(|trade| trade.net_pnl).sum::<f64>();
+    let realized_trade_count = trades
         .iter()
-        .filter_map(|trade| trade.net_pnl)
-        .sum::<f64>();
-    let realized_trade_count = trades.iter().filter(|trade| trade.net_pnl.is_some()).count();
+        .filter(|trade| trade.net_pnl.is_some())
+        .count();
     let average_net_pnl = if realized_trade_count == 0 {
         0.0
     } else {
@@ -401,8 +406,8 @@ fn run_backtest_on_events(
     };
     let average_win = average_net_of(&completed_trades, BacktestExitReason::TakeProfit);
     let average_loss = average_net_of(&completed_trades, BacktestExitReason::StopLoss).abs();
-    let configured_expected_value =
-        config.win_rate_assumption * average_win - (1.0 - config.win_rate_assumption) * average_loss;
+    let configured_expected_value = config.win_rate_assumption * average_win
+        - (1.0 - config.win_rate_assumption) * average_loss;
 
     BacktestReport {
         run_id: None,

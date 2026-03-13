@@ -5,8 +5,8 @@ use duckdb::{params, Connection};
 use crate::app::bootstrap::BinanceMode;
 use crate::backtest_app::runner::{BacktestExitReason, BacktestReport, BacktestTrade};
 use crate::dataset::types::{
-    BacktestDatasetSummary, BacktestRunSummaryRow, BookTickerRow, LiquidationEventRow,
-    RecorderMetrics,
+    BacktestDatasetSummary, BacktestRunSummaryRow, BookTickerRow, DerivedKlineRow,
+    LiquidationEventRow, RecorderMetrics,
 };
 use crate::error::storage_error::StorageError;
 use crate::strategy::model::StrategyTemplate;
@@ -152,21 +152,31 @@ pub fn load_liquidation_events_for_path(
         })?
     {
         result.push(LiquidationEventRow {
-            event_time_ms: row.get(0).map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?,
-            force_side: row.get(1).map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?,
-            price: row.get(2).map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?,
-            qty: row.get(3).map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?,
-            notional: row.get(4).map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?,
+            event_time_ms: row
+                .get(0)
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?,
+            force_side: row
+                .get(1)
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?,
+            price: row
+                .get(2)
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?,
+            qty: row
+                .get(3)
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?,
+            notional: row
+                .get(4)
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?,
         });
     }
     Ok(result)
@@ -211,16 +221,115 @@ pub fn load_book_ticker_rows_for_path(
         })?
     {
         result.push(BookTickerRow {
-            event_time_ms: row.get(0).map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?,
-            bid: row.get(1).map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?,
-            ask: row.get(2).map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?,
+            event_time_ms: row
+                .get(0)
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?,
+            bid: row
+                .get(1)
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?,
+            ask: row
+                .get(2)
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?,
         });
+    }
+    Ok(result)
+}
+
+pub fn load_derived_kline_rows_for_path(
+    db_path: &Path,
+    symbol: &str,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
+) -> Result<Vec<DerivedKlineRow>, StorageError> {
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection =
+        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
+            path: db_path.display().to_string(),
+            message: error.to_string(),
+        })?;
+    let from_ts = format!("{from} 00:00:00");
+    let to_ts = format!("{to} 23:59:59");
+    let mut statement = connection
+        .prepare(
+            "SELECT epoch_ms(open_time), epoch_ms(close_time), open, high, low, close, volume, quote_volume, trade_count
+             FROM derived_kline_1s
+             WHERE symbol = ? AND open_time >= CAST(? AS TIMESTAMP) AND open_time <= CAST(? AS TIMESTAMP)
+             ORDER BY open_time ASC",
+        )
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })?;
+    let mut rows = statement
+        .query(params![symbol, from_ts, to_ts])
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })?;
+    let mut result = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })?
+    {
+        result.push(DerivedKlineRow {
+            open_time_ms: row.get(0).map_err(storage_err)?,
+            close_time_ms: row.get(1).map_err(storage_err)?,
+            open: row.get(2).map_err(storage_err)?,
+            high: row.get(3).map_err(storage_err)?,
+            low: row.get(4).map_err(storage_err)?,
+            close: row.get(5).map_err(storage_err)?,
+            volume: row.get(6).map_err(storage_err)?,
+            quote_volume: row.get(7).map_err(storage_err)?,
+            trade_count: positive_i64_to_u64(row.get::<_, i64>(8).map_err(storage_err)?),
+        });
+    }
+    Ok(result)
+}
+
+pub fn load_recorded_symbols_for_path(
+    db_path: &Path,
+    limit: usize,
+) -> Result<Vec<String>, StorageError> {
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection =
+        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
+            path: db_path.display().to_string(),
+            message: error.to_string(),
+        })?;
+    let mut statement = connection
+        .prepare(
+            "SELECT symbol
+             FROM (
+                SELECT symbol FROM raw_liquidation_events
+                UNION
+                SELECT symbol FROM raw_book_ticker
+                UNION
+                SELECT symbol FROM raw_agg_trades
+                UNION
+                SELECT symbol FROM raw_klines
+                UNION
+                SELECT instrument AS symbol FROM backtest_runs
+             )
+             ORDER BY symbol ASC
+             LIMIT ?",
+        )
+        .map_err(storage_err)?;
+    let mut rows = statement
+        .query(params![limit as i64])
+        .map_err(storage_err)?;
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().map_err(storage_err)? {
+        result.push(row.get(0).map_err(storage_err)?);
     }
     Ok(result)
 }
@@ -314,7 +423,9 @@ pub fn load_backtest_run_summaries(
              LIMIT ?",
         )
         .map_err(storage_err)?;
-    let mut rows = statement.query(params![limit as i64]).map_err(storage_err)?;
+    let mut rows = statement
+        .query(params![limit as i64])
+        .map_err(storage_err)?;
     let mut result = Vec::new();
     while let Some(row) = rows.next().map_err(storage_err)? {
         let mode_raw: String = row.get(2).map_err(storage_err)?;
@@ -386,14 +497,16 @@ pub fn load_backtest_report(
         template: parse_template(&template_raw)?,
         instrument: row.get(3).map_err(storage_err)?,
         mode: parse_mode(&mode_raw)?,
-        from: chrono::NaiveDate::parse_from_str(&from_raw, "%Y-%m-%d")
-            .map_err(|error| StorageError::WriteFailedWithContext {
+        from: chrono::NaiveDate::parse_from_str(&from_raw, "%Y-%m-%d").map_err(|error| {
+            StorageError::WriteFailedWithContext {
                 message: error.to_string(),
-            })?,
-        to: chrono::NaiveDate::parse_from_str(&to_raw, "%Y-%m-%d")
-            .map_err(|error| StorageError::WriteFailedWithContext {
+            }
+        })?,
+        to: chrono::NaiveDate::parse_from_str(&to_raw, "%Y-%m-%d").map_err(|error| {
+            StorageError::WriteFailedWithContext {
                 message: error.to_string(),
-            })?,
+            }
+        })?,
         db_path: Path::new(&row.get::<_, String>(6).map_err(storage_err)?).to_path_buf(),
         dataset: BacktestDatasetSummary {
             mode: parse_mode(&mode_raw)?,
@@ -449,7 +562,9 @@ fn next_backtest_run_id(connection: &Connection) -> Result<i64, StorageError> {
     let mut statement = connection
         .prepare("SELECT COALESCE(MAX(run_id), 0) + 1 FROM backtest_runs")
         .map_err(storage_err)?;
-    statement.query_row([], |row| row.get(0)).map_err(storage_err)
+    statement
+        .query_row([], |row| row.get(0))
+        .map_err(storage_err)
 }
 
 fn insert_backtest_trade(
@@ -574,11 +689,12 @@ fn parse_timestamp_string(value: &str) -> Result<chrono::DateTime<chrono::Utc>, 
     if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
         return Ok(parsed.with_timezone(&chrono::Utc));
     }
-    let naive = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f").map_err(
-        |error| StorageError::WriteFailedWithContext {
-            message: error.to_string(),
-        },
-    )?;
+    let naive =
+        chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f").map_err(|error| {
+            StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            }
+        })?;
     Ok(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
         naive,
         chrono::Utc,

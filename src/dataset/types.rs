@@ -30,6 +30,19 @@ pub struct BookTickerRow {
     pub ask: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DerivedKlineRow {
+    pub open_time_ms: i64,
+    pub close_time_ms: i64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub quote_volume: f64,
+    pub trade_count: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BacktestDatasetSummary {
     pub mode: BinanceMode,
