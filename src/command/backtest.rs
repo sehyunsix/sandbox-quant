@@ -13,6 +13,11 @@ pub enum BacktestCommand {
         from: NaiveDate,
         to: NaiveDate,
     },
+    List,
+    ReportLatest,
+    ReportShow {
+        run_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +30,7 @@ pub enum BacktestShellInput {
 }
 
 pub fn backtest_help_text() -> &'static str {
-    "/run <template> <instrument> --from <YYYY-MM-DD> --to <YYYY-MM-DD>\n/mode <real|demo>\n/help\n/exit"
+    "/run <template> <instrument> --from <YYYY-MM-DD> --to <YYYY-MM-DD>\n/list\n/report latest\n/report show <run_id>\n/mode <real|demo>\n/help\n/exit"
 }
 
 pub fn parse_backtest_shell_input(line: &str) -> Result<BacktestShellInput, String> {
@@ -82,6 +87,23 @@ pub fn parse_backtest_command(args: &[String]) -> Result<BacktestCommand, String
                 to,
             })
         }
+        Some("list") => {
+            if args.len() == 1 {
+                Ok(BacktestCommand::List)
+            } else {
+                Err("usage: list".to_string())
+            }
+        }
+        Some("report") => match args.get(1).map(String::as_str) {
+            Some("latest") if args.len() == 2 => Ok(BacktestCommand::ReportLatest),
+            Some("show") if args.len() == 3 => {
+                let run_id = args[2]
+                    .parse::<i64>()
+                    .map_err(|_| format!("invalid run id: {}", args[2]))?;
+                Ok(BacktestCommand::ReportShow { run_id })
+            }
+            _ => Err("usage: report latest | report show <run_id>".to_string()),
+        },
         Some(other) => Err(format!("unsupported command: {other}")),
         None => Err("missing backtest command".to_string()),
     }
@@ -96,13 +118,15 @@ pub fn complete_backtest_input(line: &str) -> Vec<ShellCompletion> {
     if parts.is_empty() {
         return vec![
             completion("/run", "run a backtest over a date range"),
+            completion("/list", "list stored backtest runs"),
+            completion("/report", "show stored backtest reports"),
             completion("/mode", "switch dataset mode"),
             completion("/help", "show help"),
             completion("/exit", "exit"),
         ];
     }
     if parts.len() == 1 && !trailing_space {
-        return ["/run", "/mode", "/help", "/exit"]
+        return ["/run", "/list", "/report", "/mode", "/help", "/exit"]
             .into_iter()
             .filter(|item| item.trim_start_matches('/').starts_with(parts[0]))
             .map(|item| completion(item, ""))
@@ -124,6 +148,10 @@ pub fn complete_backtest_input(line: &str) -> Vec<ShellCompletion> {
                 )
             })
             .collect(),
+        Some("report") if parts.len() <= 2 => vec![
+            completion("/report latest", "show latest stored run"),
+            completion("/report show ", "show a stored run by id"),
+        ],
         _ => Vec::new(),
     }
 }

@@ -14,6 +14,22 @@ pub struct RecorderMetrics {
     pub top_agg_trade_symbols: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiquidationEventRow {
+    pub event_time_ms: i64,
+    pub force_side: String,
+    pub price: f64,
+    pub qty: f64,
+    pub notional: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BookTickerRow {
+    pub event_time_ms: i64,
+    pub bid: f64,
+    pub ask: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BacktestDatasetSummary {
     pub mode: BinanceMode,
@@ -24,4 +40,21 @@ pub struct BacktestDatasetSummary {
     pub book_ticker_events: u64,
     pub agg_trade_events: u64,
     pub derived_kline_1s_bars: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BacktestRunSummaryRow {
+    pub run_id: i64,
+    pub created_at: String,
+    pub mode: BinanceMode,
+    pub template: String,
+    pub instrument: String,
+    pub from: String,
+    pub to: String,
+    pub trigger_count: u64,
+    pub closed_trades: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub net_pnl: f64,
+    pub ending_equity: f64,
 }

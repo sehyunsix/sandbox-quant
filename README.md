@@ -3,7 +3,7 @@
 [![docs.rs](docs/assets/docsrs-badge.svg)](https://docs.rs/sandbox-quant)
 [![crates.io](docs/assets/cratesio-badge.svg)](https://crates.io/crates/sandbox-quant)
 
-Exchange-truth trading core for Binance Spot and Futures.
+Exchange-truth trading core for Binance Spot and Futures, with separate operator, recorder, and backtest terminals.
 
 ![sandbox-quant shell startup](docs/assets/shell-startup.png)
 
@@ -13,6 +13,8 @@ The current codebase is a reset `v1` architecture focused on:
 - typed execution commands
 - safe close primitives
 - Binance adapter with signed HTTP transport
+- foreground market-data recorder
+- dataset-backed backtest terminal
 - UI-independent core testing
 
 The old strategy-heavy terminal dashboard described in earlier revisions is no longer the active implementation.
@@ -25,16 +27,19 @@ Implemented today:
 - `close-all`
 - `close-symbol <instrument>`
 - `set-target-exposure <instrument> <target>`
+- strategy watch start/list/show/stop in the operator terminal
+- separate `sandbox-quant-recorder` terminal for market data collection
+- separate `sandbox-quant-backtest` terminal for dataset inspection/backtest runs
 - Binance signed REST transport
 - runtime event logging
 - CLI summaries for refresh and execution results
 
 Not implemented as first-class runtime features yet:
 
-- strategy engine
-- auto-trading loop
-- persistent analytics pipeline
-- websocket-driven live market loop
+- automated strategy execution engine
+- liquidation trigger evaluator for live trading
+- full historical replay engine beyond dataset summary
+- detached recorder supervision model
 
 Legacy strategy/UI documents are archived under `docs/archive/legacy`.
 
@@ -43,13 +48,20 @@ Legacy strategy/UI documents are archived under `docs/archive/legacy`.
 Top-level modules:
 
 - `src/app`
+- `src/backtest_app`
+- `src/command`
+- `src/dataset`
 - `src/domain`
 - `src/error`
 - `src/exchange`
 - `src/execution`
 - `src/market_data`
 - `src/portfolio`
+- `src/record`
+- `src/recorder_app`
 - `src/storage`
+- `src/terminal`
+- `src/ui`
 
 Core rules:
 
@@ -57,9 +69,12 @@ Core rules:
 - local storage is not authoritative trading state
 - canonical position representation is `signed_qty`
 - execution is command-driven
+- recorder terminal owns live market-data ingestion in-process
+- strategy logic may be shared between operator and backtest, but it must not depend directly on DuckDB
 - tests live in `tests/`
 
 The design rationale is documented in [0056-v1-reset-exchange-truth-architecture.md](docs/rfcs/0056-v1-reset-exchange-truth-architecture.md).
+Recorder ownership is documented in [0058-recorder-foreground-terminal-semantics.md](docs/rfcs/0058-recorder-foreground-terminal-semantics.md) and [0059-recorder-single-owner-runtime.md](docs/rfcs/0059-recorder-single-owner-runtime.md).
 
 ## Environment
 
@@ -84,30 +99,50 @@ BINANCE_OPTIONS_BASE_URL=https://eapi.binance.com
 
 The runtime reads demo and real credentials separately based on `BINANCE_MODE` and when using `/mode real|demo`. The legacy shared key names are still accepted as a fallback. The default runtime mode is `demo`. Optional base URLs are useful for explicit testnet or custom routing.
 
+## Binaries
+
+- `sandbox-quant`
+  - operator terminal
+  - manual execution and strategy watch management
+- `sandbox-quant-recorder`
+  - foreground market-data recorder terminal
+  - `/start`, `/status`, `/stop`, `/mode`
+- `sandbox-quant-backtest`
+  - dataset consumer terminal
+  - `/run`, `/mode`
+
+All three binaries share the same terminal UX style, but lifecycle ownership is separate.
+
 ## Running
+
+Operator shell:
+
+```bash
+cargo run --bin sandbox-quant
+```
 
 Refresh authoritative state:
 
 ```bash
-cargo run -- refresh
+cargo run --bin sandbox-quant -- refresh
 ```
 
 Close all currently open positions:
 
 ```bash
-cargo run -- close-all
+cargo run --bin sandbox-quant -- close-all
 ```
 
 Close one symbol:
 
 ```bash
-cargo run -- close-symbol BTCUSDT
+cargo run --bin sandbox-quant -- close-symbol BTCUSDT
 ```
 
 Set target exposure:
 
 ```bash
-cargo run -- set-target-exposure BTCUSDT 0.25
+cargo run --bin sandbox-quant -- set-target-exposure BTCUSDT 0.25
 ```
 
 `target exposure` must be in `-1.0..=1.0`.
@@ -115,10 +150,45 @@ cargo run -- set-target-exposure BTCUSDT 0.25
 Submit an options limit order:
 
 ```bash
-cargo run -- option-order BTC-260327-200000-C buy 0.01 5
+cargo run --bin sandbox-quant -- option-order BTC-260327-200000-C buy 0.01 5
 ```
 
 Options orders are handled as a separate workflow. They appear in portfolio positions and open orders, but they are not integrated into `set-target-exposure`.
+
+Recorder terminal:
+
+```bash
+cargo run --bin sandbox-quant-recorder -- --mode demo
+```
+
+Then inside the recorder terminal:
+
+```text
+/start BTCUSDT
+/status
+/stop
+```
+
+Backtest terminal:
+
+```bash
+cargo run --bin sandbox-quant-backtest -- --mode demo
+```
+
+Or one-shot dataset run:
+
+```bash
+target/debug/sandbox-quant-backtest run liquidation-breakdown-short BTCUSDT --from 2026-03-13 --to 2026-03-13 --mode demo --base-dir var
+```
+
+Recorder data is stored by default under:
+
+```text
+var/market-v2-demo.duckdb
+var/market-v2-real.duckdb
+```
+
+`demo` and `real` here refer to account mode metadata. Public market-data streams currently use Binance public futures streams for both modes.
 
 ## Output
 
@@ -199,3 +269,4 @@ Automation outputs:
 - `set-target-exposure` refreshes authoritative portfolio state before planning and can open from flat if the exchange symbol resolves.
 - execution and refresh flows are tested without any UI dependency.
 - README examples reflect the current runtime surface, not the removed legacy system.
+- recorder terminal live status is in-process worker truth, not a stale external status file.

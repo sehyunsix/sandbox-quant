@@ -65,6 +65,56 @@ CREATE TABLE IF NOT EXISTS recorder_checkpoints (
   last_event_time TIMESTAMP,
   last_updated_at TIMESTAMP NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS backtest_runs (
+  run_id BIGINT PRIMARY KEY,
+  created_at TIMESTAMP NOT NULL,
+  mode VARCHAR NOT NULL,
+  template VARCHAR NOT NULL,
+  instrument VARCHAR NOT NULL,
+  from_date DATE NOT NULL,
+  to_date DATE NOT NULL,
+  db_path VARCHAR NOT NULL,
+  liquidation_events BIGINT NOT NULL,
+  book_ticker_events BIGINT NOT NULL,
+  agg_trade_events BIGINT NOT NULL,
+  derived_kline_1s_bars BIGINT NOT NULL,
+  trigger_count BIGINT NOT NULL,
+  closed_trades BIGINT NOT NULL,
+  open_trades BIGINT NOT NULL,
+  wins BIGINT NOT NULL,
+  losses BIGINT NOT NULL,
+  skipped_triggers BIGINT NOT NULL,
+  starting_equity DOUBLE NOT NULL,
+  ending_equity DOUBLE NOT NULL,
+  net_pnl DOUBLE NOT NULL,
+  observed_win_rate DOUBLE NOT NULL,
+  average_net_pnl DOUBLE NOT NULL,
+  configured_expected_value DOUBLE NOT NULL,
+  risk_pct DOUBLE NOT NULL,
+  win_rate_assumption DOUBLE NOT NULL,
+  r_multiple DOUBLE NOT NULL,
+  max_entry_slippage_pct DOUBLE NOT NULL,
+  stop_distance_pct DOUBLE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS backtest_trades (
+  run_id BIGINT NOT NULL,
+  trade_id BIGINT NOT NULL,
+  trigger_time TIMESTAMP NOT NULL,
+  entry_time TIMESTAMP NOT NULL,
+  entry_price DOUBLE NOT NULL,
+  stop_price DOUBLE NOT NULL,
+  take_profit_price DOUBLE NOT NULL,
+  qty DOUBLE NOT NULL,
+  exit_time TIMESTAMP,
+  exit_price DOUBLE,
+  exit_reason VARCHAR,
+  gross_pnl DOUBLE,
+  fees DOUBLE,
+  net_pnl DOUBLE,
+  PRIMARY KEY (run_id, trade_id)
+);
 "#;
 
 pub fn init_schema_for_path(db_path: &Path) -> Result<(), StorageError> {

@@ -1,13 +1,17 @@
 use crate::app::bootstrap::BinanceMode;
+use crate::backtest_app::runner::{run_backtest_for_path, BacktestConfig};
 use crate::command::backtest::{
     backtest_help_text, complete_backtest_input, parse_backtest_shell_input, BacktestCommand,
     BacktestShellInput,
 };
-use crate::dataset::query::backtest_summary_for_path;
+use crate::dataset::query::{
+    load_backtest_report, load_backtest_run_summaries, persist_backtest_report,
+};
+use crate::dataset::schema::init_schema_for_path;
 use crate::record::coordination::RecorderCoordination;
 use crate::terminal::app::{TerminalApp, TerminalEvent, TerminalMode};
 use crate::terminal::completion::ShellCompletion;
-use crate::ui::backtest_output::render_backtest_run;
+use crate::ui::backtest_output::{render_backtest_run, render_backtest_run_list};
 
 pub struct BacktestTerminal {
     pub mode: BinanceMode,
@@ -69,16 +73,53 @@ impl TerminalApp for BacktestTerminal {
                     to,
                 } => {
                     let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
-                    let summary =
-                        backtest_summary_for_path(&db_path, self.mode, &instrument, from, to)
-                            .map_err(|error| error.to_string())?;
-                    Ok(TerminalEvent::Output(render_backtest_run(
+                    init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
+                    let report = run_backtest_for_path(
+                        &db_path,
+                        self.mode,
                         template,
                         &instrument,
-                        self.mode,
-                        &db_path,
-                        &summary,
-                    )))
+                        from,
+                        to,
+                        BacktestConfig::default(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    let run_id =
+                        persist_backtest_report(&db_path, &report).map_err(|error| error.to_string())?;
+                    let mut report = report;
+                    report.run_id = Some(run_id);
+                    Ok(TerminalEvent::Output(render_backtest_run(&report)))
+                }
+                BacktestCommand::List => {
+                    let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
+                    init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
+                    let runs =
+                        load_backtest_run_summaries(&db_path, 20).map_err(|error| error.to_string())?;
+                    Ok(TerminalEvent::Output(render_backtest_run_list(&runs)))
+                }
+                BacktestCommand::ReportLatest => {
+                    let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
+                    init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
+                    let report =
+                        load_backtest_report(&db_path, None).map_err(|error| error.to_string())?;
+                    if let Some(report) = report {
+                        Ok(TerminalEvent::Output(render_backtest_run(&report)))
+                    } else {
+                        Ok(TerminalEvent::Output("backtest report\nstate=missing".to_string()))
+                    }
+                }
+                BacktestCommand::ReportShow { run_id } => {
+                    let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
+                    init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
+                    let report = load_backtest_report(&db_path, Some(run_id))
+                        .map_err(|error| error.to_string())?;
+                    if let Some(report) = report {
+                        Ok(TerminalEvent::Output(render_backtest_run(&report)))
+                    } else {
+                        Ok(TerminalEvent::Output(format!(
+                            "backtest report\nrun_id={run_id}\nstate=missing"
+                        )))
+                    }
                 }
             },
             Err(error) => Err(error),
