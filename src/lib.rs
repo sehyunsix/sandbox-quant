@@ -1,5 +1,6 @@
 pub mod app;
 pub mod backtest_app;
+pub mod charting;
 pub mod collector_app;
 pub mod command;
 pub mod dataset;

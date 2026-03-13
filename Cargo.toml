@@ -18,7 +18,7 @@ exclude = [
 
 [features]
 default = []
-gui = ["dep:eframe"]
+gui = ["dep:eframe", "dep:plotters"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -47,6 +47,7 @@ duckdb = { version = "1.1.1", features = ["bundled"] }
 url = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 eframe = { version = "0.31", optional = true }
+plotters = { version = "0.3.7", optional = true, default-features = false, features = ["bitmap_backend", "chrono", "candlestick", "ttf", "line_series"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

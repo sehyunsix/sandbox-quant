@@ -10,25 +10,32 @@ use crate::error::storage_error::StorageError;
 use crate::record::coordination::RecorderCoordination;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinanceFuturesProduct {
+pub enum BinancePublicProduct {
+    Spot,
     Um,
     Cm,
 }
 
-impl BinanceFuturesProduct {
+impl BinancePublicProduct {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Spot => "spot",
             Self::Um => "um",
             Self::Cm => "cm",
         }
+    }
+
+    pub fn supports_liquidation(self) -> bool {
+        matches!(self, Self::Um | Self::Cm)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BinancePublicImportConfig {
-    pub product: BinanceFuturesProduct,
+    pub product: BinancePublicProduct,
     pub symbol: String,
-    pub date: NaiveDate,
+    pub from: NaiveDate,
+    pub to: NaiveDate,
     pub kline_interval: String,
     pub import_liquidation: bool,
     pub import_klines: bool,
@@ -39,6 +46,10 @@ pub struct BinancePublicImportConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinancePublicImportReport {
     pub db_path: String,
+    pub dates_requested: usize,
+    pub dates_with_imports: usize,
+    pub skipped_liquidation_dates: usize,
+    pub skipped_kline_dates: usize,
     pub liquidation_rows: usize,
     pub kline_rows: usize,
 }
@@ -62,55 +73,91 @@ pub fn import_binance_public_data(
 
     let mut liquidation_rows = 0usize;
     let mut kline_rows = 0usize;
+    let mut dates_with_imports = 0usize;
+    let mut skipped_liquidation_dates = 0usize;
+    let mut skipped_kline_dates = 0usize;
+    let dates = inclusive_dates(config.from, config.to);
 
-    if config.import_liquidation {
-        let url = liquidation_snapshot_url(config.product, &config.symbol, config.date);
-        let bytes = download_zip(&client, &url)?;
-        liquidation_rows = import_liquidation_snapshot_bytes(
-            &connection,
-            config.mode,
-            config.product,
-            &config.symbol,
-            bytes,
-        )?;
-    }
+    for date in &dates {
+        let mut imported_any = false;
 
-    if config.import_klines {
-        let url = kline_zip_url(
-            config.product,
-            &config.symbol,
-            &config.kline_interval,
-            config.date,
-        );
-        let bytes = download_zip(&client, &url)?;
-        kline_rows = import_kline_bytes(
-            &connection,
-            config.mode,
-            config.product,
-            &config.symbol,
-            &config.kline_interval,
-            bytes,
-        )?;
+        if config.import_liquidation {
+            if let Some(url) = liquidation_snapshot_url(config.product, &config.symbol, *date) {
+                if let Some(bytes) = download_zip_if_exists(&client, &url)? {
+                    liquidation_rows += import_liquidation_snapshot_bytes(
+                        &connection,
+                        config.mode,
+                        config.product,
+                        &config.symbol,
+                        bytes,
+                    )?;
+                    imported_any = true;
+                } else {
+                    skipped_liquidation_dates += 1;
+                }
+            } else {
+                skipped_liquidation_dates += 1;
+            }
+        }
+
+        if config.import_klines {
+            let url = kline_zip_url(
+                config.product,
+                &config.symbol,
+                &config.kline_interval,
+                *date,
+            );
+            if let Some(bytes) = download_zip_if_exists(&client, &url)? {
+                kline_rows += import_kline_bytes(
+                    &connection,
+                    config.mode,
+                    config.product,
+                    &config.symbol,
+                    &config.kline_interval,
+                    bytes,
+                )?;
+                imported_any = true;
+            } else {
+                skipped_kline_dates += 1;
+            }
+        }
+
+        if imported_any {
+            dates_with_imports += 1;
+        }
     }
 
     Ok(BinancePublicImportReport {
         db_path: db_path.display().to_string(),
+        dates_requested: dates.len(),
+        dates_with_imports,
+        skipped_liquidation_dates,
+        skipped_kline_dates,
         liquidation_rows,
         kline_rows,
     })
 }
 
-fn download_zip(client: &Client, url: &str) -> Result<Vec<u8>, StorageError> {
-    let response = client
-        .get(url)
-        .send()
-        .and_then(|response| response.error_for_status())
-        .map_err(|error| StorageError::WriteFailedWithContext {
-            message: error.to_string(),
-        })?;
+fn download_zip_if_exists(client: &Client, url: &str) -> Result<Option<Vec<u8>>, StorageError> {
+    let response =
+        client
+            .get(url)
+            .send()
+            .map_err(|error| StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            })?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let response =
+        response
+            .error_for_status()
+            .map_err(|error| StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            })?;
     response
         .bytes()
-        .map(|bytes| bytes.to_vec())
+        .map(|bytes| Some(bytes.to_vec()))
         .map_err(|error| StorageError::WriteFailedWithContext {
             message: error.to_string(),
         })
@@ -119,7 +166,7 @@ fn download_zip(client: &Client, url: &str) -> Result<Vec<u8>, StorageError> {
 fn import_liquidation_snapshot_bytes(
     connection: &Connection,
     mode: BinanceMode,
-    product: BinanceFuturesProduct,
+    product: BinancePublicProduct,
     symbol: &str,
     bytes: Vec<u8>,
 ) -> Result<usize, StorageError> {
@@ -134,7 +181,7 @@ fn import_liquidation_snapshot_bytes(
             continue;
         }
         let side = cols[1].trim().to_string();
-        let time_ms = parse_i64(&cols[0])?;
+        let time_ms = normalize_epoch_millis(parse_i64(&cols[0])?);
         let limit_price = parse_f64(&cols[5])?;
         let average_price = parse_f64(&cols[6]).unwrap_or(limit_price);
         let qty = parse_f64(&cols[9]).or_else(|_| parse_f64(&cols[8]))?;
@@ -178,7 +225,7 @@ fn import_liquidation_snapshot_bytes(
 fn import_kline_bytes(
     connection: &Connection,
     mode: BinanceMode,
-    product: BinanceFuturesProduct,
+    product: BinancePublicProduct,
     symbol: &str,
     interval: &str,
     bytes: Vec<u8>,
@@ -193,13 +240,13 @@ fn import_kline_bytes(
         if cols.len() < 11 {
             continue;
         }
-        let open_time_ms = parse_i64(&cols[0])?;
+        let open_time_ms = normalize_epoch_millis(parse_i64(&cols[0])?);
         let open = parse_f64(&cols[1])?;
         let high = parse_f64(&cols[2])?;
         let low = parse_f64(&cols[3])?;
         let close = parse_f64(&cols[4])?;
         let volume = parse_f64(&cols[5])?;
-        let close_time_ms = parse_i64(&cols[6])?;
+        let close_time_ms = normalize_epoch_millis(parse_i64(&cols[6])?);
         let quote_volume = parse_f64(&cols[7])?;
         let trade_count = parse_i64(&cols[8])?;
         let taker_buy_base_volume = parse_f64(&cols[9]).ok();
@@ -284,34 +331,59 @@ fn next_kline_id(connection: &Connection) -> Result<i64, StorageError> {
 }
 
 fn liquidation_snapshot_url(
-    product: BinanceFuturesProduct,
+    product: BinancePublicProduct,
     symbol: &str,
     date: NaiveDate,
-) -> String {
-    format!(
+) -> Option<String> {
+    if !product.supports_liquidation() {
+        return None;
+    }
+    Some(format!(
         "https://data.binance.vision/data/futures/{}/daily/liquidationSnapshot/{}/{}-liquidationSnapshot-{}.zip",
         product.as_str(),
         symbol,
         symbol,
         date.format("%Y-%m-%d")
-    )
+    ))
 }
 
 fn kline_zip_url(
-    product: BinanceFuturesProduct,
+    product: BinancePublicProduct,
     symbol: &str,
     interval: &str,
     date: NaiveDate,
 ) -> String {
-    format!(
-        "https://data.binance.vision/data/futures/{}/daily/klines/{}/{}/{}-{}-{}.zip",
-        product.as_str(),
-        symbol,
-        interval,
-        symbol,
-        interval,
-        date.format("%Y-%m-%d")
-    )
+    match product {
+        BinancePublicProduct::Spot => format!(
+            "https://data.binance.vision/data/spot/daily/klines/{}/{}/{}-{}-{}.zip",
+            symbol,
+            interval,
+            symbol,
+            interval,
+            date.format("%Y-%m-%d")
+        ),
+        BinancePublicProduct::Um | BinancePublicProduct::Cm => format!(
+            "https://data.binance.vision/data/futures/{}/daily/klines/{}/{}/{}-{}-{}.zip",
+            product.as_str(),
+            symbol,
+            interval,
+            symbol,
+            interval,
+            date.format("%Y-%m-%d")
+        ),
+    }
+}
+
+fn inclusive_dates(from: NaiveDate, to: NaiveDate) -> Vec<NaiveDate> {
+    let mut dates = Vec::new();
+    let mut current = from;
+    while current <= to {
+        dates.push(current);
+        current = current
+            .succ_opt()
+            .expect("date overflow while building import range");
+    }
+    dates
 }
 
 fn split_csv_line(line: &str) -> Vec<String> {
@@ -344,6 +416,14 @@ fn storage_err(error: duckdb::Error) -> StorageError {
     }
 }
 
+fn normalize_epoch_millis(value: i64) -> i64 {
+    if value >= 1_000_000_000_000_000 {
+        value / 1_000
+    } else {
+        value
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,12 +432,42 @@ mod tests {
     fn binance_public_urls_match_expected_layout() {
         let date = NaiveDate::from_ymd_opt(2023, 9, 29).unwrap();
         assert_eq!(
-            liquidation_snapshot_url(BinanceFuturesProduct::Cm, "ADAUSD_230929", date),
-            "https://data.binance.vision/data/futures/cm/daily/liquidationSnapshot/ADAUSD_230929/ADAUSD_230929-liquidationSnapshot-2023-09-29.zip"
+            liquidation_snapshot_url(BinancePublicProduct::Cm, "ADAUSD_230929", date),
+            Some(
+                "https://data.binance.vision/data/futures/cm/daily/liquidationSnapshot/ADAUSD_230929/ADAUSD_230929-liquidationSnapshot-2023-09-29.zip"
+                    .to_string()
+            )
         );
         assert_eq!(
-            kline_zip_url(BinanceFuturesProduct::Um, "BTCUSDT", "1m", date),
+            kline_zip_url(BinancePublicProduct::Um, "BTCUSDT", "1m", date),
             "https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/1m/BTCUSDT-1m-2023-09-29.zip"
         );
+        assert_eq!(
+            kline_zip_url(BinancePublicProduct::Spot, "BTCUSDT", "1d", date),
+            "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1d/BTCUSDT-1d-2023-09-29.zip"
+        );
+    }
+
+    #[test]
+    fn inclusive_dates_builds_closed_range() {
+        let from = NaiveDate::from_ymd_opt(2023, 7, 6).unwrap();
+        let to = NaiveDate::from_ymd_opt(2023, 7, 8).unwrap();
+        assert_eq!(
+            inclusive_dates(from, to),
+            vec![
+                NaiveDate::from_ymd_opt(2023, 7, 6).unwrap(),
+                NaiveDate::from_ymd_opt(2023, 7, 7).unwrap(),
+                NaiveDate::from_ymd_opt(2023, 7, 8).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_epoch_millis_handles_microseconds() {
+        assert_eq!(
+            normalize_epoch_millis(1_735_689_600_000_000),
+            1_735_689_600_000
+        );
+        assert_eq!(normalize_epoch_millis(1_735_689_600_000), 1_735_689_600_000);
     }
 }
