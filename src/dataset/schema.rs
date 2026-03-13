@@ -42,6 +42,26 @@ CREATE TABLE IF NOT EXISTS raw_agg_trades (
   is_buyer_maker BOOLEAN NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS raw_klines (
+  kline_id BIGINT,
+  mode VARCHAR NOT NULL,
+  product VARCHAR NOT NULL,
+  symbol VARCHAR NOT NULL,
+  interval VARCHAR NOT NULL,
+  open_time TIMESTAMP NOT NULL,
+  close_time TIMESTAMP NOT NULL,
+  open DOUBLE NOT NULL,
+  high DOUBLE NOT NULL,
+  low DOUBLE NOT NULL,
+  close DOUBLE NOT NULL,
+  volume DOUBLE NOT NULL,
+  quote_volume DOUBLE NOT NULL,
+  trade_count BIGINT NOT NULL,
+  taker_buy_base_volume DOUBLE,
+  taker_buy_quote_volume DOUBLE,
+  raw_payload VARCHAR NOT NULL
+);
+
 CREATE VIEW IF NOT EXISTS derived_kline_1s AS
 SELECT
   mode,

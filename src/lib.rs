@@ -1,11 +1,14 @@
 pub mod app;
 pub mod backtest_app;
+pub mod collector_app;
 pub mod command;
 pub mod dataset;
 pub mod domain;
 pub mod error;
 pub mod exchange;
 pub mod execution;
+#[cfg(feature = "gui")]
+pub mod gui;
 pub mod market_data;
 pub mod portfolio;
 pub mod record;
@@ -14,3 +17,4 @@ pub mod storage;
 pub mod strategy;
 pub mod terminal;
 pub mod ui;
+pub mod visualization;
