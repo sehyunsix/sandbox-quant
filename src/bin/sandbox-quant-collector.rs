@@ -1,9 +1,12 @@
 use chrono::NaiveDate;
+use duckdb::Connection;
 use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::collector_app::binance_public::{
     import_binance_public_data, BinancePublicImportConfig, BinancePublicImportReport,
     BinancePublicProduct,
 };
+use sandbox_quant::error::storage_error::StorageError;
+use sandbox_quant::record::coordination::RecorderCoordination;
 
 #[derive(Debug, Clone, PartialEq)]
 struct BatchImportConfig {
@@ -47,9 +50,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .join("\n")
             );
         }
+        Some("summary") => {
+            let (mode, base_dir) = parse_summary_args(&args[1..])?;
+            println!("{}", render_summary(mode, &base_dir)?);
+        }
         _ => {
             eprintln!(
-                "usage: sandbox-quant-collector binance-public import (--product <spot|um|cm> | --products <spot,um,cm>) (--symbol <symbol> | --symbols <a,b,c>) (--date <YYYY-MM-DD> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>) [--kline-interval <interval>] [--mode <demo|real>] [--base-dir <path>] [--skip-liquidation] [--skip-klines]"
+                "usage: sandbox-quant-collector binance-public import (--product <spot|um|cm> | --products <spot,um,cm>) (--symbol <symbol> | --symbols <a,b,c>) (--date <YYYY-MM-DD> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>) [--kline-interval <interval>] [--mode <demo|real>] [--base-dir <path>] [--skip-liquidation] [--skip-klines]\n       sandbox-quant-collector summary [--mode <demo|real>] [--base-dir <path>]"
             );
             std::process::exit(2);
         }
@@ -249,4 +256,111 @@ fn join_products(products: &[BinancePublicProduct]) -> String {
         .map(|product| product.as_str())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn parse_summary_args(
+    args: &[String],
+) -> Result<(BinanceMode, String), Box<dyn std::error::Error>> {
+    let mut mode = BinanceMode::Demo;
+    let mut base_dir = "var".to_string();
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--mode" => {
+                let value = args.get(index + 1).ok_or("missing value for --mode")?;
+                mode = match value.as_str() {
+                    "demo" => BinanceMode::Demo,
+                    "real" => BinanceMode::Real,
+                    _ => return Err(format!("unsupported mode: {value}").into()),
+                };
+                index += 2;
+            }
+            "--base-dir" => {
+                base_dir = args
+                    .get(index + 1)
+                    .ok_or("missing value for --base-dir")?
+                    .clone();
+                index += 2;
+            }
+            other => return Err(format!("unsupported arg: {other}").into()),
+        }
+    }
+    Ok((mode, base_dir))
+}
+
+fn render_summary(mode: BinanceMode, base_dir: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let db_path = RecorderCoordination::new(base_dir.to_string()).db_path(mode);
+    let connection =
+        Connection::open(&db_path).map_err(|error| StorageError::DatabaseInitFailed {
+            path: db_path.display().to_string(),
+            message: error.to_string(),
+        })?;
+
+    let mut lines = vec![
+        "collector summary".to_string(),
+        format!("mode={}", mode.as_str()),
+        format!("db_path={}", db_path.display()),
+    ];
+
+    let mut kline_statement = connection.prepare(
+        "SELECT product, symbol, interval, COUNT(*) AS row_count,
+                CAST(MIN(open_time) AS VARCHAR), CAST(MAX(close_time) AS VARCHAR)
+         FROM raw_klines
+         GROUP BY product, symbol, interval
+         ORDER BY product, symbol, interval",
+    )?;
+    let mut kline_rows = kline_statement.query([])?;
+    lines.push("klines".to_string());
+    let mut has_klines = false;
+    while let Some(row) = kline_rows.next()? {
+        has_klines = true;
+        let product: String = row.get(0)?;
+        let symbol: String = row.get(1)?;
+        let interval: String = row.get(2)?;
+        let row_count: i64 = row.get(3)?;
+        let min_time: Option<String> = row.get(4)?;
+        let max_time: Option<String> = row.get(5)?;
+        lines.push(format!(
+            "product={} symbol={} interval={} rows={} from={} to={}",
+            product,
+            symbol,
+            interval,
+            row_count,
+            min_time.unwrap_or_else(|| "n/a".to_string()),
+            max_time.unwrap_or_else(|| "n/a".to_string())
+        ));
+    }
+    if !has_klines {
+        lines.push("klines=none".to_string());
+    }
+
+    let mut liquidation_statement = connection.prepare(
+        "SELECT symbol, COUNT(*) AS row_count,
+                CAST(MIN(event_time) AS VARCHAR), CAST(MAX(event_time) AS VARCHAR)
+         FROM raw_liquidation_events
+         GROUP BY symbol
+         ORDER BY symbol",
+    )?;
+    let mut liquidation_rows = liquidation_statement.query([])?;
+    lines.push("liquidations".to_string());
+    let mut has_liquidations = false;
+    while let Some(row) = liquidation_rows.next()? {
+        has_liquidations = true;
+        let symbol: String = row.get(0)?;
+        let row_count: i64 = row.get(1)?;
+        let min_time: Option<String> = row.get(2)?;
+        let max_time: Option<String> = row.get(3)?;
+        lines.push(format!(
+            "symbol={} rows={} from={} to={}",
+            symbol,
+            row_count,
+            min_time.unwrap_or_else(|| "n/a".to_string()),
+            max_time.unwrap_or_else(|| "n/a".to_string())
+        ));
+    }
+    if !has_liquidations {
+        lines.push("liquidations=none".to_string());
+    }
+
+    Ok(lines.join("\n"))
 }
