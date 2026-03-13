@@ -36,7 +36,7 @@ fn render_strategy_output(
         StrategyCommand::Templates => {
             let mut lines = vec![
                 "strategy templates".to_string(),
-                format!("mode={}", format_mode(mode)),
+                format!("mode={}", mode.as_str()),
                 "templates=1".to_string(),
                 "template=liquidation-breakdown-short".to_string(),
             ];
@@ -53,7 +53,7 @@ fn render_strategy_output(
             let watches = store.active_watches(mode);
             let mut lines = vec![
                 "strategy watches".to_string(),
-                format!("mode={}", format_mode(mode)),
+                format!("mode={}", mode.as_str()),
                 format!("active={}", watches.len()),
             ];
             if watches.is_empty() {
@@ -76,7 +76,7 @@ fn render_strategy_output(
             let history = store.history(mode);
             let mut lines = vec![
                 "strategy history".to_string(),
-                format!("mode={}", format_mode(mode)),
+                format!("mode={}", mode.as_str()),
                 format!("runs={}", history.len()),
             ];
             if history.is_empty() {
@@ -99,12 +99,12 @@ fn render_strategy_output(
             let Some(watch) = store.get(mode, *watch_id) else {
                 return format!(
                     "strategy watch\nmode={}\nwatch_id={watch_id}\nstate=missing",
-                    format_mode(mode)
+                    mode.as_str()
                 );
             };
             let mut lines = vec![
                 "strategy watch".to_string(),
-                format!("mode={}", format_mode(mode)),
+                format!("mode={}", mode.as_str()),
                 format!("watch_id={}", watch.id),
                 format!("template={}", watch.template.slug()),
                 format!("instrument={}", watch.instrument.0),
@@ -161,13 +161,6 @@ fn render_strategy_output(
                 last_event.payload["state"].as_str().unwrap_or("unknown"),
             )
         }
-    }
-}
-
-fn format_mode(mode: BinanceMode) -> &'static str {
-    match mode {
-        BinanceMode::Real => "real",
-        BinanceMode::Demo => "demo",
     }
 }
 

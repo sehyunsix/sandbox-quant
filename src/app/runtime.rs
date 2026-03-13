@@ -163,7 +163,7 @@ impl AppRuntime {
                         instrument.clone(),
                         config.clone(),
                     )?;
-                    app.record_manager.sync_strategy_symbols(
+                    app.recorder_coordination.sync_strategy_symbols(
                         app.mode,
                         active_strategy_symbols(&app.strategy_store, app.mode),
                     )?;
@@ -186,7 +186,7 @@ impl AppRuntime {
                 }
                 StrategyCommand::Stop { watch_id } => {
                     let watch = app.strategy_store.stop_watch(app.mode, watch_id)?;
-                    app.record_manager.sync_strategy_symbols(
+                    app.recorder_coordination.sync_strategy_symbols(
                         app.mode,
                         active_strategy_symbols(&app.strategy_store, app.mode),
                     )?;

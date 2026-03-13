@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use duckdb::{params, Connection};
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -19,7 +19,7 @@ use crate::dataset::query::{backtest_summary_for_path, metrics_for_path};
 use crate::dataset::schema::init_schema_for_path;
 use crate::dataset::types::{BacktestDatasetSummary, RecorderMetrics};
 use crate::error::storage_error::StorageError;
-use crate::record::manager::format_mode;
+use crate::record::coordination::RecorderCoordination;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecorderState {
@@ -34,6 +34,10 @@ impl RecorderState {
             Self::Stopped => "stopped",
         }
     }
+
+    pub fn is_running(self) -> bool {
+        self == Self::Running
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +51,8 @@ pub struct RecorderStatus {
     pub strategy_symbols: Vec<String>,
     pub watched_symbols: Vec<String>,
     pub worker_alive: bool,
+    pub heartbeat_age_sec: i64,
+    pub last_error: Option<String>,
     pub metrics: RecorderMetrics,
 }
 
@@ -74,13 +80,33 @@ impl RecorderStatus {
             strategy_symbols,
             watched_symbols,
             worker_alive: true,
+            heartbeat_age_sec: 0,
+            last_error: None,
             metrics: RecorderMetrics::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WorkerSnapshot {
+    updated_at: DateTime<Utc>,
+    metrics: RecorderMetrics,
+    last_error: Option<String>,
+}
+
+impl WorkerSnapshot {
+    fn new(metrics: RecorderMetrics) -> Self {
+        Self {
+            updated_at: Utc::now(),
+            metrics,
+            last_error: None,
         }
     }
 }
 
 struct ModeWorker {
     stop_flag: Arc<AtomicBool>,
+    snapshot: Arc<Mutex<WorkerSnapshot>>,
     pub(crate) handle: JoinHandle<()>,
 }
 
@@ -134,7 +160,7 @@ impl MarketDataRecorder {
             .is_some_and(|status| status.state == RecorderState::Running)
         {
             return Err(StorageError::RecorderAlreadyRunning {
-                mode: format_mode(mode).to_string(),
+                mode: mode.as_str().to_string(),
             });
         }
 
@@ -151,8 +177,11 @@ impl MarketDataRecorder {
             strategy_symbols,
             watched_symbols.clone(),
         );
+        let initial_metrics = self.load_metrics(&db_path).unwrap_or_default();
+        let mut status = status;
+        status.metrics = initial_metrics.clone();
         if self.network_enabled {
-            self.spawn_worker(mode, db_path, watched_symbols)?;
+            self.spawn_worker(mode, db_path, watched_symbols, initial_metrics)?;
         }
         self.statuses.insert(mode, status.clone());
         Ok(status)
@@ -169,8 +198,20 @@ impl MarketDataRecorder {
                 Vec::new(),
             )
         });
-        status.metrics = self.load_metrics(&status.db_path).unwrap_or_default();
-        status.worker_alive = self.worker_alive(mode);
+        if let Some(worker) = self.workers.get(&mode) {
+            let worker_alive = !worker.handle.is_finished();
+            status.worker_alive = worker_alive;
+            if let Ok(snapshot) = worker.snapshot.lock() {
+                status.updated_at = snapshot.updated_at;
+                status.heartbeat_age_sec = (Utc::now() - snapshot.updated_at).num_seconds();
+                status.metrics = snapshot.metrics.clone();
+                status.last_error = snapshot.last_error.clone();
+            }
+        } else {
+            status.worker_alive = false;
+            status.heartbeat_age_sec = (Utc::now() - status.updated_at).num_seconds();
+            status.metrics = self.load_metrics(&status.db_path).unwrap_or_default();
+        }
         status
     }
 
@@ -183,6 +224,9 @@ impl MarketDataRecorder {
         let Some(status) = self.statuses.get_mut(&mode) else {
             return Ok(());
         };
+        if status.strategy_symbols == strategy_symbols {
+            return Ok(());
+        }
         status.strategy_symbols = strategy_symbols.clone();
         status.watched_symbols =
             merge_symbol_sets(status.manual_symbols.clone(), strategy_symbols.clone());
@@ -206,6 +250,9 @@ impl MarketDataRecorder {
         let Some(status) = self.statuses.get_mut(&mode) else {
             return Ok(());
         };
+        if status.manual_symbols == manual_symbols {
+            return Ok(());
+        }
         status.manual_symbols = manual_symbols.clone();
         status.watched_symbols =
             merge_symbol_sets(manual_symbols.clone(), status.strategy_symbols.clone());
@@ -223,16 +270,21 @@ impl MarketDataRecorder {
     pub fn stop(&mut self, mode: BinanceMode) -> Result<RecorderStatus, StorageError> {
         let Some(existing) = self.statuses.get_mut(&mode) else {
             return Err(StorageError::RecorderNotRunning {
-                mode: format_mode(mode).to_string(),
+                mode: mode.as_str().to_string(),
             });
         };
         if existing.state != RecorderState::Running {
             return Err(StorageError::RecorderNotRunning {
-                mode: format_mode(mode).to_string(),
+                mode: mode.as_str().to_string(),
             });
         }
 
         if let Some(worker) = self.workers.remove(&mode) {
+            if let Ok(snapshot) = worker.snapshot.lock() {
+                existing.updated_at = snapshot.updated_at;
+                existing.metrics = snapshot.metrics.clone();
+                existing.last_error = snapshot.last_error.clone();
+            }
             worker.stop_flag.store(true, Ordering::Relaxed);
         }
 
@@ -281,11 +333,12 @@ impl MarketDataRecorder {
         mode: BinanceMode,
         watched_symbols: Vec<String>,
     ) -> Result<(), StorageError> {
+        let initial_metrics = self.status(mode).metrics.clone();
         if let Some(worker) = self.workers.remove(&mode) {
             worker.stop_flag.store(true, Ordering::Relaxed);
         }
         let db_path = self.db_path(mode);
-        self.spawn_worker(mode, db_path, watched_symbols)
+        self.spawn_worker(mode, db_path, watched_symbols, initial_metrics)
     }
 
     fn spawn_worker(
@@ -293,27 +346,48 @@ impl MarketDataRecorder {
         mode: BinanceMode,
         db_path: PathBuf,
         watched_symbols: Vec<String>,
+        initial_metrics: RecorderMetrics,
     ) -> Result<(), StorageError> {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let worker_stop_flag = stop_flag.clone();
+        let snapshot = Arc::new(Mutex::new(WorkerSnapshot::new(initial_metrics)));
+        let worker_snapshot = snapshot.clone();
         let handle = std::thread::Builder::new()
-            .name(format!("market-recorder-{}", format_mode(mode)))
+            .name(format!("market-recorder-{}", mode.as_str()))
             .spawn(move || {
                 let _ = rustls::crypto::ring::default_provider().install_default();
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build();
                 let Ok(runtime) = runtime else {
+                    record_worker_error(
+                        &worker_snapshot,
+                        "failed to initialize tokio runtime".to_string(),
+                    );
                     return;
                 };
                 runtime.block_on(async move {
-                    run_market_data_worker(mode, db_path, watched_symbols, worker_stop_flag).await;
+                    run_market_data_worker(
+                        mode,
+                        db_path,
+                        watched_symbols,
+                        worker_stop_flag,
+                        worker_snapshot,
+                    )
+                    .await;
                 });
             })
             .map_err(|error| StorageError::WriteFailedWithContext {
                 message: error.to_string(),
             })?;
-        self.workers.insert(mode, ModeWorker { stop_flag, handle });
+        self.workers.insert(
+            mode,
+            ModeWorker {
+                stop_flag,
+                snapshot,
+                handle,
+            },
+        );
         Ok(())
     }
 
@@ -322,8 +396,7 @@ impl MarketDataRecorder {
     }
 
     fn db_path(&self, mode: BinanceMode) -> PathBuf {
-        self.base_dir
-            .join(format!("market-{}.duckdb", format_mode(mode)))
+        RecorderCoordination::new(self.base_dir.clone()).db_path(mode)
     }
 }
 
@@ -340,12 +413,19 @@ async fn run_market_data_worker(
     db_path: PathBuf,
     watched_symbols: Vec<String>,
     stop_flag: Arc<AtomicBool>,
+    snapshot: Arc<Mutex<WorkerSnapshot>>,
 ) {
     let Ok(connection) = Connection::open(&db_path) else {
+        record_worker_error(
+            &snapshot,
+            format!("failed to open duckdb at {}", db_path.display()),
+        );
         return;
     };
+    let mut agg_trade_bar_seconds = BTreeMap::new();
 
     loop {
+        touch_worker_snapshot(&snapshot);
         if stop_flag.load(Ordering::Relaxed) {
             break;
         }
@@ -357,9 +437,10 @@ async fn run_market_data_worker(
         let mut force_stream = match force_stream {
             Ok((stream, _)) => stream,
             Err(error) => {
+                record_worker_error(&snapshot, format!("forceOrder connect failed: {error}"));
                 eprintln!(
                     "market recorder: failed to connect forceOrder stream mode={} error={}",
-                    format_mode(mode),
+                    mode.as_str(),
                     error
                 );
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -371,9 +452,10 @@ async fn run_market_data_worker(
             Some(url) => match connect_async(url).await {
                 Ok((stream, _)) => Some(stream),
                 Err(error) => {
+                    record_worker_error(&snapshot, format!("symbol stream connect failed: {error}"));
                     eprintln!(
                         "market recorder: failed to connect symbol streams mode={} symbols={} error={}",
-                        format_mode(mode),
+                        mode.as_str(),
                         watched_symbols.join(","),
                         error
                     );
@@ -397,26 +479,30 @@ async fn run_market_data_worker(
                     match message {
                         Some(Ok(message)) => {
                             if let Err(error) = handle_force_order_message(&connection, mode, &mut liquidation_seq, message) {
+                                record_worker_error(&snapshot, error.to_string());
                                 eprintln!(
                                     "market recorder: forceOrder stream handling failed mode={} error={}",
-                                    format_mode(mode),
+                                    mode.as_str(),
                                     error
                                 );
                                 break;
                             }
+                            record_force_order_event(&snapshot, &connection);
                         }
                         Some(Err(error)) => {
+                            record_worker_error(&snapshot, format!("forceOrder stream disconnected: {error}"));
                             eprintln!(
                                 "market recorder: forceOrder stream disconnected mode={} error={}",
-                                format_mode(mode),
+                                mode.as_str(),
                                 error
                             );
                             break
                         }
                         None => {
+                            record_worker_error(&snapshot, "forceOrder stream disconnected: eof".to_string());
                             eprintln!(
                                 "market recorder: forceOrder stream disconnected mode={} error=eof",
-                                format_mode(mode)
+                                mode.as_str()
                             );
                             break
                         }
@@ -425,35 +511,48 @@ async fn run_market_data_worker(
                 message = next_symbol_message(&mut symbol_stream), if symbol_stream.is_some() => {
                     match message {
                         Some(Ok(message)) => {
-                            if let Err(error) = handle_symbol_message(&connection, mode, &mut ticker_seq, &mut trade_seq, message) {
+                            if let Err(error) = handle_symbol_message(
+                                &connection,
+                                mode,
+                                &mut ticker_seq,
+                                &mut trade_seq,
+                                &mut agg_trade_bar_seconds,
+                                &snapshot,
+                                message,
+                            ) {
+                                record_worker_error(&snapshot, error.to_string());
                                 eprintln!(
                                     "market recorder: symbol stream handling failed mode={} error={}",
-                                    format_mode(mode),
+                                    mode.as_str(),
                                     error
                                 );
                                 break;
                             }
                         }
                         Some(Err(error)) => {
+                            record_worker_error(&snapshot, format!("symbol stream disconnected: {error}"));
                             eprintln!(
                                 "market recorder: symbol stream disconnected mode={} symbols={} error={}",
-                                format_mode(mode),
+                                mode.as_str(),
                                 watched_symbols.join(","),
                                 error
                             );
                             break
                         }
                         None => {
+                            record_worker_error(&snapshot, "symbol stream disconnected: eof".to_string());
                             eprintln!(
                                 "market recorder: symbol stream disconnected mode={} symbols={} error=eof",
-                                format_mode(mode),
+                                mode.as_str(),
                                 watched_symbols.join(",")
                             );
                             break
                         }
                     }
                 }
-                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                    touch_worker_snapshot(&snapshot);
+                }
             }
         }
 
@@ -506,11 +605,11 @@ fn handle_force_order_message(
              ) VALUES (
                 ?, ?, ?, to_timestamp(? / 1000.0), to_timestamp(? / 1000.0), ?, ?, ?, ?, ?
              )",
-            params![
-                *sequence,
-                format_mode(mode),
-                order.symbol,
-                parsed.event_time,
+                params![
+                    *sequence,
+                    mode.as_str(),
+                    order.symbol,
+                    parsed.event_time,
                 receive_time_ms,
                 order.side,
                 order.price,
@@ -530,6 +629,8 @@ fn handle_symbol_message(
     mode: BinanceMode,
     ticker_sequence: &mut i64,
     trade_sequence: &mut i64,
+    agg_trade_bar_seconds: &mut BTreeMap<String, i64>,
+    snapshot: &Arc<Mutex<WorkerSnapshot>>,
     message: Message,
 ) -> Result<(), StorageError> {
     let payload = match message {
@@ -577,7 +678,7 @@ fn handle_symbol_message(
                  )",
                 params![
                     *ticker_sequence,
-                    format_mode(mode),
+                    mode.as_str(),
                     symbol,
                     event_time,
                     receive_time_ms,
@@ -590,6 +691,7 @@ fn handle_symbol_message(
             .map_err(|error| StorageError::WriteFailedWithContext {
                 message: error.to_string(),
             })?;
+        record_book_ticker_event(snapshot, &symbol, event_time);
     } else if parsed.data.event_type == "aggTrade" {
         let Some(symbol) = parsed.data.symbol else {
             return Ok(());
@@ -616,7 +718,7 @@ fn handle_symbol_message(
                  )",
                 params![
                     *trade_sequence,
-                    format_mode(mode),
+                    mode.as_str(),
                     symbol,
                     event_time,
                     receive_time_ms,
@@ -628,12 +730,14 @@ fn handle_symbol_message(
             .map_err(|error| StorageError::WriteFailedWithContext {
                 message: error.to_string(),
             })?;
+        record_agg_trade_event(snapshot, &symbol, event_time, agg_trade_bar_seconds);
     }
 
     Ok(())
 }
 
-fn market_stream_base_url(_mode: BinanceMode) -> &'static str {
+fn market_stream_base_url(mode: BinanceMode) -> &'static str {
+    let _ = mode;
     "wss://fstream.binance.com"
 }
 
@@ -769,7 +873,146 @@ where
             .ok_or_else(|| serde::de::Error::custom("invalid numeric value"))
             .map(Some),
         Some(other) => Err(serde::de::Error::custom(format!(
-            "expected string or number, got {other}"
-        ))),
+        "expected string or number, got {other}"
+    ))),
     }
+}
+
+fn touch_worker_snapshot(snapshot: &Arc<Mutex<WorkerSnapshot>>) {
+    if let Ok(mut snapshot) = snapshot.lock() {
+        snapshot.updated_at = Utc::now();
+    }
+}
+
+fn record_worker_error(snapshot: &Arc<Mutex<WorkerSnapshot>>, error: String) {
+    if let Ok(mut snapshot) = snapshot.lock() {
+        snapshot.updated_at = Utc::now();
+        snapshot.last_error = Some(error);
+    }
+}
+
+fn record_force_order_event(snapshot: &Arc<Mutex<WorkerSnapshot>>, connection: &Connection) {
+    if let Ok(mut snapshot) = snapshot.lock() {
+        snapshot.updated_at = Utc::now();
+        snapshot.last_error = None;
+        snapshot.metrics.liquidation_events += 1;
+        snapshot.metrics.last_liquidation_event_time =
+            query_latest_timestamp(connection, "raw_liquidation_events", "event_time").ok().flatten();
+        snapshot.metrics.top_liquidation_symbols =
+            query_top_symbols(connection, "raw_liquidation_events").unwrap_or_default();
+    }
+}
+
+fn record_book_ticker_event(snapshot: &Arc<Mutex<WorkerSnapshot>>, symbol: &str, event_time_ms: i64) {
+    if let Ok(mut snapshot) = snapshot.lock() {
+        snapshot.updated_at = Utc::now();
+        snapshot.last_error = None;
+        snapshot.metrics.book_ticker_events += 1;
+        snapshot.metrics.last_book_ticker_event_time = timestamp_string(event_time_ms);
+        increment_top_symbol(&mut snapshot.metrics.top_book_ticker_symbols, symbol);
+    }
+}
+
+fn record_agg_trade_event(
+    snapshot: &Arc<Mutex<WorkerSnapshot>>,
+    symbol: &str,
+    event_time_ms: i64,
+    agg_trade_bar_seconds: &mut BTreeMap<String, i64>,
+) {
+    if let Ok(mut snapshot) = snapshot.lock() {
+        snapshot.updated_at = Utc::now();
+        snapshot.last_error = None;
+        snapshot.metrics.agg_trade_events += 1;
+        snapshot.metrics.last_agg_trade_event_time = timestamp_string(event_time_ms);
+        increment_top_symbol(&mut snapshot.metrics.top_agg_trade_symbols, symbol);
+        let bar_second = event_time_ms / 1_000;
+        let should_increment_bar = agg_trade_bar_seconds
+            .insert(symbol.to_string(), bar_second)
+            .map(|previous| previous != bar_second)
+            .unwrap_or(true);
+        if should_increment_bar {
+            snapshot.metrics.derived_kline_1s_bars += 1;
+        }
+    }
+}
+
+fn increment_top_symbol(top_symbols: &mut Vec<String>, symbol: &str) {
+    let mut counts = top_symbols
+        .iter()
+        .filter_map(|entry| {
+            let (symbol, count) = entry.split_once(':')?;
+            let count = count.parse::<u64>().ok()?;
+            Some((symbol.to_string(), count))
+        })
+        .collect::<BTreeMap<_, _>>();
+    *counts.entry(symbol.to_string()).or_default() += 1;
+    let mut sorted = counts.into_iter().collect::<Vec<_>>();
+    sorted.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    *top_symbols = sorted
+        .into_iter()
+        .take(5)
+        .map(|(symbol, count)| format!("{symbol}:{count}"))
+        .collect();
+}
+
+fn timestamp_string(event_time_ms: i64) -> Option<String> {
+    Utc.timestamp_millis_opt(event_time_ms)
+        .single()
+        .map(|value| value.naive_utc().format("%Y-%m-%d %H:%M:%S%.3f").to_string())
+}
+
+fn query_latest_timestamp(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<Option<String>, StorageError> {
+    let sql = format!("SELECT CAST(MAX({column}) AS VARCHAR) FROM {table}");
+    let mut statement =
+        connection
+            .prepare(&sql)
+            .map_err(|error| StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            })?;
+    statement
+        .query_row([], |row| row.get(0))
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })
+}
+
+fn query_top_symbols(connection: &Connection, table: &str) -> Result<Vec<String>, StorageError> {
+    let sql = format!(
+        "SELECT symbol, COUNT(*) AS row_count FROM {table} GROUP BY symbol ORDER BY row_count DESC, symbol ASC LIMIT 5"
+    );
+    let mut statement =
+        connection
+            .prepare(&sql)
+            .map_err(|error| StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            })?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })?;
+    let mut result = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })?
+    {
+        let symbol: String = row
+            .get(0)
+            .map_err(|error| StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            })?;
+        let row_count: i64 = row
+            .get(1)
+            .map_err(|error| StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            })?;
+        result.push(format!("{symbol}:{row_count}"));
+    }
+    Ok(result)
 }

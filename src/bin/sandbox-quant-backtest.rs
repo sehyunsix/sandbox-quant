@@ -3,7 +3,7 @@ use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::app::cli::normalize_instrument_symbol;
 use sandbox_quant::backtest_app::terminal::BacktestTerminal;
 use sandbox_quant::dataset::query::backtest_summary_for_path;
-use sandbox_quant::record::manager::format_mode;
+use sandbox_quant::record::coordination::RecorderCoordination;
 use sandbox_quant::strategy::model::StrategyTemplate;
 use sandbox_quant::terminal::loop_shell::run_terminal;
 
@@ -60,15 +60,14 @@ fn parse_terminal_args(
 
 fn run_backtest(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let (template, instrument, from, to, mode, base_dir) = parse_args(args)?;
-    let db_path =
-        std::path::Path::new(&base_dir).join(format!("market-{}.duckdb", format_mode(mode)));
+    let db_path = RecorderCoordination::new(base_dir.clone()).db_path(mode);
     let summary = backtest_summary_for_path(&db_path, mode, &instrument, from, to)?;
 
     println!(
         "{}",
         [
             "backtest run".to_string(),
-            format!("mode={}", format_mode(mode)),
+            format!("mode={}", mode.as_str()),
             format!("template={}", template.slug()),
             format!("instrument={}", instrument),
             format!("from={}", from),

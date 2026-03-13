@@ -1,6 +1,5 @@
 use crate::app::bootstrap::BinanceMode;
 use crate::dataset::types::BacktestDatasetSummary;
-use crate::record::manager::format_mode;
 use crate::strategy::model::StrategyTemplate;
 
 pub fn render_backtest_run(
@@ -12,7 +11,7 @@ pub fn render_backtest_run(
 ) -> String {
     [
         "backtest run".to_string(),
-        format!("mode={}", format_mode(mode)),
+        format!("mode={}", mode.as_str()),
         format!("template={}", template.slug()),
         format!("instrument={}", instrument),
         format!("from={}", summary.from),

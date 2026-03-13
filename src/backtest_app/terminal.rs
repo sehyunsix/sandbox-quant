@@ -4,7 +4,7 @@ use crate::command::backtest::{
     BacktestShellInput,
 };
 use crate::dataset::query::backtest_summary_for_path;
-use crate::record::manager::format_mode;
+use crate::record::coordination::RecorderCoordination;
 use crate::terminal::app::{TerminalApp, TerminalEvent, TerminalMode};
 use crate::terminal::completion::ShellCompletion;
 use crate::ui::backtest_output::render_backtest_run;
@@ -32,7 +32,7 @@ impl TerminalApp for BacktestTerminal {
         format!(
             "╭──────────────────────────────────────────────╮\n│ >_ Sandbox Quant Backtest (v{})              │\n│                                              │\n│ mode:      {:<18} /mode to change │\n│ base_dir:  {:<28} │\n╰──────────────────────────────────────────────╯",
             env!("CARGO_PKG_VERSION"),
-            format_mode(self.mode),
+            self.mode.as_str(),
             self.base_dir
         )
     }
@@ -42,7 +42,7 @@ impl TerminalApp for BacktestTerminal {
     }
 
     fn prompt(&self) -> String {
-        format!("[backtest:{}] › ", format_mode(self.mode))
+        format!("[backtest:{}] › ", self.mode.as_str())
     }
 
     fn complete(&self, line: &str) -> Vec<ShellCompletion> {
@@ -58,7 +58,7 @@ impl TerminalApp for BacktestTerminal {
                 self.mode = mode;
                 Ok(TerminalEvent::Output(format!(
                     "mode switched to {}",
-                    format_mode(self.mode)
+                    self.mode.as_str()
                 )))
             }
             Ok(BacktestShellInput::Command(command)) => match command {
@@ -68,8 +68,7 @@ impl TerminalApp for BacktestTerminal {
                     from,
                     to,
                 } => {
-                    let db_path = std::path::Path::new(&self.base_dir)
-                        .join(format!("market-{}.duckdb", format_mode(self.mode)));
+                    let db_path = RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
                     let summary =
                         backtest_summary_for_path(&db_path, self.mode, &instrument, from, to)
                             .map_err(|error| error.to_string())?;

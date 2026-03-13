@@ -13,7 +13,7 @@ use crate::market_data::price_store::PriceStore;
 use crate::market_data::service::MarketDataService;
 use crate::portfolio::store::PortfolioStateStore;
 use crate::portfolio::sync::PortfolioSyncService;
-use crate::record::manager::RecordManager;
+use crate::record::coordination::RecorderCoordination;
 use crate::storage::event_log::EventLog;
 use crate::strategy::store::StrategyStore;
 
@@ -27,7 +27,7 @@ pub struct AppBootstrap<E: ExchangeFacade> {
     pub execution: ExecutionService,
     pub portfolio_sync: PortfolioSyncService,
     pub market_data: MarketDataService,
-    pub record_manager: RecordManager,
+    pub recorder_coordination: RecorderCoordination,
     pub strategy_store: StrategyStore,
 }
 
@@ -42,7 +42,7 @@ impl<E: ExchangeFacade> AppBootstrap<E> {
             execution: ExecutionService::default(),
             portfolio_sync: PortfolioSyncService,
             market_data: MarketDataService,
-            record_manager: RecordManager::default(),
+            recorder_coordination: RecorderCoordination::default(),
             strategy_store: StrategyStore::default(),
         }
     }
@@ -188,6 +188,13 @@ impl BinanceEnvConfig {
 }
 
 impl BinanceMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Real => "real",
+            Self::Demo => "demo",
+        }
+    }
+
     fn credentials_env_names(self) -> (&'static str, &'static str) {
         match self {
             Self::Real => ("BINANCE_REAL_API_KEY", "BINANCE_REAL_SECRET_KEY"),

@@ -14,25 +14,29 @@ use crate::terminal::completion::{
 };
 
 pub fn run_terminal<A: TerminalApp>(app: &mut A) -> Result<(), Box<dyn std::error::Error>> {
-    let intro_panel = app.intro_panel();
-    execute!(
-        io::stdout(),
-        PrintStyledContent(intro_panel.cyan().bold()),
-        Print("\n"),
-        PrintStyledContent(app.help_heading().dark_grey()),
-        Print("\n"),
-        Print(app.help_text()),
-        Print("\n")
-    )?;
-
     match app.terminal_mode() {
         TerminalMode::Raw => {
+            let intro_panel = app.intro_panel();
+            execute!(
+                io::stdout(),
+                PrintStyledContent(intro_panel.cyan().bold()),
+                Print("\n"),
+                PrintStyledContent(app.help_heading().dark_grey()),
+                Print("\n"),
+                Print(app.help_text()),
+                Print("\n")
+            )?;
             enable_raw_mode()?;
             let result = loop_terminal_raw(app);
             disable_raw_mode()?;
             result
         }
-        TerminalMode::Line => loop_terminal_line(app),
+        TerminalMode::Line => {
+            println!("{}", app.intro_panel());
+            println!("{}", app.help_heading());
+            println!("{}", app.help_text());
+            loop_terminal_line(app)
+        }
     }
 }
 
@@ -186,14 +190,16 @@ fn loop_terminal_line<A: TerminalApp>(app: &mut A) -> Result<(), Box<dyn std::er
         stdout.flush()?;
 
         let mut line = String::new();
-        stdin.read_line(&mut line)?;
+        if stdin.read_line(&mut line)? == 0 {
+            break;
+        }
         match app.execute_line(&line) {
             Ok(TerminalEvent::NoOutput) => {}
             Ok(TerminalEvent::Output(output)) => {
-                print_multiline_block(&mut stdout, &output, true)?;
+                writeln!(stdout, "{output}")?;
             }
             Ok(TerminalEvent::Exit) => break,
-            Err(error) => print_error(&mut stdout, error)?,
+            Err(error) => writeln!(stdout, "error: {error}")?,
         }
     }
 

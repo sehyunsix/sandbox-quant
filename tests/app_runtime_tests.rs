@@ -16,7 +16,7 @@ use sandbox_quant::exchange::symbol_rules::SymbolRules;
 use sandbox_quant::exchange::types::AuthoritativeSnapshot;
 use sandbox_quant::execution::command::{CommandSource, ExecutionCommand};
 use sandbox_quant::portfolio::store::PortfolioStateStore;
-use sandbox_quant::record::manager::RecordManager;
+use sandbox_quant::record::coordination::RecorderCoordination;
 use sandbox_quant::strategy::command::{StrategyCommand, StrategyStartConfig};
 use sandbox_quant::strategy::model::{StrategyTemplate, StrategyWatchState};
 use std::path::PathBuf;
@@ -289,7 +289,7 @@ fn app_runtime_starts_strategy_watch_and_logs_event() {
         },
     );
     let mut app = AppBootstrap::new(exchange, PortfolioStateStore::default());
-    app.record_manager = RecordManager::new(unique_test_dir("strategy-start")).without_spawn();
+    app.recorder_coordination = RecorderCoordination::new(unique_test_dir("strategy-start"));
     let mut runtime = AppRuntime::default();
 
     runtime
@@ -336,7 +336,7 @@ fn app_runtime_stops_strategy_watch_and_moves_it_to_history() {
         },
     );
     let mut app = AppBootstrap::new(exchange, PortfolioStateStore::default());
-    app.record_manager = RecordManager::new(unique_test_dir("strategy-stop")).without_spawn();
+    app.recorder_coordination = RecorderCoordination::new(unique_test_dir("strategy-stop"));
     let mut runtime = AppRuntime::default();
 
     runtime
@@ -387,7 +387,7 @@ fn app_runtime_separates_strategy_watches_by_mode() {
         },
     );
     let mut app = AppBootstrap::new(exchange, PortfolioStateStore::default());
-    app.record_manager = RecordManager::new(unique_test_dir("strategy-mode-split")).without_spawn();
+    app.recorder_coordination = RecorderCoordination::new(unique_test_dir("strategy-mode-split"));
     let mut runtime = AppRuntime::default();
 
     runtime

@@ -3,7 +3,7 @@ use crate::command::recorder::{
     complete_recorder_input, parse_recorder_shell_input, recorder_help_text, RecorderCommand,
     RecorderShellInput,
 };
-use crate::record::manager::format_mode;
+use crate::record::coordination::RecorderCoordination;
 use crate::recorder_app::runtime::{MarketDataRecorder, RecorderState};
 use crate::terminal::app::{TerminalApp, TerminalEvent, TerminalMode};
 use crate::terminal::completion::ShellCompletion;
@@ -13,6 +13,7 @@ pub struct RecorderTerminal {
     pub mode: BinanceMode,
     pub base_dir: String,
     pub recorder: MarketDataRecorder,
+    pub coordination: RecorderCoordination,
     pub manual_symbols: Vec<String>,
 }
 
@@ -22,9 +23,23 @@ impl RecorderTerminal {
         Self {
             mode,
             recorder: MarketDataRecorder::new(base_dir.clone()),
+            coordination: RecorderCoordination::new(base_dir.clone()),
             base_dir,
             manual_symbols: Vec::new(),
         }
+    }
+
+    fn sync_strategy_symbols(&mut self) -> Result<Vec<String>, String> {
+        let strategy_symbols = self
+            .coordination
+            .strategy_symbols(self.mode)
+            .map_err(|error| error.to_string())?;
+        if self.recorder.status(self.mode).state == RecorderState::Running {
+            self.recorder
+                .update_strategy_symbols(self.mode, strategy_symbols.clone())
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(strategy_symbols)
     }
 }
 
@@ -37,7 +52,7 @@ impl TerminalApp for RecorderTerminal {
         format!(
             "╭──────────────────────────────────────────────╮\n│ >_ Sandbox Quant Recorder (v{})              │\n│                                              │\n│ mode:      {:<18} /mode to change │\n│ base_dir:  {:<28} │\n╰──────────────────────────────────────────────╯",
             env!("CARGO_PKG_VERSION"),
-            format_mode(self.mode),
+            self.mode.as_str(),
             self.base_dir
         )
     }
@@ -47,7 +62,7 @@ impl TerminalApp for RecorderTerminal {
     }
 
     fn prompt(&self) -> String {
-        format!("[recorder:{}] › ", format_mode(self.mode))
+        format!("[recorder:{}] › ", self.mode.as_str())
     }
 
     fn complete(&self, line: &str) -> Vec<ShellCompletion> {
@@ -63,12 +78,13 @@ impl TerminalApp for RecorderTerminal {
                 self.mode = mode;
                 Ok(TerminalEvent::Output(format!(
                     "mode switched to {}",
-                    format_mode(self.mode)
+                    self.mode.as_str()
                 )))
             }
             Ok(RecorderShellInput::Command(command)) => match command {
                 RecorderCommand::Start { symbols } => {
                     self.manual_symbols = symbols;
+                    let strategy_symbols = self.sync_strategy_symbols()?;
                     let status = if self.recorder.status(self.mode).state == RecorderState::Running
                     {
                         self.recorder
@@ -77,7 +93,7 @@ impl TerminalApp for RecorderTerminal {
                         self.recorder.status(self.mode)
                     } else {
                         self.recorder
-                            .start(self.mode, self.manual_symbols.clone(), Vec::new())
+                            .start(self.mode, self.manual_symbols.clone(), strategy_symbols)
                             .map_err(|error| error.to_string())?
                     };
                     Ok(TerminalEvent::Output(render_live_recorder_status(
@@ -86,6 +102,7 @@ impl TerminalApp for RecorderTerminal {
                     )))
                 }
                 RecorderCommand::Status => {
+                    let _ = self.sync_strategy_symbols()?;
                     let status = self.recorder.status(self.mode);
                     Ok(TerminalEvent::Output(render_live_recorder_status(
                         "record status",
