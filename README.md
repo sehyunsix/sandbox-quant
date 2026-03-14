@@ -3,7 +3,7 @@
 [![docs.rs](docs/assets/docsrs-badge.svg)](https://docs.rs/sandbox-quant)
 [![crates.io](docs/assets/cratesio-badge.svg)](https://crates.io/crates/sandbox-quant)
 
-Exchange-truth trading core for Binance Spot and Futures, with separate operator, recorder, and backtest terminals.
+Exchange-truth trading core for Binance Spot and Futures, with separate operator, recorder, collector, backtest, and optional GUI entrypoints.
 
 ![sandbox-quant shell startup](docs/assets/shell-startup.png)
 
@@ -29,10 +29,13 @@ Implemented today:
 - `set-target-exposure <instrument> <target>`
 - strategy watch start/list/show/stop in the operator terminal
 - separate `sandbox-quant-recorder` terminal for market data collection
+- separate `sandbox-quant-collector` binary for historical Binance public-data imports
 - separate `sandbox-quant-backtest` terminal for dataset inspection/backtest runs
+- optional `sandbox-quant-gui` desktop app for charting and backtest exploration
 - Binance signed REST transport
 - runtime event logging
 - CLI summaries for refresh and execution results
+- automatic dataset schema bootstrap/version surfacing for recorder/collector flows
 
 Not implemented as first-class runtime features yet:
 
@@ -49,12 +52,14 @@ Top-level modules:
 
 - `src/app`
 - `src/backtest_app`
+- `src/charting`
 - `src/command`
 - `src/dataset`
 - `src/domain`
 - `src/error`
 - `src/exchange`
 - `src/execution`
+- `src/gui`
 - `src/market_data`
 - `src/portfolio`
 - `src/record`
@@ -62,6 +67,7 @@ Top-level modules:
 - `src/storage`
 - `src/terminal`
 - `src/ui`
+- `src/visualization`
 
 Core rules:
 
@@ -75,6 +81,27 @@ Core rules:
 
 The design rationale is documented in [0056-v1-reset-exchange-truth-architecture.md](docs/rfcs/0056-v1-reset-exchange-truth-architecture.md).
 Recorder ownership is documented in [0058-recorder-foreground-terminal-semantics.md](docs/rfcs/0058-recorder-foreground-terminal-semantics.md) and [0059-recorder-single-owner-runtime.md](docs/rfcs/0059-recorder-single-owner-runtime.md).
+
+GUI/charting implementation notes and current limitations are tracked in [`docs/gui-charting-status.md`](docs/gui-charting-status.md).
+
+## Recent Hardening Notes
+
+Recent follow-up work focused on making the current GUI/backtest path safer and clearer to operate:
+
+- GUI market charts now avoid the high-resolution timestamp panic that previously appeared on some BTCUSDT ranges.
+- GUI chart time labels are rendered through an overflow-safe footer-label path, with adaptive width-based label density.
+- GUI hover/tooltip behavior was polished with safer placement near chart edges, plus better hover snapping to visible points.
+- GUI controls now expose clearer empty/error states, plus reset-zoom affordances.
+- Backtest CLI now rejects reversed date ranges before any DB initialization work begins.
+- Backtest output now distinguishes `state=ok`, `state=no_trades`, `state=empty_dataset`, and `state=missing`.
+- Collector/recorder summary surfaces now expose `schema_version` metadata so schema bootstrap state is visible to operators.
+
+Known current caveats:
+
+- GUI footer time labels are adaptive and panic-safe, but they are still not full plotters-native mesh ticks.
+- Tooltip sizing/placement is still heuristic.
+- Backtest UX is being refined further around `symbol_not_found` vs generic `empty_dataset` messaging.
+- Full strict `clippy` across the repo still reports pre-existing `too_many_arguments` warnings outside the focused GUI/backtest hardening scope.
 
 ## Environment
 
@@ -109,9 +136,15 @@ The runtime reads demo and real credentials separately based on `BINANCE_MODE` a
   - `/start`, `/status`, `/stop`, `/mode`
 - `sandbox-quant-backtest`
   - dataset consumer terminal
-  - `/run`, `/mode`
+  - interactive shell plus `run`, `list`, `report latest|show <run_id>`
+- `sandbox-quant-collector`
+  - one-shot historical Binance public data backfill
+  - `binance-public import`, `summary`
+- `sandbox-quant-gui`
+  - optional desktop GUI for charting + backtest exploration
+  - requires Cargo feature `gui`
 
-All three binaries share the same terminal UX style, but lifecycle ownership is separate.
+The terminal binaries share the same line-oriented UX style, but lifecycle ownership is separate. The GUI is a separate optional launch path built on the same dataset/charting core.
 
 ## Running
 
@@ -175,11 +208,82 @@ Backtest terminal:
 cargo run --bin sandbox-quant-backtest -- --mode demo
 ```
 
-Or one-shot dataset run:
+One-shot dataset run:
 
 ```bash
 target/debug/sandbox-quant-backtest run liquidation-breakdown-short BTCUSDT --from 2026-03-13 --to 2026-03-13 --mode demo --base-dir var
 ```
+
+If `--from` is after `--to`, the command now fails fast with an invalid date-range error before touching the dataset DB.
+
+List recent runs:
+
+```bash
+target/debug/sandbox-quant-backtest list --mode demo --base-dir var
+```
+
+Show the latest persisted report:
+
+```bash
+target/debug/sandbox-quant-backtest report latest --mode demo --base-dir var
+```
+
+Backtest report/list output now uses explicit state markers so operators can tell the difference between:
+
+- a normal run with trades: `state=ok`
+- a valid dataset window with no executed trades: `state=no_trades`
+- no available dataset rows for the requested symbol/date range: `state=empty_dataset`
+- a missing persisted run id: `state=missing`
+
+Historical public-data backfill:
+
+```bash
+cargo run --bin sandbox-quant-collector -- \
+  binance-public import \
+  --products um \
+  --symbols BTCUSDT,ETHUSDT \
+  --from 2026-03-12 \
+  --to 2026-03-13 \
+  --kline-interval 1m \
+  --mode demo \
+  --base-dir var
+```
+
+Dataset summary after import:
+
+```bash
+cargo run --bin sandbox-quant-collector -- summary --mode demo --base-dir var
+```
+
+Collector/recorder summary output now includes schema metadata such as `schema_version` so DB bootstrap state is visible without manual inspection.
+
+GUI launch (optional feature):
+
+```bash
+cargo run --features gui --bin sandbox-quant-gui -- \
+  --base-dir var \
+  --mode demo \
+  --symbol BTCUSDT \
+  --from 2026-03-12 \
+  --to 2026-03-13
+```
+
+`src/bin/sandbox-quant-gui.rs` currently accepts launch args directly and does not expose a dedicated `--help` screen; unsupported args fail fast.
+
+Current limitation: the GUI market chart currently reads `raw_book_ticker`, `raw_liquidation_events`, and `derived_kline_1s` (from `raw_agg_trades`). Historical collector backfills stored only in `raw_klines` may appear in `collector summary` but still not render in the GUI until `raw_klines` support is added there.
+
+The GUI uses the same DuckDB-backed dataset/backtest pipeline as the terminal tools:
+
+- load recorded symbols and summary metrics from `var/`
+- render book-ticker / 1s kline market charts with liquidation + trade markers
+- run a strategy backtest and inspect equity + trade tables in the same app session
+
+Recent GUI usability improvements include:
+
+- clearer empty/error/status guidance when no data is loaded
+- reset zoom control and double-click viewport reset
+- safer hover snapping and tooltip placement
+- overflow-safe adaptive footer time labels on charts
 
 Recorder data is stored by default under:
 
@@ -189,6 +293,8 @@ var/market-v2-real.duckdb
 ```
 
 `demo` and `real` here refer to account mode metadata. Public market-data streams currently use Binance public futures streams for both modes.
+
+When recorder / collector / backtest tooling opens a dataset DB, the shared market-data schema is applied automatically. Summary/status surfaces now expose `schema_version` so older recorder-created DBs can be bootstrapped forward without manual table creation.
 
 ## Output
 

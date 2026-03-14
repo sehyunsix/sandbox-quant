@@ -5,7 +5,15 @@ use duckdb::Connection;
 
 use crate::error::storage_error::StorageError;
 
+pub const MARKET_DATA_SCHEMA_VERSION: &str = "1";
+
 pub const MARKET_DATA_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS schema_metadata (
+  key VARCHAR PRIMARY KEY,
+  value VARCHAR NOT NULL,
+  updated_at TIMESTAMP NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS raw_liquidation_events (
   event_id BIGINT,
   mode VARCHAR NOT NULL,
@@ -155,5 +163,43 @@ pub fn init_schema_for_path(db_path: &Path) -> Result<(), StorageError> {
             path: db_path.display().to_string(),
             message: error.to_string(),
         })?;
+    connection
+        .execute(
+            "INSERT OR REPLACE INTO schema_metadata (key, value, updated_at) VALUES ('market_data_schema_version', ?, CURRENT_TIMESTAMP)",
+            [MARKET_DATA_SCHEMA_VERSION],
+        )
+        .map_err(|error| StorageError::DatabaseInitFailed {
+            path: db_path.display().to_string(),
+            message: error.to_string(),
+        })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_schema_writes_schema_version_metadata() {
+        let mut db_path = std::env::temp_dir();
+        db_path.push(format!(
+            "sandbox_quant_schema_test_{}_{}.duckdb",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        init_schema_for_path(&db_path).expect("init schema");
+
+        let connection = Connection::open(&db_path).expect("open db");
+        let value: String = connection
+            .query_row(
+                "SELECT value FROM schema_metadata WHERE key = 'market_data_schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read schema version");
+        assert_eq!(value, MARKET_DATA_SCHEMA_VERSION);
+
+        std::fs::remove_file(db_path).ok();
+    }
 }

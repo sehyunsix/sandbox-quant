@@ -181,12 +181,69 @@ fn parse_dates(args: &[String]) -> Result<(NaiveDate, NaiveDate), String> {
             other => return Err(format!("unsupported arg: {other}")),
         }
     }
-    Ok((from.ok_or("missing --from")?, to.ok_or("missing --to")?))
+    let from = from.ok_or("missing --from")?;
+    let to = to.ok_or("missing --to")?;
+    if from > to {
+        return Err(format!(
+            "invalid date range: from ({from}) must be on or before to ({to})"
+        ));
+    }
+    Ok((from, to))
 }
 
 fn completion(value: &str, description: &str) -> ShellCompletion {
     ShellCompletion {
         value: value.to_string(),
         description: description.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_backtest_command_rejects_reversed_date_range() {
+        let args = vec![
+            "run".to_string(),
+            "liquidation-breakdown-short".to_string(),
+            "btcusdt".to_string(),
+            "--from".to_string(),
+            "2026-03-14".to_string(),
+            "--to".to_string(),
+            "2026-03-13".to_string(),
+        ];
+
+        let error = parse_backtest_command(&args).expect_err("expected invalid date range");
+
+        assert_eq!(
+            error,
+            "invalid date range: from (2026-03-14) must be on or before to (2026-03-13)"
+        );
+    }
+
+    #[test]
+    fn parse_backtest_command_normalizes_instrument_and_accepts_valid_dates() {
+        let args = vec![
+            "run".to_string(),
+            "liquidation-breakdown-short".to_string(),
+            "btcusdt".to_string(),
+            "--from".to_string(),
+            "2026-03-13".to_string(),
+            "--to".to_string(),
+            "2026-03-14".to_string(),
+        ];
+
+        let command = parse_backtest_command(&args).expect("valid run command");
+
+        assert_eq!(
+            command,
+            BacktestCommand::Run {
+                template: StrategyTemplate::LiquidationBreakdownShort,
+                instrument: "BTCUSDT".to_string(),
+                from: NaiveDate::from_ymd_opt(2026, 3, 13).expect("date"),
+                to: NaiveDate::from_ymd_opt(2026, 3, 14).expect("date"),
+            }
+        );
     }
 }

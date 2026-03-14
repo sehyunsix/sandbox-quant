@@ -63,9 +63,8 @@ fn parse_terminal_args(
 
 fn run_backtest_command(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let (mode, base_dir, command_args) = split_global_args(args)?;
-    let db_path = RecorderCoordination::new(base_dir.clone()).db_path(mode);
-    init_schema_for_path(&db_path)?;
     let command = parse_backtest_command(&command_args)?;
+    let db_path = RecorderCoordination::new(base_dir.clone()).db_path(mode);
     match command {
         BacktestCommand::Run {
             template,
@@ -73,6 +72,7 @@ fn run_backtest_command(args: &[String]) -> Result<(), Box<dyn std::error::Error
             from,
             to,
         } => {
+            init_schema_for_path(&db_path)?;
             let report = run_backtest_for_path(
                 &db_path,
                 mode,

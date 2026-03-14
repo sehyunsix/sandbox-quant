@@ -469,6 +469,7 @@ mod tests {
             BacktestDatasetSummary {
                 mode: BinanceMode::Demo,
                 symbol: "BTCUSDT".to_string(),
+                symbol_found: true,
                 from: "2026-03-13".to_string(),
                 to: "2026-03-13".to_string(),
                 liquidation_events: 1,
@@ -515,6 +516,7 @@ mod tests {
             BacktestDatasetSummary {
                 mode: BinanceMode::Demo,
                 symbol: "BTCUSDT".to_string(),
+                symbol_found: true,
                 from: "2026-03-13".to_string(),
                 to: "2026-03-13".to_string(),
                 liquidation_events: 1,

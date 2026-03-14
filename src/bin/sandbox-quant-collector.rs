@@ -5,6 +5,7 @@ use sandbox_quant::collector_app::binance_public::{
     import_binance_public_data, BinancePublicImportConfig, BinancePublicImportReport,
     BinancePublicProduct,
 };
+use sandbox_quant::dataset::schema::{init_schema_for_path, MARKET_DATA_SCHEMA_VERSION};
 use sandbox_quant::error::storage_error::StorageError;
 use sandbox_quant::record::coordination::RecorderCoordination;
 
@@ -288,8 +289,48 @@ fn parse_summary_args(
     Ok((mode, base_dir))
 }
 
+fn existing_schema_version(db_path: &std::path::Path) -> Option<String> {
+    if !db_path.exists() {
+        return None;
+    }
+    let connection = Connection::open(db_path).ok()?;
+    let table_exists: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'schema_metadata'",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    if table_exists == 0 {
+        return None;
+    }
+    connection
+        .query_row(
+            "SELECT value FROM schema_metadata WHERE key = 'market_data_schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
+fn schema_warning(previous_version: Option<&str>) -> Option<String> {
+    match previous_version {
+        None => Some(format!(
+            "warning=schema_bootstrap_applied previous=missing current={}",
+            MARKET_DATA_SCHEMA_VERSION
+        )),
+        Some(previous) if previous != MARKET_DATA_SCHEMA_VERSION => Some(format!(
+            "warning=schema_version_updated previous={} current={}",
+            previous, MARKET_DATA_SCHEMA_VERSION
+        )),
+        _ => None,
+    }
+}
+
 fn render_summary(mode: BinanceMode, base_dir: &str) -> Result<String, Box<dyn std::error::Error>> {
     let db_path = RecorderCoordination::new(base_dir.to_string()).db_path(mode);
+    let previous_schema_version = existing_schema_version(&db_path);
+    init_schema_for_path(&db_path)?;
     let connection =
         Connection::open(&db_path).map_err(|error| StorageError::DatabaseInitFailed {
             path: db_path.display().to_string(),
@@ -300,7 +341,17 @@ fn render_summary(mode: BinanceMode, base_dir: &str) -> Result<String, Box<dyn s
         "collector summary".to_string(),
         format!("mode={}", mode.as_str()),
         format!("db_path={}", db_path.display()),
+        format!("schema_version={}", MARKET_DATA_SCHEMA_VERSION),
+        format!(
+            "schema_previous_version={}",
+            previous_schema_version
+                .clone()
+                .unwrap_or_else(|| "missing".to_string())
+        ),
     ];
+    if let Some(warning) = schema_warning(previous_schema_version.as_deref()) {
+        lines.push(warning);
+    }
 
     let mut kline_statement = connection.prepare(
         "SELECT product, symbol, interval, COUNT(*) AS row_count,
@@ -363,4 +414,84 @@ fn render_summary(mode: BinanceMode, base_dir: &str) -> Result<String, Box<dyn s
     }
 
     Ok(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn temp_base_dir(name: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "sandbox_quant_{name}_{}_{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn render_summary_bootstraps_missing_collector_tables_for_legacy_db() {
+        let base_dir = temp_base_dir("collector_summary_legacy");
+        let db_path = RecorderCoordination::new(base_dir.clone()).db_path(BinanceMode::Demo);
+        let connection = Connection::open(&db_path).expect("open db");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE raw_liquidation_events (
+                  event_id BIGINT,
+                  mode VARCHAR NOT NULL,
+                  symbol VARCHAR NOT NULL,
+                  event_time TIMESTAMP NOT NULL,
+                  receive_time TIMESTAMP NOT NULL,
+                  force_side VARCHAR NOT NULL,
+                  price DOUBLE NOT NULL,
+                  qty DOUBLE NOT NULL,
+                  notional DOUBLE NOT NULL,
+                  raw_payload VARCHAR NOT NULL
+                );
+                INSERT INTO raw_liquidation_events VALUES (
+                  1, 'demo', 'BTCUSDT',
+                  CAST('2026-03-13 00:00:00' AS TIMESTAMP),
+                  CAST('2026-03-13 00:00:01' AS TIMESTAMP),
+                  'SELL', 100000, 1, 100000, '{}');
+                "#,
+            )
+            .expect("seed legacy schema");
+        drop(connection);
+
+        let summary =
+            render_summary(BinanceMode::Demo, base_dir.to_str().unwrap()).expect("summary");
+        assert!(summary.contains("schema_version=1"), "{summary}");
+        assert!(
+            summary.contains("schema_previous_version=missing"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("warning=schema_bootstrap_applied previous=missing current=1"),
+            "{summary}"
+        );
+        assert!(summary.contains("klines=none"), "{summary}");
+        assert!(summary.contains("symbol=BTCUSDT rows=1"), "{summary}");
+
+        let bootstrap_connection = Connection::open(&db_path).expect("reopen db");
+        let exists: i64 = bootstrap_connection
+            .query_row(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'raw_klines'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query table existence");
+        assert_eq!(exists, 1);
+
+        fs::remove_dir_all(base_dir).ok();
+    }
+
+    #[test]
+    fn schema_warning_is_none_when_version_matches() {
+        assert_eq!(schema_warning(Some(MARKET_DATA_SCHEMA_VERSION)), None);
+    }
 }

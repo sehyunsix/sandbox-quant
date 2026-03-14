@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use duckdb::{params, Connection};
+use duckdb::{params, AccessMode, Config, Connection};
 
 use crate::app::bootstrap::BinanceMode;
 use crate::backtest_app::runner::{BacktestExitReason, BacktestReport, BacktestTrade};
@@ -11,21 +11,38 @@ use crate::dataset::types::{
 use crate::error::storage_error::StorageError;
 use crate::strategy::model::StrategyTemplate;
 
+fn open_dataset_connection_read_only(db_path: &Path) -> Result<Connection, StorageError> {
+    let config = Config::default()
+        .access_mode(AccessMode::ReadOnly)
+        .map_err(storage_err)?;
+    Connection::open_with_flags(db_path, config).map_err(|error| StorageError::DatabaseInitFailed {
+        path: db_path.display().to_string(),
+        message: error.to_string(),
+    })
+}
+
+fn open_dataset_connection_read_write(db_path: &Path) -> Result<Connection, StorageError> {
+    let config = Config::default()
+        .access_mode(AccessMode::ReadWrite)
+        .map_err(storage_err)?;
+    Connection::open_with_flags(db_path, config).map_err(|error| StorageError::DatabaseInitFailed {
+        path: db_path.display().to_string(),
+        message: error.to_string(),
+    })
+}
+
 pub fn metrics_for_path(db_path: &Path) -> Result<RecorderMetrics, StorageError> {
     if !db_path.exists() {
         return Ok(RecorderMetrics::default());
     }
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_only(db_path)?;
 
     Ok(RecorderMetrics {
         liquidation_events: query_count(&connection, "raw_liquidation_events")?,
         book_ticker_events: query_count(&connection, "raw_book_ticker")?,
         agg_trade_events: query_count(&connection, "raw_agg_trades")?,
         derived_kline_1s_bars: query_count(&connection, "derived_kline_1s")?,
+        schema_version: query_schema_version(&connection)?,
         last_liquidation_event_time: query_latest_timestamp(
             &connection,
             "raw_liquidation_events",
@@ -58,6 +75,7 @@ pub fn backtest_summary_for_path(
         return Ok(BacktestDatasetSummary {
             mode,
             symbol: symbol.to_string(),
+            symbol_found: false,
             from: from.to_string(),
             to: to.to_string(),
             liquidation_events: 0,
@@ -66,16 +84,14 @@ pub fn backtest_summary_for_path(
             derived_kline_1s_bars: 0,
         });
     }
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_only(db_path)?;
+    let symbol_found = market_data_symbol_exists(&connection, symbol)?;
     let from_ts = format!("{from} 00:00:00");
     let to_ts = format!("{to} 23:59:59");
     Ok(BacktestDatasetSummary {
         mode,
         symbol: symbol.to_string(),
+        symbol_found,
         from: from.to_string(),
         to: to.to_string(),
         liquidation_events: query_count_in_range(
@@ -122,11 +138,7 @@ pub fn load_liquidation_events_for_path(
     if !db_path.exists() {
         return Ok(Vec::new());
     }
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_only(db_path)?;
     let from_ts = format!("{from} 00:00:00");
     let to_ts = format!("{to} 23:59:59");
     let mut statement = connection
@@ -191,11 +203,7 @@ pub fn load_book_ticker_rows_for_path(
     if !db_path.exists() {
         return Ok(Vec::new());
     }
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_only(db_path)?;
     let from_ts = format!("{from} 00:00:00");
     let to_ts = format!("{to} 23:59:59");
     let mut statement = connection
@@ -250,11 +258,7 @@ pub fn load_derived_kline_rows_for_path(
     if !db_path.exists() {
         return Ok(Vec::new());
     }
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_only(db_path)?;
     let from_ts = format!("{from} 00:00:00");
     let to_ts = format!("{to} 23:59:59");
     let mut statement = connection
@@ -294,6 +298,91 @@ pub fn load_derived_kline_rows_for_path(
     Ok(result)
 }
 
+pub fn load_raw_kline_rows_for_path(
+    db_path: &Path,
+    symbol: &str,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
+) -> Result<Option<(String, Vec<DerivedKlineRow>)>, StorageError> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let connection = open_dataset_connection_read_only(db_path)?;
+    let from_ts = format!("{from} 00:00:00");
+    let to_ts = format!("{to} 23:59:59");
+    let interval = preferred_raw_kline_interval(&connection, symbol, &from_ts, &to_ts)?;
+    let Some(interval) = interval else {
+        return Ok(None);
+    };
+    let mut statement = connection
+        .prepare(
+            "SELECT epoch_ms(open_time), epoch_ms(close_time), open, high, low, close, volume, quote_volume, trade_count
+             FROM raw_klines
+             WHERE symbol = ? AND interval = ? AND open_time >= CAST(? AS TIMESTAMP) AND open_time <= CAST(? AS TIMESTAMP)
+             ORDER BY open_time ASC",
+        )
+        .map_err(storage_err)?;
+    let mut rows = statement
+        .query(params![symbol, interval.as_str(), from_ts, to_ts])
+        .map_err(storage_err)?;
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().map_err(storage_err)? {
+        result.push(DerivedKlineRow {
+            open_time_ms: row.get(0).map_err(storage_err)?,
+            close_time_ms: row.get(1).map_err(storage_err)?,
+            open: row.get(2).map_err(storage_err)?,
+            high: row.get(3).map_err(storage_err)?,
+            low: row.get(4).map_err(storage_err)?,
+            close: row.get(5).map_err(storage_err)?,
+            volume: row.get(6).map_err(storage_err)?,
+            quote_volume: row.get(7).map_err(storage_err)?,
+            trade_count: positive_i64_to_u64(row.get::<_, i64>(8).map_err(storage_err)?),
+        });
+    }
+    Ok(Some((interval, result)))
+}
+
+fn preferred_raw_kline_interval(
+    connection: &Connection,
+    symbol: &str,
+    from_ts: &str,
+    to_ts: &str,
+) -> Result<Option<String>, StorageError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT DISTINCT interval
+             FROM raw_klines
+             WHERE symbol = ? AND open_time >= CAST(? AS TIMESTAMP) AND open_time <= CAST(? AS TIMESTAMP)",
+        )
+        .map_err(storage_err)?;
+    let mut rows = statement
+        .query(params![symbol, from_ts, to_ts])
+        .map_err(storage_err)?;
+    let mut intervals = Vec::new();
+    while let Some(row) = rows.next().map_err(storage_err)? {
+        intervals.push(row.get::<_, String>(0).map_err(storage_err)?);
+    }
+    Ok(intervals
+        .into_iter()
+        .min_by_key(|interval| raw_kline_interval_rank(interval)))
+}
+
+fn raw_kline_interval_rank(interval: &str) -> usize {
+    match interval {
+        "1m" => 0,
+        "3m" => 1,
+        "5m" => 2,
+        "15m" => 3,
+        "30m" => 4,
+        "1h" => 5,
+        "4h" => 6,
+        "1d" => 7,
+        "1w" => 8,
+        "1mo" => 9,
+        _ => usize::MAX,
+    }
+}
+
 pub fn load_recorded_symbols_for_path(
     db_path: &Path,
     limit: usize,
@@ -301,11 +390,7 @@ pub fn load_recorded_symbols_for_path(
     if !db_path.exists() {
         return Ok(Vec::new());
     }
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_only(db_path)?;
     let mut statement = connection
         .prepare(
             "SELECT symbol
@@ -334,15 +419,50 @@ pub fn load_recorded_symbols_for_path(
     Ok(result)
 }
 
+pub fn latest_market_data_day_for_path(
+    db_path: &Path,
+    symbol: &str,
+) -> Result<Option<chrono::NaiveDate>, StorageError> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let connection = open_dataset_connection_read_only(db_path)?;
+    let timestamps = [
+        latest_symbol_timestamp(
+            &connection,
+            "raw_book_ticker",
+            "event_time",
+            "symbol",
+            symbol,
+        )?,
+        latest_symbol_timestamp(
+            &connection,
+            "raw_agg_trades",
+            "event_time",
+            "symbol",
+            symbol,
+        )?,
+        latest_symbol_timestamp(
+            &connection,
+            "raw_liquidation_events",
+            "event_time",
+            "symbol",
+            symbol,
+        )?,
+        latest_symbol_timestamp(&connection, "raw_klines", "open_time", "symbol", symbol)?,
+    ];
+    Ok(timestamps
+        .into_iter()
+        .flatten()
+        .max()
+        .map(|value| value.date_naive()))
+}
+
 pub fn persist_backtest_report(
     db_path: &Path,
     report: &BacktestReport,
 ) -> Result<i64, StorageError> {
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_write(db_path)?;
     let run_id = next_backtest_run_id(&connection)?;
     let closed_trades = report
         .trades
@@ -408,16 +528,12 @@ pub fn load_backtest_run_summaries(
     if !db_path.exists() {
         return Ok(Vec::new());
     }
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_only(db_path)?;
     let mut statement = connection
         .prepare(
             "SELECT run_id, CAST(created_at AS VARCHAR), mode, template, instrument,
                     CAST(from_date AS VARCHAR), CAST(to_date AS VARCHAR),
-                    trigger_count, closed_trades, wins, losses, net_pnl, ending_equity
+                    trigger_count, closed_trades, open_trades, wins, losses, net_pnl, ending_equity
              FROM backtest_runs
              ORDER BY run_id DESC
              LIMIT ?",
@@ -439,10 +555,11 @@ pub fn load_backtest_run_summaries(
             to: row.get(6).map_err(storage_err)?,
             trigger_count: positive_i64_to_u64(row.get::<_, i64>(7).map_err(storage_err)?),
             closed_trades: positive_i64_to_u64(row.get::<_, i64>(8).map_err(storage_err)?),
-            wins: positive_i64_to_u64(row.get::<_, i64>(9).map_err(storage_err)?),
-            losses: positive_i64_to_u64(row.get::<_, i64>(10).map_err(storage_err)?),
-            net_pnl: row.get(11).map_err(storage_err)?,
-            ending_equity: row.get(12).map_err(storage_err)?,
+            open_trades: positive_i64_to_u64(row.get::<_, i64>(9).map_err(storage_err)?),
+            wins: positive_i64_to_u64(row.get::<_, i64>(10).map_err(storage_err)?),
+            losses: positive_i64_to_u64(row.get::<_, i64>(11).map_err(storage_err)?),
+            net_pnl: row.get(12).map_err(storage_err)?,
+            ending_equity: row.get(13).map_err(storage_err)?,
         });
     }
     Ok(result)
@@ -455,11 +572,7 @@ pub fn load_backtest_report(
     if !db_path.exists() {
         return Ok(None);
     }
-    let connection =
-        Connection::open(db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let connection = open_dataset_connection_read_only(db_path)?;
     let mut statement = match requested_run_id {
         Some(_) => connection.prepare(
             "SELECT run_id, mode, template, instrument, CAST(from_date AS VARCHAR), CAST(to_date AS VARCHAR),
@@ -511,6 +624,7 @@ pub fn load_backtest_report(
         dataset: BacktestDatasetSummary {
             mode: parse_mode(&mode_raw)?,
             symbol: row.get(3).map_err(storage_err)?,
+            symbol_found: true,
             from: from_raw,
             to: to_raw,
             liquidation_events: positive_i64_to_u64(row.get::<_, i64>(7).map_err(storage_err)?),
@@ -701,6 +815,20 @@ fn parse_timestamp_string(value: &str) -> Result<chrono::DateTime<chrono::Utc>, 
     ))
 }
 
+fn query_schema_version(connection: &Connection) -> Result<Option<String>, StorageError> {
+    let mut statement = connection
+        .prepare("SELECT value FROM schema_metadata WHERE key = 'market_data_schema_version'")
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })?;
+    let value: Option<String> = statement.query_row([], |row| row.get(0)).map_err(|error| {
+        StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        }
+    })?;
+    Ok(value)
+}
+
 fn query_latest_timestamp(
     connection: &Connection,
     table: &str,
@@ -758,6 +886,23 @@ fn query_top_symbols(connection: &Connection, table: &str) -> Result<Vec<String>
     Ok(result)
 }
 
+fn latest_symbol_timestamp(
+    connection: &Connection,
+    table: &str,
+    time_column: &str,
+    symbol_column: &str,
+    symbol: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, StorageError> {
+    let sql = format!(
+        "SELECT CAST(MAX({time_column}) AS VARCHAR) FROM {table} WHERE {symbol_column} = ?"
+    );
+    let mut statement = connection.prepare(&sql).map_err(storage_err)?;
+    let value: Option<String> = statement
+        .query_row(params![symbol], |row| row.get(0))
+        .map_err(storage_err)?;
+    value.map(|raw| parse_timestamp_string(&raw)).transpose()
+}
+
 fn query_count_in_range(
     connection: &Connection,
     table: &str,
@@ -781,4 +926,59 @@ fn query_count_in_range(
             message: error.to_string(),
         })?;
     Ok(count.max(0) as u64)
+}
+
+fn market_data_symbol_exists(connection: &Connection, symbol: &str) -> Result<bool, StorageError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT EXISTS(
+                SELECT 1 FROM (
+                    SELECT symbol FROM raw_liquidation_events WHERE symbol = ?
+                    UNION
+                    SELECT symbol FROM raw_book_ticker WHERE symbol = ?
+                    UNION
+                    SELECT symbol FROM raw_agg_trades WHERE symbol = ?
+                    UNION
+                    SELECT symbol FROM raw_klines WHERE symbol = ?
+                    UNION
+                    SELECT symbol FROM derived_kline_1s WHERE symbol = ?
+                )
+            )",
+        )
+        .map_err(storage_err)?;
+    let exists = statement
+        .query_row(params![symbol, symbol, symbol, symbol, symbol], |row| {
+            row.get::<_, bool>(0)
+        })
+        .map_err(storage_err)?;
+    Ok(exists)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dataset::schema::init_schema_for_path;
+
+    #[test]
+    fn read_only_backtest_queries_work_while_write_connection_is_held() {
+        let db_path = std::env::temp_dir().join(format!(
+            "sandbox-quant-query-{}.duckdb",
+            uuid::Uuid::new_v4()
+        ));
+        init_schema_for_path(&db_path).expect("init schema");
+
+        let write_connection =
+            open_dataset_connection_read_write(&db_path).expect("write connection");
+
+        let runs =
+            load_backtest_run_summaries(&db_path, 20).expect("read summaries with writer held");
+        let report =
+            load_backtest_report(&db_path, None).expect("read latest report with writer held");
+
+        assert!(runs.is_empty());
+        assert!(report.is_none());
+
+        drop(write_connection);
+        let _ = std::fs::remove_file(&db_path);
+    }
 }

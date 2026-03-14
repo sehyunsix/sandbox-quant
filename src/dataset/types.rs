@@ -6,6 +6,7 @@ pub struct RecorderMetrics {
     pub book_ticker_events: u64,
     pub agg_trade_events: u64,
     pub derived_kline_1s_bars: u64,
+    pub schema_version: Option<String>,
     pub last_liquidation_event_time: Option<String>,
     pub last_book_ticker_event_time: Option<String>,
     pub last_agg_trade_event_time: Option<String>,
@@ -47,6 +48,7 @@ pub struct DerivedKlineRow {
 pub struct BacktestDatasetSummary {
     pub mode: BinanceMode,
     pub symbol: String,
+    pub symbol_found: bool,
     pub from: String,
     pub to: String,
     pub liquidation_events: u64,
@@ -66,6 +68,7 @@ pub struct BacktestRunSummaryRow {
     pub to: String,
     pub trigger_count: u64,
     pub closed_trades: u64,
+    pub open_trades: u64,
     pub wins: u64,
     pub losses: u64,
     pub net_pnl: f64,

@@ -14,6 +14,14 @@ pub fn render_live_recorder_status(header: &str, status: &RecorderStatus) -> Str
         format!("binary_version={}", env!("CARGO_PKG_VERSION")),
         format!("db_path={}", status.db_path.display()),
         format!(
+            "schema_version={}",
+            status
+                .metrics
+                .schema_version
+                .clone()
+                .unwrap_or_else(|| "missing".to_string())
+        ),
+        format!(
             "started_at={}",
             status
                 .started_at
@@ -79,5 +87,38 @@ fn join_symbols(symbols: &[String]) -> String {
         "none".to_string()
     } else {
         symbols.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::bootstrap::BinanceMode;
+    use crate::dataset::types::RecorderMetrics;
+    use crate::recorder_app::runtime::{RecorderState, RecorderStatus};
+    use std::path::PathBuf;
+
+    #[test]
+    fn render_live_recorder_status_includes_schema_version() {
+        let status = RecorderStatus {
+            mode: BinanceMode::Demo,
+            state: RecorderState::Stopped,
+            db_path: PathBuf::from("var/market-v2-demo.duckdb"),
+            started_at: None,
+            updated_at: chrono::Utc::now(),
+            manual_symbols: Vec::new(),
+            strategy_symbols: Vec::new(),
+            watched_symbols: Vec::new(),
+            worker_alive: false,
+            heartbeat_age_sec: 0,
+            last_error: None,
+            metrics: RecorderMetrics {
+                schema_version: Some("1".to_string()),
+                ..RecorderMetrics::default()
+            },
+        };
+
+        let rendered = render_live_recorder_status("record stopped", &status);
+        assert!(rendered.contains("schema_version=1"), "{rendered}");
     }
 }

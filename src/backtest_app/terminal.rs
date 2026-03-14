@@ -94,7 +94,6 @@ impl TerminalApp for BacktestTerminal {
                 BacktestCommand::List => {
                     let db_path =
                         RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
-                    init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
                     let runs = load_backtest_run_summaries(&db_path, 20)
                         .map_err(|error| error.to_string())?;
                     Ok(TerminalEvent::Output(render_backtest_run_list(&runs)))
@@ -102,7 +101,6 @@ impl TerminalApp for BacktestTerminal {
                 BacktestCommand::ReportLatest => {
                     let db_path =
                         RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
-                    init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
                     let report =
                         load_backtest_report(&db_path, None).map_err(|error| error.to_string())?;
                     if let Some(report) = report {
@@ -116,7 +114,6 @@ impl TerminalApp for BacktestTerminal {
                 BacktestCommand::ReportShow { run_id } => {
                     let db_path =
                         RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
-                    init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
                     let report = load_backtest_report(&db_path, Some(run_id))
                         .map_err(|error| error.to_string())?;
                     if let Some(report) = report {
