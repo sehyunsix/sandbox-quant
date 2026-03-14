@@ -1,0 +1,17 @@
+apiVersion: 1
+
+datasources:
+  - name: sandbox-quant-postgres
+    uid: sandbox-quant-postgres
+    type: postgres
+    access: proxy
+    isDefault: true
+    url: ${GRAFANA_POSTGRES_HOST}
+    user: ${GRAFANA_POSTGRES_USER}
+    jsonData:
+      database: ${GRAFANA_POSTGRES_DB}
+      sslmode: ${GRAFANA_POSTGRES_SSLMODE}
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      password: ${GRAFANA_POSTGRES_PASSWORD}
