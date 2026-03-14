@@ -4131,7 +4131,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox-quant"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "chrono",
