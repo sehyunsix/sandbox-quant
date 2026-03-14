@@ -12,6 +12,8 @@ pub fn render_live_recorder_status(header: &str, status: &RecorderStatus) -> Str
         format!("heartbeat_age_sec={}", status.heartbeat_age_sec),
         "pid=in-process".to_string(),
         format!("binary_version={}", env!("CARGO_PKG_VERSION")),
+        format!("storage_backend={}", status.storage_backend),
+        format!("storage_target={}", status.storage_target),
         format!("db_path={}", status.db_path.display()),
         format!(
             "schema_version={}",
@@ -104,6 +106,8 @@ mod tests {
             mode: BinanceMode::Demo,
             state: RecorderState::Stopped,
             db_path: PathBuf::from("var/market-v2-demo.duckdb"),
+            storage_backend: "duckdb".to_string(),
+            storage_target: "var/market-v2-demo.duckdb".to_string(),
             started_at: None,
             updated_at: chrono::Utc::now(),
             manual_symbols: Vec::new(),

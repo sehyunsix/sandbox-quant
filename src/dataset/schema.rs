@@ -94,6 +94,28 @@ CREATE TABLE IF NOT EXISTS recorder_checkpoints (
   last_updated_at TIMESTAMP NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS snapshot_exports (
+  export_id BIGINT PRIMARY KEY,
+  created_at TIMESTAMP NOT NULL,
+  source_backend VARCHAR NOT NULL,
+  source_target VARCHAR NOT NULL,
+  mode VARCHAR NOT NULL,
+  symbols_csv VARCHAR NOT NULL,
+  from_date DATE NOT NULL,
+  to_date DATE NOT NULL,
+  product VARCHAR,
+  interval_name VARCHAR,
+  include_klines BOOLEAN NOT NULL,
+  include_liquidations BOOLEAN NOT NULL,
+  include_book_tickers BOOLEAN NOT NULL,
+  include_agg_trades BOOLEAN NOT NULL,
+  clear_duckdb_range BOOLEAN NOT NULL,
+  exported_kline_rows BIGINT NOT NULL,
+  exported_liquidation_rows BIGINT NOT NULL,
+  exported_book_ticker_rows BIGINT NOT NULL,
+  exported_agg_trade_rows BIGINT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS backtest_runs (
   run_id BIGINT PRIMARY KEY,
   created_at TIMESTAMP NOT NULL,
@@ -199,6 +221,15 @@ mod tests {
             )
             .expect("read schema version");
         assert_eq!(value, MARKET_DATA_SCHEMA_VERSION);
+
+        let snapshot_exports_exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'snapshot_exports'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read snapshot_exports existence");
+        assert_eq!(snapshot_exports_exists, 1);
 
         std::fs::remove_file(db_path).ok();
     }

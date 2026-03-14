@@ -525,9 +525,10 @@ fn render_real_btcusdt_market_scene_does_not_panic() {
     };
     let snapshot = match service.load_dashboard(query) {
         Ok(snapshot) => snapshot,
-        Err(sandbox_quant::error::storage_error::StorageError::DatabaseInitFailed { message, .. })
-            if message.contains("Conflicting lock") =>
-        {
+        Err(sandbox_quant::error::storage_error::StorageError::DatabaseInitFailed {
+            message,
+            ..
+        }) if message.contains("Conflicting lock") => {
             eprintln!(
                 "skipping render_real_btcusdt_market_scene_does_not_panic: duckdb lock conflict"
             );

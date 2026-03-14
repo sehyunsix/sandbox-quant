@@ -131,9 +131,18 @@ BINANCE_SECRET_KEY=legacy_shared_secret
 BINANCE_SPOT_BASE_URL=https://api.binance.com
 BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 BINANCE_OPTIONS_BASE_URL=https://eapi.binance.com
+SANDBOX_QUANT_RECORDER_STORAGE=duckdb
+SANDBOX_QUANT_POSTGRES_URL=postgres://localhost/sandbox_quant
 ```
 
 The runtime reads demo and real credentials separately based on `BINANCE_MODE` and when using `/mode real|demo`. The legacy shared key names are still accepted as a fallback. The default runtime mode is `demo`. Optional base URLs are useful for explicit testnet or custom routing.
+
+Storage-specific env vars:
+
+- `SANDBOX_QUANT_RECORDER_STORAGE=duckdb|postgres` selects the live recorder sink
+- `SANDBOX_QUANT_POSTGRES_URL` (or `DATABASE_URL`) is used by PostgreSQL-backed recorder/collector flows
+- `SANDBOX_QUANT_BACKTEST_AUTO_SNAPSHOT=postgres` makes backtest `run` pull the requested symbol/date range from PostgreSQL into DuckDB before executing
+- `SANDBOX_QUANT_BACKTEST_SNAPSHOT_PRODUCT` / `SANDBOX_QUANT_BACKTEST_SNAPSHOT_INTERVAL` can narrow the imported snapshot
 
 ## Binaries
 
@@ -200,6 +209,14 @@ Options orders are handled as a separate workflow. They appear in portfolio posi
 Recorder terminal:
 
 ```bash
+cargo run --bin sandbox-quant-recorder -- --mode demo
+```
+
+Recorder terminal with PostgreSQL sink:
+
+```bash
+export SANDBOX_QUANT_RECORDER_STORAGE=postgres
+export SANDBOX_QUANT_POSTGRES_URL=postgres://localhost/sandbox_quant
 cargo run --bin sandbox-quant-recorder -- --mode demo
 ```
 
@@ -294,6 +311,8 @@ cargo run --bin sandbox-quant-collector -- \
   --to 2026-03-13 \
   --interval 15m
 ```
+
+By default the PostgreSQL snapshot now exports any matching `raw_klines`, `raw_liquidation_events`, `raw_book_ticker`, and `raw_agg_trades` rows into DuckDB so existing backtest/GUI flows can keep reading DuckDB snapshots. Use `--skip-book-tickers` / `--skip-agg-trades` / `--skip-liquidations` to narrow the export.
 
 Collector/recorder summary output now includes schema metadata such as `schema_version` so DB bootstrap state is visible without manual inspection.
 

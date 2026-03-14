@@ -153,7 +153,7 @@ impl SandboxQuantGuiApp {
                     if self.symbol_input.trim().is_empty() && !snapshot.symbol.is_empty() {
                         self.symbol_input = snapshot.symbol.clone();
                     }
-                    self.status_message = format!(
+                    let mut status_message = format!(
                         "Loaded {} | symbol={} | {} ticks | {} liqs | {} runs",
                         snapshot.db_path.display(),
                         if snapshot.symbol.is_empty() {
@@ -165,6 +165,12 @@ impl SandboxQuantGuiApp {
                         snapshot.dataset_summary.liquidation_events,
                         snapshot.recent_runs.len(),
                     );
+                    if let Some(source_interval) =
+                        source_interval_hint(&snapshot, self.market_timeframe)
+                    {
+                        status_message.push_str(&format!(" | source={source_interval}"));
+                    }
+                    self.status_message = status_message;
                     self.snapshot = Some(snapshot);
                     self.reset_viewports();
                 }
@@ -283,6 +289,17 @@ impl SandboxQuantGuiApp {
     }
 
     fn render_market(&mut self, ui: &mut Ui, snapshot: &DashboardSnapshot) {
+        if let Some(source_interval) = source_interval_hint(snapshot, self.market_timeframe) {
+            ui.label(
+                RichText::new(format!(
+                    "Requested {} view, but stored source is {}. Rendering from the coarser source.",
+                    self.market_timeframe.label(),
+                    source_interval
+                ))
+                .color(Color32::from_rgb(255, 210, 120))
+                .strong(),
+            );
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new("Candlestick / time axis")
@@ -434,24 +451,6 @@ impl eframe::App for SandboxQuantGuiApp {
                         .color(Color32::from_rgb(120, 140, 160)),
                 );
                 ui.separator();
-                if ui.button("Refresh").clicked() {
-                    self.refresh_dashboard(
-                        self.snapshot
-                            .as_ref()
-                            .and_then(|value| value.selected_run_id),
-                    );
-                }
-                if ui.button("Run Backtest").clicked() {
-                    self.run_backtest();
-                }
-                if ui.button("Latest Run").clicked() {
-                    self.refresh_dashboard(None);
-                }
-                if ui.button("Reset Zoom").clicked() {
-                    self.reset_viewports();
-                    self.status_message = "Chart zoom/pan reset".to_string();
-                }
-                ui.separator();
                 ui.label(
                     RichText::new(self.status_message.as_str())
                         .color(Color32::from_rgb(180, 220, 255)),
@@ -467,92 +466,110 @@ impl eframe::App for SandboxQuantGuiApp {
                 let mut selected_run_id = None::<i64>;
                 let mut apply_filters = false;
 
-                ui.heading("Controls");
-                ComboBox::from_label("Mode")
-                    .selected_text(self.mode.as_str())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.mode, BinanceMode::Demo, "demo");
-                        ui.selectable_value(&mut self.mode, BinanceMode::Real, "real");
-                    });
-                ComboBox::from_label("Template")
-                    .selected_text(self.template.slug())
-                    .show_ui(ui, |ui| {
-                        for template in StrategyTemplate::all() {
-                            ui.selectable_value(&mut self.template, template, template.slug());
-                        }
-                    });
-                ComboBox::from_label("Chart timeframe")
-                    .selected_text(self.market_timeframe.label())
-                    .show_ui(ui, |ui| {
-                        for timeframe in MarketTimeframe::all() {
-                            ui.selectable_value(
-                                &mut self.market_timeframe,
-                                timeframe,
-                                timeframe.label(),
-                            );
-                        }
-                    });
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new("Strategy")
-                        .color(Color32::from_rgb(120, 180, 255))
-                        .strong(),
+                ui.heading("Dataset Filters");
+                Grid::new("top_controls").num_columns(2).show(ui, |ui| {
+                    ui.label("Mode");
+                    ComboBox::from_id_salt("mode_combo")
+                        .selected_text(self.mode.as_str())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.mode, BinanceMode::Demo, "demo");
+                            ui.selectable_value(&mut self.mode, BinanceMode::Real, "real");
+                        });
+                    ui.end_row();
+
+                    ui.label("Timeframe");
+                    ComboBox::from_id_salt("timeframe_combo")
+                        .selected_text(self.market_timeframe.label())
+                        .show_ui(ui, |ui| {
+                            for timeframe in MarketTimeframe::all() {
+                                ui.selectable_value(
+                                    &mut self.market_timeframe,
+                                    timeframe,
+                                    timeframe.label(),
+                                );
+                            }
+                        });
+                    ui.end_row();
+                });
+                ui.small(
+                    RichText::new("Date filters use UTC day boundaries.")
+                        .color(Color32::from_rgb(150, 170, 190)),
                 );
-                for (idx, step) in self.template.steps().iter().enumerate() {
-                    ui.label(format!("{}. {}", idx + 1, step));
+                if let Some(snapshot) = &self.snapshot {
+                    if let Some(source_interval) =
+                        source_interval_hint(snapshot, self.market_timeframe)
+                    {
+                        ui.add_space(4.0);
+                        ui.group(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "Requested {} • Source {}",
+                                    self.market_timeframe.label(),
+                                    source_interval
+                                ))
+                                .color(Color32::from_rgb(255, 210, 120))
+                                .strong(),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                ui.small("Quick switch:");
+                                for timeframe in recommended_timeframes_from_source(&source_interval)
+                                {
+                                    if ui.small_button(timeframe.label()).clicked() {
+                                        self.market_timeframe = timeframe;
+                                    }
+                                }
+                            });
+                        });
+                    }
                 }
                 ui.separator();
-                ui.label(
-                    RichText::new("Dataset Filters")
-                        .color(Color32::from_rgb(120, 220, 180))
-                        .strong(),
-                );
-                ui.label("Base Dir");
-                ui.text_edit_singleline(&mut self.base_dir_input);
 
-                ComboBox::from_label("Symbol")
-                    .selected_text(if self.symbol_input.trim().is_empty() {
-                        "select symbol"
-                    } else {
-                        self.symbol_input.as_str()
-                    })
-                    .show_ui(ui, |ui| {
-                        if let Some(snapshot) = &self.snapshot {
-                            for symbol in &snapshot.available_symbols {
-                                let selected = self.symbol_input.eq_ignore_ascii_case(symbol);
-                                if ui.selectable_label(selected, symbol).clicked() {
-                                    selected_symbol = Some(symbol.clone());
+                if let Some(snapshot) = &self.snapshot {
+                    ui.horizontal(|ui| {
+                        ui.label("Symbol");
+                        ComboBox::from_id_salt("symbol_combo")
+                            .selected_text(if self.symbol_input.trim().is_empty() {
+                                "select symbol"
+                            } else {
+                                self.symbol_input.as_str()
+                            })
+                            .show_ui(ui, |ui| {
+                                for symbol in &snapshot.available_symbols {
+                                    let selected = self.symbol_input.eq_ignore_ascii_case(symbol);
+                                    if ui.selectable_label(selected, symbol).clicked() {
+                                        selected_symbol = Some(symbol.clone());
+                                    }
                                 }
-                            }
+                            });
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label("Symbol");
+                        let symbol_response = ui.add_sized(
+                            [180.0, 22.0],
+                            egui::TextEdit::singleline(&mut self.symbol_input),
+                        );
+                        if symbol_response.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                        {
+                            apply_filters = true;
                         }
                     });
-
-                let symbol_response = ui.text_edit_singleline(&mut self.symbol_input);
-                if symbol_response.lost_focus()
-                    && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                {
-                    apply_filters = true;
                 }
 
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label("From");
-                        let response = ui.text_edit_singleline(&mut self.from_input);
-                        if response.lost_focus()
-                            && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                        {
-                            apply_filters = true;
-                        }
-                    });
-                    ui.vertical(|ui| {
-                        ui.label("To");
-                        let response = ui.text_edit_singleline(&mut self.to_input);
-                        if response.lost_focus()
-                            && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                        {
-                            apply_filters = true;
-                        }
-                    });
+                    ui.label("From");
+                    let from_response =
+                        ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.from_input));
+                    ui.add_space(8.0);
+                    ui.label("To");
+                    let to_response =
+                        ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.to_input));
+                    if (from_response.lost_focus() || to_response.lost_focus())
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                    {
+                        apply_filters = true;
+                    }
                 });
 
                 ui.horizontal_wrapped(|ui| {
@@ -574,45 +591,73 @@ impl eframe::App for SandboxQuantGuiApp {
                     if ui.button("Load Chart").clicked() {
                         apply_filters = true;
                     }
+                    if ui.button("Latest Run").clicked() {
+                        self.refresh_dashboard(None);
+                    }
                     if ui.button("Run Selected Strategy").clicked() {
                         self.run_backtest();
                     }
+                    if ui.button("Reset Zoom").clicked() {
+                        self.reset_viewports();
+                        self.status_message = "Chart zoom/pan reset".to_string();
+                    }
                 });
-                ui.small("Hints: Enter applies typed filters. Mouse wheel zooms. Drag pans. Double-click chart resets viewport.");
+                ui.small("Enter applies typed filters. Wheel zooms. Drag pans. Double-click resets viewport.");
                 ui.separator();
 
                 if let Some(snapshot) = &self.snapshot {
                     render_metric_cards(ui, snapshot);
                     ui.separator();
-                    ui.heading("Recorded Symbols");
-                    egui::ScrollArea::vertical()
-                        .max_height(160.0)
-                        .show(ui, |ui| {
-                            for symbol in &snapshot.available_symbols {
-                                let selected = self.symbol_input.eq_ignore_ascii_case(symbol);
-                                if ui.selectable_label(selected, symbol).clicked() {
-                                    selected_symbol = Some(symbol.clone());
+                    ui.collapsing("Recent Backtests", |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(180.0)
+                            .show(ui, |ui| {
+                                for row in &snapshot.recent_runs {
+                                    let selected = snapshot.selected_run_id == Some(row.run_id);
+                                    let label = format!(
+                                        "#{} {} pnl {:.2}",
+                                        row.run_id, row.template, row.net_pnl
+                                    );
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        selected_run_id = Some(row.run_id);
+                                    }
                                 }
-                            }
-                        });
-                    ui.separator();
-                    ui.heading("Recent Backtests");
-                    egui::ScrollArea::vertical()
-                        .max_height(220.0)
-                        .show(ui, |ui| {
-                            for row in &snapshot.recent_runs {
-                                let selected = snapshot.selected_run_id == Some(row.run_id);
-                                let label = format!(
-                                    "#{} {} {} pnl {:.2}",
-                                    row.run_id, row.instrument, row.template, row.net_pnl
-                                );
-                                if ui.selectable_label(selected, label).clicked() {
-                                    selected_run_id = Some(row.run_id);
+                            });
+                    });
+                    ui.collapsing("Advanced", |ui| {
+                        ui.label("Base Dir");
+                        ui.text_edit_singleline(&mut self.base_dir_input);
+                        ui.label("Template");
+                        ComboBox::from_id_salt("template_combo")
+                            .selected_text(self.template.slug())
+                            .show_ui(ui, |ui| {
+                                for template in StrategyTemplate::all() {
+                                    ui.selectable_value(
+                                        &mut self.template,
+                                        template,
+                                        template.slug(),
+                                    );
                                 }
-                            }
-                        });
+                            });
+                    });
                 } else {
                     ui.label("No snapshot loaded yet.");
+                    ui.collapsing("Advanced", |ui| {
+                        ui.label("Base Dir");
+                        ui.text_edit_singleline(&mut self.base_dir_input);
+                        ui.label("Template");
+                        ComboBox::from_id_salt("template_combo_empty")
+                            .selected_text(self.template.slug())
+                            .show_ui(ui, |ui| {
+                                for template in StrategyTemplate::all() {
+                                    ui.selectable_value(
+                                        &mut self.template,
+                                        template,
+                                        template.slug(),
+                                    );
+                                }
+                            });
+                    });
                 }
 
                 if let Some(symbol) = selected_symbol {
@@ -773,14 +818,17 @@ fn apply_hover(
     };
     let local_x = pointer.x - response.rect.left();
     let local_y = pointer.y - response.rect.top();
+    let mut should_rerender = false;
     if response.dragged() {
         let delta_x = ui.input(|input| input.pointer.delta().x);
         if delta_x.abs() > f32::EPSILON {
             pan_scene(scene, -(delta_x / size.x.max(1.0)));
+            should_rerender = true;
         }
     }
     if response.double_clicked() {
         scene.viewport = Viewport::default();
+        should_rerender = true;
     }
     if response.hovered() {
         let scroll_delta = ui.input(|input| input.raw_scroll_delta.y);
@@ -790,6 +838,7 @@ fn apply_hover(
                 (local_x / size.x.max(1.0)).clamp(0.0, 1.0),
                 scroll_delta / 120.0,
             );
+            should_rerender = true;
         }
     }
     let Some(hover) = hover_model_at(scene, size.x, size.y, local_x, local_y) else {
@@ -815,12 +864,34 @@ fn apply_hover(
             |ui| render_tooltip(ui, tooltip),
         );
     }
+    draw_hover_overlay(ui, response.rect, pointer);
     scene.hover = Some(hover);
     *viewport = scene.viewport.clone();
-    if let Ok(frame) = renderer.render(scene, request) {
-        texture.update(ui.ctx(), response.id.value().to_string().as_str(), &frame);
-        ui.ctx().request_repaint();
+    if should_rerender {
+        if let Ok(frame) = renderer.render(scene, request) {
+            texture.update(ui.ctx(), response.id.value().to_string().as_str(), &frame);
+            ui.ctx().request_repaint();
+        }
     }
+}
+
+fn draw_hover_overlay(ui: &mut Ui, rect: egui::Rect, pointer: egui::Pos2) {
+    let stroke = egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(180, 190, 210, 180));
+    let painter = ui.painter();
+    painter.line_segment(
+        [
+            egui::pos2(pointer.x, rect.top() + 8.0),
+            egui::pos2(pointer.x, rect.bottom() - 8.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(rect.left() + 8.0, pointer.y),
+            egui::pos2(rect.right() - 8.0, pointer.y),
+        ],
+        stroke,
+    );
 }
 
 fn render_tooltip(ui: &mut Ui, tooltip: &TooltipModel) {
@@ -884,14 +955,33 @@ fn market_period_unit_label(
     if snapshot.market_series.klines.is_empty() {
         return "book-ticker".to_string();
     }
+    source_interval_hint(snapshot, selected_timeframe)
+        .map(|source| format!("{} (src {source})", selected_timeframe.label()))
+        .unwrap_or_else(|| selected_timeframe.label().to_string())
+}
+
+fn source_interval_hint(
+    snapshot: &DashboardSnapshot,
+    selected_timeframe: MarketTimeframe,
+) -> Option<String> {
     snapshot
         .market_series
         .kline_interval
         .as_deref()
         .and_then(MarketTimeframe::from_interval_label)
         .filter(|source| source.rank() > selected_timeframe.rank())
-        .map(|source| format!("{} (src {})", selected_timeframe.label(), source.label()))
-        .unwrap_or_else(|| selected_timeframe.label().to_string())
+        .map(|source| source.label().to_string())
+}
+
+fn recommended_timeframes_from_source(source_interval: &str) -> Vec<MarketTimeframe> {
+    let Some(source) = MarketTimeframe::from_interval_label(source_interval) else {
+        return Vec::new();
+    };
+    MarketTimeframe::all()
+        .into_iter()
+        .filter(|timeframe| timeframe.rank() >= source.rank())
+        .take(4)
+        .collect()
 }
 
 fn latest_available_data_day(
@@ -991,6 +1081,67 @@ mod tests {
             market_period_unit_label(&snapshot, MarketTimeframe::Minute1m),
             "1m (src 1d)"
         );
+    }
+
+    #[test]
+    fn source_interval_hint_reports_coarser_source_without_mutating_selection() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 13).expect("date");
+        let snapshot = DashboardSnapshot {
+            mode: BinanceMode::Demo,
+            base_dir: std::path::PathBuf::from("var"),
+            db_path: std::path::PathBuf::from("var/demo.duckdb"),
+            symbol: "BTCUSDT".to_string(),
+            from: today,
+            to: today,
+            available_symbols: vec!["BTCUSDT".to_string()],
+            recorder_metrics: crate::dataset::types::RecorderMetrics::default(),
+            dataset_summary: crate::dataset::types::BacktestDatasetSummary {
+                mode: BinanceMode::Demo,
+                symbol: "BTCUSDT".to_string(),
+                symbol_found: true,
+                from: today.to_string(),
+                to: today.to_string(),
+                liquidation_events: 0,
+                book_ticker_events: 0,
+                agg_trade_events: 0,
+                derived_kline_1s_bars: 0,
+            },
+            market_series: crate::visualization::types::MarketSeries {
+                symbol: "BTCUSDT".to_string(),
+                liquidations: Vec::new(),
+                book_tickers: Vec::new(),
+                klines: vec![crate::dataset::types::DerivedKlineRow {
+                    open_time_ms: 0,
+                    close_time_ms: 1,
+                    open: 1.0,
+                    high: 1.0,
+                    low: 1.0,
+                    close: 1.0,
+                    volume: 1.0,
+                    quote_volume: 1.0,
+                    trade_count: 1,
+                }],
+                kline_interval: Some("15m".to_string()),
+            },
+            recent_runs: Vec::new(),
+            selected_report: None,
+            selected_run_id: None,
+        };
+
+        assert_eq!(
+            source_interval_hint(&snapshot, MarketTimeframe::Minute1m).as_deref(),
+            Some("15m")
+        );
+    }
+
+    #[test]
+    fn recommended_timeframes_start_from_source_interval() {
+        let labels = recommended_timeframes_from_source("15m")
+            .into_iter()
+            .map(|timeframe| timeframe.label())
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels, vec!["15m", "30m", "1h", "4h"]);
     }
 
     #[test]

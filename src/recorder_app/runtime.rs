@@ -20,6 +20,12 @@ use crate::dataset::schema::init_schema_for_path;
 use crate::dataset::types::{BacktestDatasetSummary, RecorderMetrics};
 use crate::error::storage_error::StorageError;
 use crate::record::coordination::RecorderCoordination;
+use crate::storage::postgres_market_data::{
+    connect as connect_postgres, init_schema as init_postgres_schema, insert_agg_trade,
+    insert_book_ticker, insert_liquidation, mask_postgres_url, metrics_for_postgres_url,
+    postgres_url_from_env, CollectorStorageBackend, PostgresAggTradeRecord,
+    PostgresBookTickerRecord, PostgresLiquidationRecord,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecorderState {
@@ -45,6 +51,8 @@ pub struct RecorderStatus {
     pub mode: BinanceMode,
     pub state: RecorderState,
     pub db_path: PathBuf,
+    pub storage_backend: String,
+    pub storage_target: String,
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     pub manual_symbols: Vec<String>,
@@ -61,6 +69,8 @@ impl RecorderStatus {
         mode: BinanceMode,
         state: RecorderState,
         db_path: PathBuf,
+        storage_backend: String,
+        storage_target: String,
         manual_symbols: Vec<String>,
         strategy_symbols: Vec<String>,
         watched_symbols: Vec<String>,
@@ -70,6 +80,8 @@ impl RecorderStatus {
             mode,
             state,
             db_path,
+            storage_backend,
+            storage_target,
             started_at: if state == RecorderState::Running {
                 Some(now)
             } else {
@@ -113,6 +125,8 @@ struct ModeWorker {
 pub struct MarketDataRecorder {
     base_dir: PathBuf,
     network_enabled: bool,
+    storage_backend: CollectorStorageBackend,
+    postgres_url: Option<String>,
     statuses: BTreeMap<BinanceMode, RecorderStatus>,
     workers: BTreeMap<BinanceMode, ModeWorker>,
 }
@@ -122,6 +136,7 @@ impl std::fmt::Debug for MarketDataRecorder {
         f.debug_struct("MarketDataRecorder")
             .field("base_dir", &self.base_dir)
             .field("network_enabled", &self.network_enabled)
+            .field("storage_backend", &self.storage_backend)
             .field("statuses", &self.statuses)
             .finish()
     }
@@ -135,9 +150,21 @@ impl Default for MarketDataRecorder {
 
 impl MarketDataRecorder {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+        let storage_backend = std::env::var("SANDBOX_QUANT_RECORDER_STORAGE")
+            .ok()
+            .as_deref()
+            .map(parse_storage_backend)
+            .unwrap_or(CollectorStorageBackend::DuckDb);
+        let postgres_url = if storage_backend == CollectorStorageBackend::Postgres {
+            postgres_url_from_env().ok()
+        } else {
+            None
+        };
         Self {
             base_dir: base_dir.into(),
             network_enabled: true,
+            storage_backend,
+            postgres_url,
             statuses: BTreeMap::new(),
             workers: BTreeMap::new(),
         }
@@ -165,7 +192,12 @@ impl MarketDataRecorder {
         }
 
         let db_path = self.db_path(mode);
-        init_schema_for_path(&db_path)?;
+        if self.storage_backend == CollectorStorageBackend::DuckDb {
+            init_schema_for_path(&db_path)?;
+        } else if let Some(url) = self.postgres_url.as_deref() {
+            let mut client = connect_postgres(url)?;
+            let _ = init_postgres_schema(&mut client, url)?;
+        }
         let manual_symbols = normalize_symbols(manual_symbols);
         let strategy_symbols = normalize_symbols(strategy_symbols);
         let watched_symbols = merge_symbol_sets(manual_symbols.clone(), strategy_symbols.clone());
@@ -173,6 +205,8 @@ impl MarketDataRecorder {
             mode,
             RecorderState::Running,
             db_path.clone(),
+            self.storage_backend.as_str().to_string(),
+            self.storage_target(mode),
             manual_symbols,
             strategy_symbols,
             watched_symbols.clone(),
@@ -193,6 +227,8 @@ impl MarketDataRecorder {
                 mode,
                 RecorderState::Stopped,
                 self.db_path(mode),
+                self.storage_backend.as_str().to_string(),
+                self.storage_target(mode),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
@@ -352,6 +388,8 @@ impl MarketDataRecorder {
         let worker_stop_flag = stop_flag.clone();
         let snapshot = Arc::new(Mutex::new(WorkerSnapshot::new(initial_metrics)));
         let worker_snapshot = snapshot.clone();
+        let storage_backend = self.storage_backend;
+        let postgres_url = self.postgres_url.clone();
         let handle = std::thread::Builder::new()
             .name(format!("market-recorder-{}", mode.as_str()))
             .spawn(move || {
@@ -370,6 +408,8 @@ impl MarketDataRecorder {
                     run_market_data_worker(
                         mode,
                         db_path,
+                        storage_backend,
+                        postgres_url,
                         watched_symbols,
                         worker_stop_flag,
                         worker_snapshot,
@@ -392,11 +432,32 @@ impl MarketDataRecorder {
     }
 
     fn load_metrics(&self, db_path: &Path) -> Result<RecorderMetrics, StorageError> {
-        metrics_for_path(db_path)
+        match self.storage_backend {
+            CollectorStorageBackend::DuckDb => metrics_for_path(db_path),
+            CollectorStorageBackend::Postgres => self
+                .postgres_url
+                .as_deref()
+                .ok_or_else(|| StorageError::WriteFailedWithContext {
+                    message: "postgres recorder backend selected but postgres URL is missing"
+                        .to_string(),
+                })
+                .and_then(metrics_for_postgres_url),
+        }
     }
 
     fn db_path(&self, mode: BinanceMode) -> PathBuf {
         RecorderCoordination::new(self.base_dir.clone()).db_path(mode)
+    }
+
+    fn storage_target(&self, mode: BinanceMode) -> String {
+        match self.storage_backend {
+            CollectorStorageBackend::DuckDb => self.db_path(mode).display().to_string(),
+            CollectorStorageBackend::Postgres => self
+                .postgres_url
+                .as_deref()
+                .map(mask_postgres_url)
+                .unwrap_or_else(|| "postgres://***".to_string()),
+        }
     }
 }
 
@@ -411,16 +472,49 @@ impl Drop for MarketDataRecorder {
 async fn run_market_data_worker(
     mode: BinanceMode,
     db_path: PathBuf,
+    storage_backend: CollectorStorageBackend,
+    postgres_url: Option<String>,
     watched_symbols: Vec<String>,
     stop_flag: Arc<AtomicBool>,
     snapshot: Arc<Mutex<WorkerSnapshot>>,
 ) {
-    let Ok(connection) = Connection::open(&db_path) else {
-        record_worker_error(
-            &snapshot,
-            format!("failed to open duckdb at {}", db_path.display()),
-        );
-        return;
+    let duck_connection = if storage_backend == CollectorStorageBackend::DuckDb {
+        match Connection::open(&db_path) {
+            Ok(connection) => Some(connection),
+            Err(_) => {
+                record_worker_error(
+                    &snapshot,
+                    format!("failed to open duckdb at {}", db_path.display()),
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let mut postgres_client = if storage_backend == CollectorStorageBackend::Postgres {
+        let Some(url) = postgres_url.as_deref() else {
+            record_worker_error(
+                &snapshot,
+                "postgres recorder backend missing URL".to_string(),
+            );
+            return;
+        };
+        match connect_postgres(url) {
+            Ok(mut client) => {
+                if let Err(error) = init_postgres_schema(&mut client, url) {
+                    record_worker_error(&snapshot, error.to_string());
+                    return;
+                }
+                Some(client)
+            }
+            Err(error) => {
+                record_worker_error(&snapshot, error.to_string());
+                return;
+            }
+        }
+    } else {
+        None
     };
     let mut agg_trade_bar_seconds = BTreeMap::new();
 
@@ -481,7 +575,14 @@ async fn run_market_data_worker(
                 message = force_stream.next() => {
                     match message {
                         Some(Ok(message)) => {
-                            if let Err(error) = handle_force_order_message(&connection, mode, &mut liquidation_seq, message) {
+                            if let Err(error) = handle_force_order_message(
+                                duck_connection.as_ref(),
+                                postgres_client.as_mut(),
+                                mode,
+                                &mut liquidation_seq,
+                                &snapshot,
+                                message
+                            ) {
                                 record_worker_error(&snapshot, error.to_string());
                                 eprintln!(
                                     "market recorder: forceOrder stream handling failed mode={} error={}",
@@ -490,7 +591,6 @@ async fn run_market_data_worker(
                                 );
                                 break;
                             }
-                            record_force_order_event(&snapshot, &connection);
                         }
                         Some(Err(error)) => {
                             record_worker_error(&snapshot, format!("forceOrder stream disconnected: {error}"));
@@ -515,7 +615,8 @@ async fn run_market_data_worker(
                     match message {
                         Some(Ok(message)) => {
                             if let Err(error) = handle_symbol_message(
-                                &connection,
+                                duck_connection.as_ref(),
+                                postgres_client.as_mut(),
                                 mode,
                                 &mut ticker_seq,
                                 &mut trade_seq,
@@ -577,9 +678,11 @@ async fn next_symbol_message(
 }
 
 fn handle_force_order_message(
-    connection: &Connection,
+    duck_connection: Option<&Connection>,
+    postgres_client: Option<&mut postgres::Client>,
     mode: BinanceMode,
     sequence: &mut i64,
+    snapshot: &Arc<Mutex<WorkerSnapshot>>,
     message: Message,
 ) -> Result<(), StorageError> {
     let payload = match message {
@@ -601,34 +704,60 @@ fn handle_force_order_message(
     };
     *sequence += 1;
     let receive_time_ms = Utc::now().timestamp_millis();
-    connection
-        .execute(
-            "INSERT INTO raw_liquidation_events (
-                event_id, mode, symbol, event_time, receive_time, force_side, price, qty, notional, raw_payload
-             ) VALUES (
-                ?, ?, ?, to_timestamp(? / 1000.0), to_timestamp(? / 1000.0), ?, ?, ?, ?, ?
-             )",
+    let symbol = order.symbol.clone();
+    let side = order.side.clone();
+    if let Some(connection) = duck_connection {
+        connection
+            .execute(
+                "INSERT INTO raw_liquidation_events (
+                    event_id, mode, symbol, event_time, receive_time, force_side, price, qty, notional, raw_payload
+                 ) VALUES (
+                    ?, ?, ?, to_timestamp(? / 1000.0), to_timestamp(? / 1000.0), ?, ?, ?, ?, ?
+                 )",
                 params![
                     *sequence,
                     mode.as_str(),
-                    order.symbol,
+                    symbol,
                     parsed.event_time,
+                    receive_time_ms,
+                    side,
+                    order.price,
+                    order.qty,
+                    order.price * order.qty,
+                    payload,
+                ],
+            )
+            .map_err(|error| StorageError::WriteFailedWithContext {
+                message: error.to_string(),
+            })?;
+    } else if let Some(client) = postgres_client {
+        insert_liquidation(
+            client,
+            &PostgresLiquidationRecord {
+                mode: mode.as_str().to_string(),
+                product: "um".to_string(),
+                symbol: symbol.clone(),
+                event_time_ms: parsed.event_time,
                 receive_time_ms,
-                order.side,
-                order.price,
-                order.qty,
-                order.price * order.qty,
-                payload,
-            ],
-        )
-        .map_err(|error| StorageError::WriteFailedWithContext {
-            message: error.to_string(),
-        })?;
+                force_side: side,
+                price: order.price,
+                qty: order.qty,
+                notional: order.price * order.qty,
+                raw_payload: payload,
+            },
+        )?;
+    } else {
+        return Err(StorageError::WriteFailedWithContext {
+            message: "no recorder storage backend available".to_string(),
+        });
+    }
+    record_force_order_event(snapshot, &symbol, parsed.event_time);
     Ok(())
 }
 
 fn handle_symbol_message(
-    connection: &Connection,
+    duck_connection: Option<&Connection>,
+    postgres_client: Option<&mut postgres::Client>,
     mode: BinanceMode,
     ticker_sequence: &mut i64,
     trade_sequence: &mut i64,
@@ -672,28 +801,48 @@ fn handle_symbol_message(
             return Ok(());
         };
         *ticker_sequence += 1;
-        connection
-            .execute(
-                "INSERT INTO raw_book_ticker (
-                    tick_id, mode, symbol, event_time, receive_time, bid, bid_qty, ask, ask_qty
-                 ) VALUES (
-                    ?, ?, ?, to_timestamp(? / 1000.0), to_timestamp(? / 1000.0), ?, ?, ?, ?
-                 )",
-                params![
-                    *ticker_sequence,
-                    mode.as_str(),
-                    symbol,
-                    event_time,
+        if let Some(connection) = duck_connection {
+            connection
+                .execute(
+                    "INSERT INTO raw_book_ticker (
+                        tick_id, mode, symbol, event_time, receive_time, bid, bid_qty, ask, ask_qty
+                     ) VALUES (
+                        ?, ?, ?, to_timestamp(? / 1000.0), to_timestamp(? / 1000.0), ?, ?, ?, ?
+                     )",
+                    params![
+                        *ticker_sequence,
+                        mode.as_str(),
+                        symbol,
+                        event_time,
+                        receive_time_ms,
+                        bid,
+                        bid_qty,
+                        ask,
+                        ask_qty,
+                    ],
+                )
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?;
+        } else if let Some(client) = postgres_client {
+            insert_book_ticker(
+                client,
+                &PostgresBookTickerRecord {
+                    mode: mode.as_str().to_string(),
+                    symbol: symbol.clone(),
+                    event_time_ms: event_time,
                     receive_time_ms,
                     bid,
                     bid_qty,
                     ask,
                     ask_qty,
-                ],
-            )
-            .map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?;
+                },
+            )?;
+        } else {
+            return Err(StorageError::WriteFailedWithContext {
+                message: "no recorder storage backend available".to_string(),
+            });
+        }
         record_book_ticker_event(snapshot, &symbol, event_time);
     } else if parsed.data.event_type == "aggTrade" {
         let Some(symbol) = parsed.data.symbol else {
@@ -712,27 +861,46 @@ fn handle_symbol_message(
             return Ok(());
         };
         *trade_sequence += 1;
-        connection
-            .execute(
-                "INSERT INTO raw_agg_trades (
-                    trade_id, mode, symbol, event_time, receive_time, price, qty, is_buyer_maker
-                 ) VALUES (
-                    ?, ?, ?, to_timestamp(? / 1000.0), to_timestamp(? / 1000.0), ?, ?, ?
-                 )",
-                params![
-                    *trade_sequence,
-                    mode.as_str(),
-                    symbol,
-                    event_time,
+        if let Some(connection) = duck_connection {
+            connection
+                .execute(
+                    "INSERT INTO raw_agg_trades (
+                        trade_id, mode, symbol, event_time, receive_time, price, qty, is_buyer_maker
+                     ) VALUES (
+                        ?, ?, ?, to_timestamp(? / 1000.0), to_timestamp(? / 1000.0), ?, ?, ?
+                     )",
+                    params![
+                        *trade_sequence,
+                        mode.as_str(),
+                        symbol,
+                        event_time,
+                        receive_time_ms,
+                        price,
+                        qty,
+                        is_buyer_maker,
+                    ],
+                )
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: error.to_string(),
+                })?;
+        } else if let Some(client) = postgres_client {
+            insert_agg_trade(
+                client,
+                &PostgresAggTradeRecord {
+                    mode: mode.as_str().to_string(),
+                    symbol: symbol.clone(),
+                    event_time_ms: event_time,
                     receive_time_ms,
                     price,
                     qty,
                     is_buyer_maker,
-                ],
-            )
-            .map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?;
+                },
+            )?;
+        } else {
+            return Err(StorageError::WriteFailedWithContext {
+                message: "no recorder storage backend available".to_string(),
+            });
+        }
         record_agg_trade_event(snapshot, &symbol, event_time, agg_trade_bar_seconds);
     }
 
@@ -777,6 +945,13 @@ fn merge_symbol_sets(left: Vec<String>, right: Vec<String>) -> Vec<String> {
         merged.insert(symbol);
     }
     merged.into_iter().collect()
+}
+
+fn parse_storage_backend(value: &str) -> CollectorStorageBackend {
+    match value {
+        "postgres" => CollectorStorageBackend::Postgres,
+        _ => CollectorStorageBackend::DuckDb,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -894,17 +1069,17 @@ fn record_worker_error(snapshot: &Arc<Mutex<WorkerSnapshot>>, error: String) {
     }
 }
 
-fn record_force_order_event(snapshot: &Arc<Mutex<WorkerSnapshot>>, connection: &Connection) {
+fn record_force_order_event(
+    snapshot: &Arc<Mutex<WorkerSnapshot>>,
+    symbol: &str,
+    event_time_ms: i64,
+) {
     if let Ok(mut snapshot) = snapshot.lock() {
         snapshot.updated_at = Utc::now();
         snapshot.last_error = None;
         snapshot.metrics.liquidation_events += 1;
-        snapshot.metrics.last_liquidation_event_time =
-            query_latest_timestamp(connection, "raw_liquidation_events", "event_time")
-                .ok()
-                .flatten();
-        snapshot.metrics.top_liquidation_symbols =
-            query_top_symbols(connection, "raw_liquidation_events").unwrap_or_default();
+        snapshot.metrics.last_liquidation_event_time = timestamp_string(event_time_ms);
+        increment_top_symbol(&mut snapshot.metrics.top_liquidation_symbols, symbol);
     }
 }
 
@@ -973,60 +1148,4 @@ fn timestamp_string(event_time_ms: i64) -> Option<String> {
                 .format("%Y-%m-%d %H:%M:%S%.3f")
                 .to_string()
         })
-}
-
-fn query_latest_timestamp(
-    connection: &Connection,
-    table: &str,
-    column: &str,
-) -> Result<Option<String>, StorageError> {
-    let sql = format!("SELECT CAST(MAX({column}) AS VARCHAR) FROM {table}");
-    let mut statement =
-        connection
-            .prepare(&sql)
-            .map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?;
-    statement.query_row([], |row| row.get(0)).map_err(|error| {
-        StorageError::WriteFailedWithContext {
-            message: error.to_string(),
-        }
-    })
-}
-
-fn query_top_symbols(connection: &Connection, table: &str) -> Result<Vec<String>, StorageError> {
-    let sql = format!(
-        "SELECT symbol, COUNT(*) AS row_count FROM {table} GROUP BY symbol ORDER BY row_count DESC, symbol ASC LIMIT 5"
-    );
-    let mut statement =
-        connection
-            .prepare(&sql)
-            .map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?;
-    let mut rows = statement
-        .query([])
-        .map_err(|error| StorageError::WriteFailedWithContext {
-            message: error.to_string(),
-        })?;
-    let mut result = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|error| StorageError::WriteFailedWithContext {
-            message: error.to_string(),
-        })?
-    {
-        let symbol: String = row
-            .get(0)
-            .map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?;
-        let row_count: i64 = row
-            .get(1)
-            .map_err(|error| StorageError::WriteFailedWithContext {
-                message: error.to_string(),
-            })?;
-        result.push(format!("{symbol}:{row_count}"));
-    }
-    Ok(result)
 }

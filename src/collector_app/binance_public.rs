@@ -8,6 +8,11 @@ use crate::app::bootstrap::BinanceMode;
 use crate::dataset::schema::init_schema_for_path;
 use crate::error::storage_error::StorageError;
 use crate::record::coordination::RecorderCoordination;
+use crate::storage::postgres_market_data::{
+    connect as connect_postgres, init_schema as init_postgres_schema, insert_kline,
+    insert_liquidation, mask_postgres_url, CollectorStorageBackend, PostgresKlineRecord,
+    PostgresLiquidationRecord,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinancePublicProduct {
@@ -41,6 +46,8 @@ pub struct BinancePublicImportConfig {
     pub import_klines: bool,
     pub mode: BinanceMode,
     pub base_dir: String,
+    pub storage_backend: CollectorStorageBackend,
+    pub postgres_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,13 +64,20 @@ pub struct BinancePublicImportReport {
 pub fn import_binance_public_data(
     config: &BinancePublicImportConfig,
 ) -> Result<BinancePublicImportReport, StorageError> {
-    let db_path = RecorderCoordination::new(config.base_dir.clone()).db_path(config.mode);
-    init_schema_for_path(&db_path)?;
-    let connection =
-        Connection::open(&db_path).map_err(|error| StorageError::DatabaseInitFailed {
-            path: db_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+    let target = match config.storage_backend {
+        CollectorStorageBackend::DuckDb => RecorderCoordination::new(config.base_dir.clone())
+            .db_path(config.mode)
+            .display()
+            .to_string(),
+        CollectorStorageBackend::Postgres => {
+            mask_postgres_url(config.postgres_url.as_deref().ok_or_else(|| {
+                StorageError::WriteFailedWithContext {
+                    message: "postgres storage backend requires postgres_url".to_string(),
+                }
+            })?)
+        }
+    };
+
     let client =
         Client::builder()
             .build()
@@ -78,57 +92,131 @@ pub fn import_binance_public_data(
     let mut skipped_kline_dates = 0usize;
     let dates = inclusive_dates(config.from, config.to);
 
-    for date in &dates {
-        let mut imported_any = false;
+    match config.storage_backend {
+        CollectorStorageBackend::DuckDb => {
+            let db_path = RecorderCoordination::new(config.base_dir.clone()).db_path(config.mode);
+            init_schema_for_path(&db_path)?;
+            let connection =
+                Connection::open(&db_path).map_err(|error| StorageError::DatabaseInitFailed {
+                    path: db_path.display().to_string(),
+                    message: error.to_string(),
+                })?;
 
-        if config.import_liquidation {
-            if let Some(url) = liquidation_snapshot_url(config.product, &config.symbol, *date) {
-                if let Some(bytes) = download_zip_if_exists(&client, &url)? {
-                    liquidation_rows += import_liquidation_snapshot_bytes(
-                        &connection,
-                        config.mode,
+            for date in &dates {
+                let mut imported_any = false;
+
+                if config.import_liquidation {
+                    if let Some(url) =
+                        liquidation_snapshot_url(config.product, &config.symbol, *date)
+                    {
+                        if let Some(bytes) = download_zip_if_exists(&client, &url)? {
+                            liquidation_rows += import_liquidation_snapshot_bytes_duckdb(
+                                &connection,
+                                config.mode,
+                                config.product,
+                                &config.symbol,
+                                bytes,
+                            )?;
+                            imported_any = true;
+                        } else {
+                            skipped_liquidation_dates += 1;
+                        }
+                    } else {
+                        skipped_liquidation_dates += 1;
+                    }
+                }
+
+                if config.import_klines {
+                    let url = kline_zip_url(
                         config.product,
                         &config.symbol,
-                        bytes,
-                    )?;
-                    imported_any = true;
-                } else {
-                    skipped_liquidation_dates += 1;
+                        &config.kline_interval,
+                        *date,
+                    );
+                    if let Some(bytes) = download_zip_if_exists(&client, &url)? {
+                        kline_rows += import_kline_bytes_duckdb(
+                            &connection,
+                            config.mode,
+                            config.product,
+                            &config.symbol,
+                            &config.kline_interval,
+                            bytes,
+                        )?;
+                        imported_any = true;
+                    } else {
+                        skipped_kline_dates += 1;
+                    }
                 }
-            } else {
-                skipped_liquidation_dates += 1;
+
+                if imported_any {
+                    dates_with_imports += 1;
+                }
             }
         }
+        CollectorStorageBackend::Postgres => {
+            let postgres_url = config.postgres_url.as_deref().ok_or_else(|| {
+                StorageError::WriteFailedWithContext {
+                    message: "postgres storage backend requires postgres_url".to_string(),
+                }
+            })?;
+            let mut postgres = connect_postgres(postgres_url)?;
+            let _ = init_postgres_schema(&mut postgres, postgres_url)?;
 
-        if config.import_klines {
-            let url = kline_zip_url(
-                config.product,
-                &config.symbol,
-                &config.kline_interval,
-                *date,
-            );
-            if let Some(bytes) = download_zip_if_exists(&client, &url)? {
-                kline_rows += import_kline_bytes(
-                    &connection,
-                    config.mode,
-                    config.product,
-                    &config.symbol,
-                    &config.kline_interval,
-                    bytes,
-                )?;
-                imported_any = true;
-            } else {
-                skipped_kline_dates += 1;
+            for date in &dates {
+                let mut imported_any = false;
+
+                if config.import_liquidation {
+                    if let Some(url) =
+                        liquidation_snapshot_url(config.product, &config.symbol, *date)
+                    {
+                        if let Some(bytes) = download_zip_if_exists(&client, &url)? {
+                            liquidation_rows += import_liquidation_snapshot_bytes_postgres(
+                                &mut postgres,
+                                config.mode,
+                                config.product,
+                                &config.symbol,
+                                bytes,
+                            )?;
+                            imported_any = true;
+                        } else {
+                            skipped_liquidation_dates += 1;
+                        }
+                    } else {
+                        skipped_liquidation_dates += 1;
+                    }
+                }
+
+                if config.import_klines {
+                    let url = kline_zip_url(
+                        config.product,
+                        &config.symbol,
+                        &config.kline_interval,
+                        *date,
+                    );
+                    if let Some(bytes) = download_zip_if_exists(&client, &url)? {
+                        kline_rows += import_kline_bytes_postgres(
+                            &mut postgres,
+                            config.mode,
+                            config.product,
+                            &config.symbol,
+                            &config.kline_interval,
+                            bytes,
+                        )?;
+                        imported_any = true;
+                    } else {
+                        skipped_kline_dates += 1;
+                    }
+                }
+
+                if imported_any {
+                    dates_with_imports += 1;
+                }
             }
-        }
-
-        if imported_any {
-            dates_with_imports += 1;
         }
     }
 
     Ok(BinancePublicImportReport {
-        db_path: db_path.display().to_string(),
+        db_path: target,
         dates_requested: dates.len(),
         dates_with_imports,
         skipped_liquidation_dates,
@@ -163,7 +251,7 @@ fn download_zip_if_exists(client: &Client, url: &str) -> Result<Option<Vec<u8>>,
         })
 }
 
-fn import_liquidation_snapshot_bytes(
+fn import_liquidation_snapshot_bytes_duckdb(
     connection: &Connection,
     mode: BinanceMode,
     product: BinancePublicProduct,
@@ -172,25 +260,12 @@ fn import_liquidation_snapshot_bytes(
 ) -> Result<usize, StorageError> {
     let csv = first_zip_csv(bytes)?;
     let mut rows = 0usize;
-    for (index, line) in csv.lines().enumerate() {
+    let mut next_id = next_liquidation_event_id(connection)?;
+    for line in csv.lines() {
         if line.trim().is_empty() || line.starts_with("time,") {
             continue;
         }
-        let cols = split_csv_line(line);
-        if cols.len() < 10 {
-            continue;
-        }
-        let side = cols[1].trim().to_string();
-        let time_ms = normalize_epoch_millis(parse_i64(&cols[0])?);
-        let limit_price = parse_f64(&cols[5])?;
-        let average_price = parse_f64(&cols[6]).unwrap_or(limit_price);
-        let qty = parse_f64(&cols[9]).or_else(|_| parse_f64(&cols[8]))?;
-        let price = if average_price > 0.0 {
-            average_price
-        } else {
-            limit_price
-        };
-        let notional = price * qty;
+        let record = parse_liquidation_line(mode, product, symbol, line)?;
         connection
             .execute(
                 "INSERT INTO raw_liquidation_events (
@@ -199,30 +274,87 @@ fn import_liquidation_snapshot_bytes(
                     ?, ?, ?, to_timestamp(? / 1000.0), to_timestamp(? / 1000.0), ?, ?, ?, ?, ?
                  )",
                 params![
-                    next_liquidation_event_id(connection)? + index as i64,
-                    mode.as_str(),
-                    symbol,
-                    time_ms,
-                    time_ms,
-                    side,
-                    price,
-                    qty,
-                    notional,
-                    format!(
-                        "{{\"source\":\"binance-public\",\"product\":\"{}\",\"symbol\":\"{}\",\"line\":\"{}\"}}",
-                        product.as_str(),
-                        symbol,
-                        line.replace('\"', "\\\"")
-                    ),
+                    next_id,
+                    record.mode,
+                    record.symbol,
+                    record.event_time_ms,
+                    record.receive_time_ms,
+                    record.force_side,
+                    record.price,
+                    record.qty,
+                    record.notional,
+                    record.raw_payload,
                 ],
             )
             .map_err(storage_err)?;
+        next_id += 1;
         rows += 1;
     }
     Ok(rows)
 }
 
-fn import_kline_bytes(
+fn import_liquidation_snapshot_bytes_postgres(
+    client: &mut postgres::Client,
+    mode: BinanceMode,
+    product: BinancePublicProduct,
+    symbol: &str,
+    bytes: Vec<u8>,
+) -> Result<usize, StorageError> {
+    let csv = first_zip_csv(bytes)?;
+    let mut rows = 0usize;
+    for line in csv.lines() {
+        if line.trim().is_empty() || line.starts_with("time,") {
+            continue;
+        }
+        let record = parse_liquidation_line(mode, product, symbol, line)?;
+        insert_liquidation(client, &record)?;
+        rows += 1;
+    }
+    Ok(rows)
+}
+
+fn parse_liquidation_line(
+    mode: BinanceMode,
+    product: BinancePublicProduct,
+    symbol: &str,
+    line: &str,
+) -> Result<PostgresLiquidationRecord, StorageError> {
+    let cols = split_csv_line(line);
+    if cols.len() < 10 {
+        return Err(StorageError::WriteFailedWithContext {
+            message: format!("liquidation line too short: {line}"),
+        });
+    }
+    let side = cols[1].trim().to_string();
+    let time_ms = normalize_epoch_millis(parse_i64(&cols[0])?);
+    let limit_price = parse_f64(&cols[5])?;
+    let average_price = parse_f64(&cols[6]).unwrap_or(limit_price);
+    let qty = parse_f64(&cols[9]).or_else(|_| parse_f64(&cols[8]))?;
+    let price = if average_price > 0.0 {
+        average_price
+    } else {
+        limit_price
+    };
+    Ok(PostgresLiquidationRecord {
+        mode: mode.as_str().to_string(),
+        product: product.as_str().to_string(),
+        symbol: symbol.to_string(),
+        event_time_ms: time_ms,
+        receive_time_ms: time_ms,
+        force_side: side,
+        price,
+        qty,
+        notional: price * qty,
+        raw_payload: format!(
+            "{{\"source\":\"binance-public\",\"product\":\"{}\",\"symbol\":\"{}\",\"line\":\"{}\"}}",
+            product.as_str(),
+            symbol,
+            line.replace('\"', "\\\"")
+        ),
+    })
+}
+
+fn import_kline_bytes_duckdb(
     connection: &Connection,
     mode: BinanceMode,
     product: BinancePublicProduct,
@@ -232,25 +364,12 @@ fn import_kline_bytes(
 ) -> Result<usize, StorageError> {
     let csv = first_zip_csv(bytes)?;
     let mut rows = 0usize;
-    for (index, line) in csv.lines().enumerate() {
+    let mut next_id = next_kline_id(connection)?;
+    for line in csv.lines() {
         if line.trim().is_empty() || line.starts_with("open_time,") {
             continue;
         }
-        let cols = split_csv_line(line);
-        if cols.len() < 11 {
-            continue;
-        }
-        let open_time_ms = normalize_epoch_millis(parse_i64(&cols[0])?);
-        let open = parse_f64(&cols[1])?;
-        let high = parse_f64(&cols[2])?;
-        let low = parse_f64(&cols[3])?;
-        let close = parse_f64(&cols[4])?;
-        let volume = parse_f64(&cols[5])?;
-        let close_time_ms = normalize_epoch_millis(parse_i64(&cols[6])?);
-        let quote_volume = parse_f64(&cols[7])?;
-        let trade_count = parse_i64(&cols[8])?;
-        let taker_buy_base_volume = parse_f64(&cols[9]).ok();
-        let taker_buy_quote_volume = parse_f64(&cols[10]).ok();
+        let record = parse_kline_line(mode, product, symbol, interval, line)?;
         connection
             .execute(
                 "INSERT INTO raw_klines (
@@ -262,35 +381,90 @@ fn import_kline_bytes(
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                  )",
                 params![
-                    next_kline_id(connection)? + index as i64,
-                    mode.as_str(),
-                    product.as_str(),
-                    symbol,
-                    interval,
-                    open_time_ms,
-                    close_time_ms,
-                    open,
-                    high,
-                    low,
-                    close,
-                    volume,
-                    quote_volume,
-                    trade_count,
-                    taker_buy_base_volume,
-                    taker_buy_quote_volume,
-                    format!(
-                        "{{\"source\":\"binance-public\",\"product\":\"{}\",\"symbol\":\"{}\",\"interval\":\"{}\",\"line\":\"{}\"}}",
-                        product.as_str(),
-                        symbol,
-                        interval,
-                        line.replace('\"', "\\\"")
-                    ),
+                    next_id,
+                    record.mode,
+                    record.product,
+                    record.symbol,
+                    record.interval_name,
+                    record.open_time_ms,
+                    record.close_time_ms,
+                    record.open,
+                    record.high,
+                    record.low,
+                    record.close,
+                    record.volume,
+                    record.quote_volume,
+                    record.trade_count,
+                    record.taker_buy_base_volume,
+                    record.taker_buy_quote_volume,
+                    record.raw_payload,
                 ],
             )
             .map_err(storage_err)?;
+        next_id += 1;
         rows += 1;
     }
     Ok(rows)
+}
+
+fn import_kline_bytes_postgres(
+    client: &mut postgres::Client,
+    mode: BinanceMode,
+    product: BinancePublicProduct,
+    symbol: &str,
+    interval: &str,
+    bytes: Vec<u8>,
+) -> Result<usize, StorageError> {
+    let csv = first_zip_csv(bytes)?;
+    let mut rows = 0usize;
+    for line in csv.lines() {
+        if line.trim().is_empty() || line.starts_with("open_time,") {
+            continue;
+        }
+        let record = parse_kline_line(mode, product, symbol, interval, line)?;
+        insert_kline(client, &record)?;
+        rows += 1;
+    }
+    Ok(rows)
+}
+
+fn parse_kline_line(
+    mode: BinanceMode,
+    product: BinancePublicProduct,
+    symbol: &str,
+    interval: &str,
+    line: &str,
+) -> Result<PostgresKlineRecord, StorageError> {
+    let cols = split_csv_line(line);
+    if cols.len() < 11 {
+        return Err(StorageError::WriteFailedWithContext {
+            message: format!("kline line too short: {line}"),
+        });
+    }
+    Ok(PostgresKlineRecord {
+        mode: mode.as_str().to_string(),
+        product: product.as_str().to_string(),
+        symbol: symbol.to_string(),
+        interval_name: interval.to_string(),
+        open_time_ms: normalize_epoch_millis(parse_i64(&cols[0])?),
+        open: parse_f64(&cols[1])?,
+        high: parse_f64(&cols[2])?,
+        low: parse_f64(&cols[3])?,
+        close: parse_f64(&cols[4])?,
+        volume: parse_f64(&cols[5])?,
+        close_time_ms: normalize_epoch_millis(parse_i64(&cols[6])?),
+        quote_volume: parse_f64(&cols[7])?,
+        trade_count: parse_i64(&cols[8])?,
+        taker_buy_base_volume: parse_f64(&cols[9]).ok(),
+        taker_buy_quote_volume: parse_f64(&cols[10]).ok(),
+        raw_payload: format!(
+            "{{\"source\":\"binance-public\",\"product\":\"{}\",\"symbol\":\"{}\",\"interval\":\"{}\",\"line\":\"{}\"}}",
+            product.as_str(),
+            symbol,
+            interval,
+            line.replace('\"', "\\\"")
+        ),
+    })
 }
 
 fn first_zip_csv(bytes: Vec<u8>) -> Result<String, StorageError> {

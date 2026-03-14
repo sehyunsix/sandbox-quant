@@ -307,9 +307,9 @@ fn nearest_visible_time(
     max_x: EpochMs,
     target: EpochMs,
 ) -> Option<EpochMs> {
-    pane_points(pane)
-        .map(|(time, _)| time)
-        .filter(|time| *time >= min_x && *time <= max_x)
+    pane.series
+        .iter()
+        .filter_map(|series| nearest_series_time(series, min_x, max_x, target))
         .min_by_key(|time| distance(*time, target))
 }
 
@@ -319,13 +319,17 @@ fn append_candle_tooltip(
     pane: &Pane,
     time_ms: EpochMs,
 ) {
-    let Some(candle) = series
-        .candles
-        .iter()
-        .min_by_key(|candle| distance(candle.close_time_ms, time_ms))
-    else {
+    let Some(index) = nearest_index_by_time(
+        &series
+            .candles
+            .iter()
+            .map(|candle| candle.close_time_ms)
+            .collect::<Vec<_>>(),
+        time_ms,
+    ) else {
         return;
     };
+    let candle = &series.candles[index];
     sections.push(TooltipSection {
         title: "OHLC".to_string(),
         rows: vec![
@@ -355,13 +359,17 @@ fn append_bar_tooltip(
     pane: &Pane,
     time_ms: EpochMs,
 ) {
-    let Some(bar) = series
-        .bars
-        .iter()
-        .min_by_key(|bar| distance(bar.close_time_ms, time_ms))
-    else {
+    let Some(index) = nearest_index_by_time(
+        &series
+            .bars
+            .iter()
+            .map(|bar| bar.close_time_ms)
+            .collect::<Vec<_>>(),
+        time_ms,
+    ) else {
         return;
     };
+    let bar = &series.bars[index];
     sections.push(TooltipSection {
         title: title_case(&series.name),
         rows: vec![TooltipRow {
@@ -377,13 +385,17 @@ fn append_line_tooltip(
     pane: &Pane,
     time_ms: EpochMs,
 ) {
-    let Some(point) = series
-        .points
-        .iter()
-        .min_by_key(|point| distance(point.time_ms, time_ms))
-    else {
+    let Some(index) = nearest_index_by_time(
+        &series
+            .points
+            .iter()
+            .map(|point| point.time_ms)
+            .collect::<Vec<_>>(),
+        time_ms,
+    ) else {
         return;
     };
+    let point = &series.points[index];
     sections.push(TooltipSection {
         title: title_case(&series.name),
         rows: vec![TooltipRow {
@@ -414,6 +426,101 @@ fn append_marker_tooltip(
         title: "Signals".to_string(),
         rows,
     });
+}
+
+fn nearest_series_time(
+    series: &Series,
+    min_x: EpochMs,
+    max_x: EpochMs,
+    target: EpochMs,
+) -> Option<EpochMs> {
+    match series {
+        Series::Candles(series) => nearest_time_in_sorted(
+            &series
+                .candles
+                .iter()
+                .map(|candle| candle.close_time_ms)
+                .collect::<Vec<_>>(),
+            min_x,
+            max_x,
+            target,
+        ),
+        Series::Bars(series) => nearest_time_in_sorted(
+            &series
+                .bars
+                .iter()
+                .map(|bar| bar.close_time_ms)
+                .collect::<Vec<_>>(),
+            min_x,
+            max_x,
+            target,
+        ),
+        Series::Line(series) => nearest_time_in_sorted(
+            &series
+                .points
+                .iter()
+                .map(|point| point.time_ms)
+                .collect::<Vec<_>>(),
+            min_x,
+            max_x,
+            target,
+        ),
+        Series::Markers(series) => nearest_time_in_sorted(
+            &series
+                .markers
+                .iter()
+                .map(|marker| marker.time_ms)
+                .collect::<Vec<_>>(),
+            min_x,
+            max_x,
+            target,
+        ),
+    }
+}
+
+fn nearest_time_in_sorted(
+    times: &[EpochMs],
+    min_x: EpochMs,
+    max_x: EpochMs,
+    target: EpochMs,
+) -> Option<EpochMs> {
+    let start = lower_bound_time(times, min_x);
+    let end = upper_bound_time(times, max_x);
+    if start >= end {
+        return None;
+    }
+    let local = &times[start..end];
+    nearest_index_by_time(local, target).map(|index| local[index])
+}
+
+fn nearest_index_by_time(times: &[EpochMs], target: EpochMs) -> Option<usize> {
+    if times.is_empty() {
+        return None;
+    }
+    let insertion = lower_bound_time(times, target);
+    if insertion == 0 {
+        return Some(0);
+    }
+    if insertion >= times.len() {
+        return Some(times.len() - 1);
+    }
+    let left = insertion - 1;
+    let right = insertion;
+    Some(
+        if distance(times[left], target) <= distance(times[right], target) {
+            left
+        } else {
+            right
+        },
+    )
+}
+
+fn lower_bound_time(times: &[EpochMs], target: EpochMs) -> usize {
+    times.partition_point(|value| *value < target)
+}
+
+fn upper_bound_time(times: &[EpochMs], target: EpochMs) -> usize {
+    times.partition_point(|value| *value <= target)
 }
 
 fn interpolate_time(min: EpochMs, max: EpochMs, t: f32) -> EpochMs {
@@ -557,5 +664,19 @@ mod tests {
         .expect("snapped time");
 
         assert_eq!(snapped.as_i64(), 2_000);
+    }
+
+    #[test]
+    fn nearest_index_by_time_uses_binary_search_behavior() {
+        let times = [
+            EpochMs::new(1_000),
+            EpochMs::new(2_000),
+            EpochMs::new(3_000),
+            EpochMs::new(4_000),
+        ];
+
+        let index = nearest_index_by_time(&times, EpochMs::new(2_600)).expect("index");
+
+        assert_eq!(index, 2);
     }
 }

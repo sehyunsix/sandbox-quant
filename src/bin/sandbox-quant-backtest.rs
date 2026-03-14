@@ -1,5 +1,6 @@
 use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::backtest_app::runner::{run_backtest_for_path, BacktestConfig};
+use sandbox_quant::backtest_app::snapshot::maybe_prepare_snapshot_from_postgres;
 use sandbox_quant::backtest_app::terminal::BacktestTerminal;
 use sandbox_quant::command::backtest::{parse_backtest_command, BacktestCommand};
 use sandbox_quant::dataset::query::{
@@ -72,6 +73,11 @@ fn run_backtest_command(args: &[String]) -> Result<(), Box<dyn std::error::Error
             from,
             to,
         } => {
+            if let Some(message) =
+                maybe_prepare_snapshot_from_postgres(mode, &base_dir, &instrument, from, to)?
+            {
+                eprintln!("{message}");
+            }
             init_schema_for_path(&db_path)?;
             let report = run_backtest_for_path(
                 &db_path,

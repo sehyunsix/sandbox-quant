@@ -1,5 +1,6 @@
 use crate::app::bootstrap::BinanceMode;
 use crate::backtest_app::runner::{run_backtest_for_path, BacktestConfig};
+use crate::backtest_app::snapshot::maybe_prepare_snapshot_from_postgres;
 use crate::command::backtest::{
     backtest_help_text, complete_backtest_input, parse_backtest_shell_input, BacktestCommand,
     BacktestShellInput,
@@ -74,6 +75,17 @@ impl TerminalApp for BacktestTerminal {
                 } => {
                     let db_path =
                         RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);
+                    if let Some(message) = maybe_prepare_snapshot_from_postgres(
+                        self.mode,
+                        &self.base_dir,
+                        &instrument,
+                        from,
+                        to,
+                    )
+                    .map_err(|error| error.to_string())?
+                    {
+                        eprintln!("{message}");
+                    }
                     init_schema_for_path(&db_path).map_err(|error| error.to_string())?;
                     let report = run_backtest_for_path(
                         &db_path,

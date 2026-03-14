@@ -82,12 +82,15 @@ Relevant files:
 ### 7. Interaction
 
 - Symbol/date/template selection in GUI
+- Chart timeframe selection (`1s`, `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1w`, `1d`, `1mo`)
 - Quick date presets
 - Load chart / run selected strategy actions
 - Hover tooltip
 - Crosshair
 - Mouse wheel zoom
 - Drag pan
+- Double-click viewport reset
+- Reset zoom action
 
 Relevant GUI file:
 
@@ -100,6 +103,12 @@ Validated repeatedly during implementation with:
 - `cargo check`
 - `cargo check --features gui --bin sandbox-quant-gui`
 - `cargo test --lib charting::inspect::tests::zoom_scene_handles_subsecond_full_span`
+- `cargo test --features gui -q`
+- headless GUI export via `sandbox-quant-gui --headless-debug-export-dir`
+
+Detailed scenario coverage now lives in:
+
+- [`docs/gui-button-verification.md`](/Users/yuksehyun/project/sandbox-quant/docs/gui-button-verification.md)
 
 ## Known constraints
 
@@ -113,15 +122,12 @@ Validated repeatedly during implementation with:
 
 ### High priority
 
-- Add double-click viewport reset
 - Add keyboard zoom/pan shortcuts
 - Add explicit viewport min/max controls in GUI
 - Persist viewport per chart tab instead of resetting on refresh/run
-- Improve tooltip placement to avoid clipping near window edges
 
 ### Charting quality
 
-- Snap hover/crosshair to the nearest visible candle center rather than interpolated x only
 - Improve candle width and label density based on current zoom level
 - Add volume color legend and pane title styling
 - Add configurable crosshair theme
@@ -130,7 +136,6 @@ Validated repeatedly during implementation with:
 
 ### UX
 
-- Add reset zoom button
 - Add visible indicator for current viewport range
 - Add optional compact mode for tooltip cards
 - Add legend toggle per series
@@ -169,20 +174,17 @@ Notes:
 - There is currently no dedicated `--help` output; unsupported args return an error immediately.
 
 
-## Current data-source limitation
+## Current data-source behavior
 
-The GUI market chart currently loads market data from:
+The GUI market chart can now load market data from:
 
 - `raw_book_ticker`
 - `raw_liquidation_events`
 - `derived_kline_1s` (derived from `raw_agg_trades`)
+- `raw_klines` as a fallback when derived 1-second klines are absent
 
-It does **not** yet render historical backfill directly from `raw_klines` (for example 15m / 1h collector imports).
+Operational notes:
 
-Operational consequence:
-
-- `sandbox-quant-collector` may successfully import historical kline data into `raw_klines`
-- `sandbox-quant-collector summary` will show those rows
-- but the GUI can still appear empty if `raw_book_ticker` / `raw_agg_trades` / `derived_kline_1s` are absent for the selected symbol/date range
-
-For majors-only historical dataset management, treat `collector summary` as the source of truth until GUI support for `raw_klines` is added.
+- if the requested date range is empty, the GUI now falls back to the latest available UTC day for that symbol when it can infer one from stored market data
+- if the requested GUI timeframe is finer than the underlying stored raw kline interval, the GUI will render using the coarser source interval and surface that in the period label
+- explicit product-level timezone policy is still pending; the fallback currently uses UTC day semantics
