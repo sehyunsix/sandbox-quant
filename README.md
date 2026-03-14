@@ -84,6 +84,15 @@ Recorder ownership is documented in [0058-recorder-foreground-terminal-semantics
 
 GUI/charting implementation notes and current limitations are tracked in [`docs/gui-charting-status.md`](docs/gui-charting-status.md).
 
+## Storage / Dependency Notes
+
+This project currently uses both embedded and external storage dependencies:
+
+- `duckdb` / `rusqlite` for local dataset and recorder-facing storage workflows
+- `postgres` for collector storage targets and PostgreSQL-backed market-data import / summary flows
+
+In other words, PostgreSQL is not just an optional environment detail; it is a real crate dependency in `Cargo.toml` and is used by the collector/storage path when `--storage postgres` is selected.
+
 ## Recent Hardening Notes
 
 Recent follow-up work focused on making the current GUI/backtest path safer and clearer to operate:
@@ -139,7 +148,7 @@ The runtime reads demo and real credentials separately based on `BINANCE_MODE` a
   - interactive shell plus `run`, `list`, `report latest|show <run_id>`
 - `sandbox-quant-collector`
   - one-shot historical Binance public data backfill
-  - `binance-public import`, `summary`
+  - `binance-public import`, `summary`, `snapshot postgres-to-duckdb`
 - `sandbox-quant-gui`
   - optional desktop GUI for charting + backtest exploration
   - requires Cargo feature `gui`
@@ -255,6 +264,37 @@ Dataset summary after import:
 cargo run --bin sandbox-quant-collector -- summary --mode demo --base-dir var
 ```
 
+PostgreSQL historical ingest (first migration slice):
+
+```bash
+export SANDBOX_QUANT_POSTGRES_URL=postgres://localhost/sandbox_quant
+cargo run --bin sandbox-quant-collector -- \
+  binance-public import \
+  --products um \
+  --symbols BTCUSDT,ETHUSDT \
+  --from 2026-03-12 \
+  --to 2026-03-13 \
+  --kline-interval 15m \
+  --storage postgres
+```
+
+PostgreSQL summary:
+
+```bash
+cargo run --bin sandbox-quant-collector -- summary --storage postgres
+```
+
+Backtest-ready DuckDB snapshot exported from PostgreSQL:
+
+```bash
+cargo run --bin sandbox-quant-collector -- \
+  snapshot postgres-to-duckdb \
+  --symbols BTCUSDT,ETHUSDT \
+  --from 2026-03-12 \
+  --to 2026-03-13 \
+  --interval 15m
+```
+
 Collector/recorder summary output now includes schema metadata such as `schema_version` so DB bootstrap state is visible without manual inspection.
 
 GUI launch (optional feature):
@@ -295,6 +335,13 @@ var/market-v2-real.duckdb
 `demo` and `real` here refer to account mode metadata. Public market-data streams currently use Binance public futures streams for both modes.
 
 When recorder / collector / backtest tooling opens a dataset DB, the shared market-data schema is applied automatically. Summary/status surfaces now expose `schema_version` so older recorder-created DBs can be bootstrapped forward without manual table creation.
+
+Recommended storage split for concurrency-sensitive workflows:
+
+- PostgreSQL for concurrent ingest / accumulation of raw market data
+- DuckDB for read-heavy snapshots used by backtesting and research
+- Collector currently supports PostgreSQL historical imports plus `snapshot postgres-to-duckdb`
+- Recorder still writes directly to DuckDB today; migrating live recorder ingest to PostgreSQL is the next architectural step if lock contention remains a problem
 
 ## Output
 
