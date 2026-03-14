@@ -1,3 +1,14 @@
+## v1.0.2 - 2026-03-14
+
+- Add GUI charting workflow and backtest dataset hardening (c441f1d)
+- Add collector summary command (581b61d)
+- Add batch Binance public collector (293c081)
+- Persist and inspect backtest runs (eb3c89f)
+- Add Binance public data collector (0d02a70)
+- Persist and inspect backtest runs (1930b57)
+- Stabilize recorder foreground runtime (21a2e50)
+- Refactor app into operator, recorder, and backtest layers (a6db7a1)
+
 ## v1.0.1 - 2026-03-06
 
 - Polish shell startup panel (8f82d4c)
