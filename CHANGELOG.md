@@ -1,3 +1,7 @@
+## v1.0.3 - 2026-03-14
+
+- Document PostgreSQL storage dependency in README (f5c4e70)
+
 ## v1.0.2 - 2026-03-14
 
 - Add GUI charting workflow and backtest dataset hardening (c441f1d)

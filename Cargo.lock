@@ -4043,7 +4043,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox-quant"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "chrono",
