@@ -1,0 +1,415 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT\n  $__timeGroupAlias(open_time, $__interval),\n  avg(close) AS close_price\nFROM raw_klines\nWHERE mode = ${mode:sqlstring}\n  AND symbol = ${symbol:sqlstring}\n  AND interval_name = ${interval:sqlstring}\n  AND $__timeFilter(open_time)\nGROUP BY 1\nORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Price",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT\n  $__timeGroupAlias(open_time, $__interval),\n  sum(volume) AS volume\nFROM raw_klines\nWHERE mode = ${mode:sqlstring}\n  AND symbol = ${symbol:sqlstring}\n  AND interval_name = ${interval:sqlstring}\n  AND $__timeFilter(open_time)\nGROUP BY 1\nORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Volume",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT\n  $__timeGroupAlias(event_time, $__interval),\n  count(*) AS liquidation_events\nFROM raw_liquidation_events\nWHERE mode = ${mode:sqlstring}\n  AND symbol = ${symbol:sqlstring}\n  AND $__timeFilter(event_time)\nGROUP BY 1\nORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Liquidations",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT\n  product,\n  symbol,\n  interval_name,\n  count(*) AS row_count,\n  min(open_time) AS first_open_time,\n  max(close_time) AS last_close_time\nFROM raw_klines\nWHERE mode = ${mode:sqlstring}\nGROUP BY 1, 2, 3\nORDER BY row_count DESC\nLIMIT 20",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Kline Coverage",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "id": 5,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT 'raw_klines' AS table_name, count(*) AS row_count FROM raw_klines\nUNION ALL\nSELECT 'raw_liquidation_events' AS table_name, count(*) AS row_count FROM raw_liquidation_events\nUNION ALL\nSELECT 'raw_book_ticker' AS table_name, count(*) AS row_count FROM raw_book_ticker\nUNION ALL\nSELECT 'raw_agg_trades' AS table_name, count(*) AS row_count FROM raw_agg_trades\nORDER BY table_name",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Data Health",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT 'raw_klines' AS table_name, max(close_time) AS latest_time FROM raw_klines\nUNION ALL\nSELECT 'raw_liquidation_events' AS table_name, max(event_time) AS latest_time FROM raw_liquidation_events\nUNION ALL\nSELECT 'raw_book_ticker' AS table_name, max(event_time) AS latest_time FROM raw_book_ticker\nUNION ALL\nSELECT 'raw_agg_trades' AS table_name, max(event_time) AS latest_time FROM raw_agg_trades\nORDER BY table_name",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Recent Event Times",
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "sandbox-quant",
+    "postgres",
+    "grafana"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "demo",
+          "value": "demo"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Mode",
+        "multi": false,
+        "name": "mode",
+        "options": [
+          {
+            "selected": true,
+            "text": "demo",
+            "value": "demo"
+          },
+          {
+            "selected": false,
+            "text": "real",
+            "value": "real"
+          }
+        ],
+        "query": "demo,real",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "BTCUSDT",
+          "value": "BTCUSDT"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "sandbox-quant-postgres"
+        },
+        "definition": "SELECT DISTINCT symbol FROM raw_klines ORDER BY symbol",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Symbol",
+        "multi": false,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM raw_klines ORDER BY symbol",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "15m",
+          "value": "15m"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "sandbox-quant-postgres"
+        },
+        "definition": "SELECT DISTINCT interval_name FROM raw_klines ORDER BY interval_name",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval",
+        "multi": false,
+        "name": "interval",
+        "options": [],
+        "query": "SELECT DISTINCT interval_name FROM raw_klines ORDER BY interval_name",
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "sandbox-quant overview",
+  "uid": "sandbox-quant-overview",
+  "version": 1,
+  "weekStart": ""
+}

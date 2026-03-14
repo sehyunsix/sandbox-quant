@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: sandbox-quant-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sandbox_quant}
+      POSTGRES_USER: ${POSTGRES_USER:-sandbox_quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sandbox_quant}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sandbox_quant} -d ${POSTGRES_DB:-sandbox_quant}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: sandbox-quant-grafana
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+      GRAFANA_POSTGRES_HOST: postgres:5432
+      GRAFANA_POSTGRES_DB: ${POSTGRES_DB:-sandbox_quant}
+      GRAFANA_POSTGRES_USER: ${POSTGRES_USER:-sandbox_quant}
+      GRAFANA_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sandbox_quant}
+      GRAFANA_POSTGRES_SSLMODE: disable
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  postgres-data:
