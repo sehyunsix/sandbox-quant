@@ -3,17 +3,15 @@ services:
     image: postgres:16
     container_name: sandbox-quant-postgres
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB?set in ops/grafana/.env.example}
-      POSTGRES_USER: ${POSTGRES_USER?set in ops/grafana/.env.example}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?set in ops/grafana/.env.example}
+    env_file:
+      - .env.example
     ports:
-      - "${POSTGRES_PORT?set in ops/grafana/.env.example}:5432"
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER?set in ops/grafana/.env.example} -d ${POSTGRES_DB?set in ops/grafana/.env.example}"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -25,18 +23,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - .env.example
     environment:
-      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER?set in ops/grafana/.env.example}
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD?set in ops/grafana/.env.example}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
       GRAFANA_POSTGRES_HOST: postgres:5432
-      GRAFANA_POSTGRES_DB: ${POSTGRES_DB?set in ops/grafana/.env.example}
-      GRAFANA_POSTGRES_USER: ${POSTGRES_USER?set in ops/grafana/.env.example}
-      GRAFANA_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?set in ops/grafana/.env.example}
       GRAFANA_POSTGRES_SSLMODE: disable
     ports:
-      - "${GRAFANA_PORT?set in ops/grafana/.env.example}:3000"
+      - "3000:3000"
     volumes:
       - ./provisioning:/etc/grafana/provisioning:ro
       - ./dashboards:/var/lib/grafana/dashboards:ro

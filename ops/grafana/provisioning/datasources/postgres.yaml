@@ -7,11 +7,11 @@ datasources:
     access: proxy
     isDefault: true
     url: ${GRAFANA_POSTGRES_HOST}
-    user: ${GRAFANA_POSTGRES_USER}
+    user: ${POSTGRES_USER}
     jsonData:
-      database: ${GRAFANA_POSTGRES_DB}
+      database: ${POSTGRES_DB}
       sslmode: ${GRAFANA_POSTGRES_SSLMODE}
       postgresVersion: 1600
       timescaledb: false
     secureJsonData:
-      password: ${GRAFANA_POSTGRES_PASSWORD}
+      password: ${POSTGRES_PASSWORD}
