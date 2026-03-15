@@ -58,6 +58,7 @@ pub enum SignalKind {
     TakeProfit,
     StopLoss,
     OpenAtEnd,
+    SignalExit,
 }
 
 #[derive(Debug, Clone, PartialEq)]

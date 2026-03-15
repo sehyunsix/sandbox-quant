@@ -343,6 +343,7 @@ fn signal_color(kind: SignalKind) -> RgbColor {
         SignalKind::TakeProfit => TAKE_PROFIT,
         SignalKind::StopLoss => STOP_LOSS,
         SignalKind::OpenAtEnd => OPEN_AT_END,
+        SignalKind::SignalExit => STOP_LOSS,
     }
 }
 

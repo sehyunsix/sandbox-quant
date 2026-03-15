@@ -55,6 +55,7 @@ pub enum BacktestExitReason {
     TakeProfit,
     StopLoss,
     OpenAtEnd,
+    SignalExit,
 }
 
 impl BacktestExitReason {
@@ -63,6 +64,7 @@ impl BacktestExitReason {
             Self::TakeProfit => "take_profit",
             Self::StopLoss => "stop_loss",
             Self::OpenAtEnd => "open_at_end",
+            Self::SignalExit => "signal_exit",
         }
     }
 }

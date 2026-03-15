@@ -254,6 +254,16 @@ Show the latest persisted report:
 target/debug/sandbox-quant-backtest report latest --mode demo --base-dir var
 ```
 
+Export the latest persisted backtest run into PostgreSQL for Grafana:
+
+```bash
+export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
+cargo run --bin sandbox-quant-backtest -- \
+  export postgres latest \
+  --mode demo \
+  --base-dir var
+```
+
 Backtest report/list output now uses explicit state markers so operators can tell the difference between:
 
 - a normal run with trades: `state=ok`
@@ -313,6 +323,12 @@ cargo run --bin sandbox-quant-collector -- \
 ```
 
 By default the PostgreSQL snapshot now exports any matching `raw_klines`, `raw_liquidation_events`, `raw_book_ticker`, and `raw_agg_trades` rows into DuckDB so existing backtest/GUI flows can keep reading DuckDB snapshots. Use `--skip-book-tickers` / `--skip-agg-trades` / `--skip-liquidations` to narrow the export.
+
+Backtest Grafana flow:
+
+- run or inspect a backtest against DuckDB
+- export the persisted run into PostgreSQL with `sandbox-quant-backtest export postgres latest|show <run_id>`
+- open the `sandbox-quant backtest pnl` Grafana dashboard to inspect equity curve, cumulative PnL, trade PnL, and recent exported runs
 
 Collector/recorder summary output now includes schema metadata such as `schema_version` so DB bootstrap state is visible without manual inspection.
 

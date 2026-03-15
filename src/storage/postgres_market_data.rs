@@ -1,8 +1,9 @@
-use chrono::NaiveDate;
+use chrono::{NaiveDate, TimeZone, Utc};
 use duckdb::{params, Connection as DuckConnection};
 use postgres::{Client, NoTls};
 
 use crate::app::bootstrap::BinanceMode;
+use crate::backtest_app::runner::{BacktestReport, BacktestTrade};
 use crate::dataset::schema::{init_schema_for_path, MARKET_DATA_SCHEMA_VERSION};
 use crate::error::storage_error::StorageError;
 use crate::record::coordination::RecorderCoordination;
@@ -84,6 +85,76 @@ CREATE TABLE IF NOT EXISTS raw_klines (
 
 CREATE UNIQUE INDEX IF NOT EXISTS raw_klines_natural_idx
 ON raw_klines (mode, product, symbol, interval_name, open_time);
+
+CREATE TABLE IF NOT EXISTS backtest_runs (
+  export_run_id BIGSERIAL PRIMARY KEY,
+  source_db_path TEXT NOT NULL,
+  source_run_id BIGINT NOT NULL,
+  exported_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  mode TEXT NOT NULL,
+  template TEXT NOT NULL,
+  instrument TEXT NOT NULL,
+  from_date DATE NOT NULL,
+  to_date DATE NOT NULL,
+  liquidation_events BIGINT NOT NULL,
+  book_ticker_events BIGINT NOT NULL,
+  agg_trade_events BIGINT NOT NULL,
+  derived_kline_1s_bars BIGINT NOT NULL,
+  trigger_count BIGINT NOT NULL,
+  closed_trades BIGINT NOT NULL,
+  open_trades BIGINT NOT NULL,
+  wins BIGINT NOT NULL,
+  losses BIGINT NOT NULL,
+  skipped_triggers BIGINT NOT NULL,
+  starting_equity DOUBLE PRECISION NOT NULL,
+  ending_equity DOUBLE PRECISION NOT NULL,
+  net_pnl DOUBLE PRECISION NOT NULL,
+  observed_win_rate DOUBLE PRECISION NOT NULL,
+  average_net_pnl DOUBLE PRECISION NOT NULL,
+  configured_expected_value DOUBLE PRECISION NOT NULL,
+  risk_pct DOUBLE PRECISION NOT NULL,
+  win_rate_assumption DOUBLE PRECISION NOT NULL,
+  r_multiple DOUBLE PRECISION NOT NULL,
+  max_entry_slippage_pct DOUBLE PRECISION NOT NULL,
+  stop_distance_pct DOUBLE PRECISION NOT NULL,
+  UNIQUE (source_db_path, source_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS backtest_runs_lookup_idx
+ON backtest_runs (mode, instrument, template, export_run_id DESC);
+
+CREATE TABLE IF NOT EXISTS backtest_trades (
+  export_run_id BIGINT NOT NULL REFERENCES backtest_runs(export_run_id) ON DELETE CASCADE,
+  trade_id BIGINT NOT NULL,
+  trigger_time TIMESTAMPTZ NOT NULL,
+  entry_time TIMESTAMPTZ NOT NULL,
+  entry_price DOUBLE PRECISION NOT NULL,
+  stop_price DOUBLE PRECISION NOT NULL,
+  take_profit_price DOUBLE PRECISION NOT NULL,
+  qty DOUBLE PRECISION NOT NULL,
+  exit_time TIMESTAMPTZ,
+  exit_price DOUBLE PRECISION,
+  exit_reason TEXT,
+  gross_pnl DOUBLE PRECISION,
+  fees DOUBLE PRECISION,
+  net_pnl DOUBLE PRECISION,
+  PRIMARY KEY (export_run_id, trade_id)
+);
+
+CREATE INDEX IF NOT EXISTS backtest_trades_exit_time_idx
+ON backtest_trades (export_run_id, exit_time);
+
+CREATE TABLE IF NOT EXISTS backtest_equity_points (
+  export_run_id BIGINT NOT NULL REFERENCES backtest_runs(export_run_id) ON DELETE CASCADE,
+  point_id BIGINT NOT NULL,
+  event_time TIMESTAMPTZ NOT NULL,
+  equity DOUBLE PRECISION NOT NULL,
+  cumulative_net_pnl DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (export_run_id, point_id)
+);
+
+CREATE INDEX IF NOT EXISTS backtest_equity_points_time_idx
+ON backtest_equity_points (export_run_id, event_time);
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +280,14 @@ pub struct PostgresToDuckDbSnapshotReport {
     pub liquidation_rows: usize,
     pub book_ticker_rows: usize,
     pub agg_trade_rows: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostgresBacktestExportReport {
+    pub export_run_id: i64,
+    pub source_run_id: i64,
+    pub trade_rows: usize,
+    pub equity_point_rows: usize,
 }
 
 pub fn postgres_url_from_env() -> Result<String, StorageError> {
@@ -732,6 +811,83 @@ pub fn export_snapshot_to_duckdb(
     })
 }
 
+pub fn export_backtest_report_to_postgres(
+    postgres_url: &str,
+    report: &BacktestReport,
+) -> Result<PostgresBacktestExportReport, StorageError> {
+    let source_run_id = report.run_id.ok_or_else(|| StorageError::WriteFailedWithContext {
+        message: "backtest report export requires a persisted run_id".to_string(),
+    })?;
+    let mut client = connect(postgres_url)?;
+    init_schema(&mut client, postgres_url)?;
+
+    let export_run_id = upsert_backtest_run(&mut client, report, source_run_id)?;
+    client
+        .execute(
+            "DELETE FROM backtest_trades WHERE export_run_id = $1",
+            &[&export_run_id],
+        )
+        .map_err(storage_err)?;
+    client
+        .execute(
+            "DELETE FROM backtest_equity_points WHERE export_run_id = $1",
+            &[&export_run_id],
+        )
+        .map_err(storage_err)?;
+
+    let mut trade_rows = 0usize;
+    for trade in &report.trades {
+        insert_backtest_trade_row(&mut client, export_run_id, trade)?;
+        trade_rows += 1;
+    }
+
+    let start_time = report
+        .from
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| StorageError::WriteFailedWithContext {
+            message: format!("invalid backtest start date: {}", report.from),
+        })
+        .map(|value| Utc.from_utc_datetime(&value))?;
+    let mut equity_point_rows = 0usize;
+    insert_backtest_equity_point(
+        &mut client,
+        export_run_id,
+        0,
+        start_time,
+        report.starting_equity,
+        0.0,
+    )?;
+    equity_point_rows += 1;
+
+    let mut realized = report
+        .trades
+        .iter()
+        .filter_map(|trade| Some((trade.exit_time?, trade.net_pnl?, trade.trade_id as i64)))
+        .collect::<Vec<_>>();
+    realized.sort_by(|left, right| left.0.cmp(&right.0).then(left.2.cmp(&right.2)));
+
+    let mut cumulative_net_pnl = 0.0f64;
+    for (index, (exit_time, net_pnl, _)) in realized.into_iter().enumerate() {
+        cumulative_net_pnl += net_pnl;
+        insert_backtest_equity_point(
+            &mut client,
+            export_run_id,
+            index as i64 + 1,
+            exit_time,
+            report.starting_equity + cumulative_net_pnl,
+            cumulative_net_pnl,
+        )?;
+        equity_point_rows += 1;
+    }
+
+    Ok(PostgresBacktestExportReport {
+        export_run_id,
+        source_run_id,
+        trade_rows,
+        equity_point_rows,
+    })
+}
+
 fn existing_schema_version(client: &mut Client) -> Result<Option<String>, StorageError> {
     let table_exists = client
         .query_one(
@@ -789,6 +945,170 @@ fn query_top_symbols(client: &mut Client, table: &str) -> Result<Vec<String>, St
             rows.into_iter()
                 .map(|row| format!("{}:{}", row.get::<_, String>(0), row.get::<_, i64>(1)))
                 .collect()
+        })
+}
+
+fn upsert_backtest_run(
+    client: &mut Client,
+    report: &BacktestReport,
+    source_run_id: i64,
+) -> Result<i64, StorageError> {
+    let closed_trades = report
+        .trades
+        .iter()
+        .filter(|trade| trade.net_pnl.is_some())
+        .count() as i64;
+    let mode = report.mode.as_str().to_string();
+    let template = report.template.slug().to_string();
+    let instrument = report.instrument.clone();
+    let source_db_path = report.db_path.display().to_string();
+    client
+        .query_one(
+            "INSERT INTO backtest_runs (
+                source_db_path, source_run_id, mode, template, instrument, from_date, to_date,
+                liquidation_events, book_ticker_events, agg_trade_events, derived_kline_1s_bars,
+                trigger_count, closed_trades, open_trades, wins, losses, skipped_triggers,
+                starting_equity, ending_equity, net_pnl, observed_win_rate, average_net_pnl,
+                configured_expected_value, risk_pct, win_rate_assumption, r_multiple,
+                max_entry_slippage_pct, stop_distance_pct
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+             )
+             ON CONFLICT (source_db_path, source_run_id) DO UPDATE SET
+                exported_at = CURRENT_TIMESTAMP,
+                mode = EXCLUDED.mode,
+                template = EXCLUDED.template,
+                instrument = EXCLUDED.instrument,
+                from_date = EXCLUDED.from_date,
+                to_date = EXCLUDED.to_date,
+                liquidation_events = EXCLUDED.liquidation_events,
+                book_ticker_events = EXCLUDED.book_ticker_events,
+                agg_trade_events = EXCLUDED.agg_trade_events,
+                derived_kline_1s_bars = EXCLUDED.derived_kline_1s_bars,
+                trigger_count = EXCLUDED.trigger_count,
+                closed_trades = EXCLUDED.closed_trades,
+                open_trades = EXCLUDED.open_trades,
+                wins = EXCLUDED.wins,
+                losses = EXCLUDED.losses,
+                skipped_triggers = EXCLUDED.skipped_triggers,
+                starting_equity = EXCLUDED.starting_equity,
+                ending_equity = EXCLUDED.ending_equity,
+                net_pnl = EXCLUDED.net_pnl,
+                observed_win_rate = EXCLUDED.observed_win_rate,
+                average_net_pnl = EXCLUDED.average_net_pnl,
+                configured_expected_value = EXCLUDED.configured_expected_value,
+                risk_pct = EXCLUDED.risk_pct,
+                win_rate_assumption = EXCLUDED.win_rate_assumption,
+                r_multiple = EXCLUDED.r_multiple,
+                max_entry_slippage_pct = EXCLUDED.max_entry_slippage_pct,
+                stop_distance_pct = EXCLUDED.stop_distance_pct
+            RETURNING export_run_id",
+            &[
+                &source_db_path,
+                &source_run_id,
+                &mode,
+                &template,
+                &instrument,
+                &report.from,
+                &report.to,
+                &(report.dataset.liquidation_events as i64),
+                &(report.dataset.book_ticker_events as i64),
+                &(report.dataset.agg_trade_events as i64),
+                &(report.dataset.derived_kline_1s_bars as i64),
+                &(report.trigger_count as i64),
+                &closed_trades,
+                &(report.open_trades as i64),
+                &(report.wins as i64),
+                &(report.losses as i64),
+                &(report.skipped_triggers as i64),
+                &report.starting_equity,
+                &report.ending_equity,
+                &report.net_pnl,
+                &report.observed_win_rate,
+                &report.average_net_pnl,
+                &report.configured_expected_value,
+                &report.config.risk_pct,
+                &report.config.win_rate_assumption,
+                &report.config.r_multiple,
+                &report.config.max_entry_slippage_pct,
+                &report.config.stop_distance_pct,
+            ],
+        )
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: format!(
+                "upsert backtest run failed: source_run_id={} instrument={} template={} message={error}",
+                source_run_id,
+                report.instrument,
+                report.template.slug(),
+            ),
+        })
+        .map(|row| row.get(0))
+}
+
+fn insert_backtest_trade_row(
+    client: &mut Client,
+    export_run_id: i64,
+    trade: &BacktestTrade,
+) -> Result<(), StorageError> {
+    client
+        .execute(
+            "INSERT INTO backtest_trades (
+                export_run_id, trade_id, trigger_time, entry_time, entry_price, stop_price,
+                take_profit_price, qty, exit_time, exit_price, exit_reason, gross_pnl, fees, net_pnl
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+             )",
+            &[
+                &export_run_id,
+                &(trade.trade_id as i64),
+                &trade.trigger_time,
+                &trade.entry_time,
+                &trade.entry_price,
+                &trade.stop_price,
+                &trade.take_profit_price,
+                &trade.qty,
+                &trade.exit_time,
+                &trade.exit_price,
+                &trade.exit_reason.as_ref().map(|reason| reason.as_str()),
+                &trade.gross_pnl,
+                &trade.fees,
+                &trade.net_pnl,
+            ],
+        )
+        .map(|_| ())
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: format!(
+                "insert backtest trade failed: trade_id={} message={error}",
+                trade.trade_id
+            ),
+        })
+}
+
+fn insert_backtest_equity_point(
+    client: &mut Client,
+    export_run_id: i64,
+    point_id: i64,
+    event_time: chrono::DateTime<Utc>,
+    equity: f64,
+    cumulative_net_pnl: f64,
+) -> Result<(), StorageError> {
+    client
+        .execute(
+            "INSERT INTO backtest_equity_points (
+                export_run_id, point_id, event_time, equity, cumulative_net_pnl
+             ) VALUES (
+                $1, $2, $3, $4, $5
+             )",
+            &[&export_run_id, &point_id, &event_time, &equity, &cumulative_net_pnl],
+        )
+        .map(|_| ())
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: format!(
+                "insert backtest equity point failed: point_id={} message={error}",
+                point_id
+            ),
         })
 }
 

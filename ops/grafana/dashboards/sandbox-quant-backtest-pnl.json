@@ -1,0 +1,402 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT event_time AS time, equity\nFROM backtest_equity_points\nWHERE export_run_id = CAST(${run_id:sqlstring} AS BIGINT)\nORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Equity Curve",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT event_time AS time, cumulative_net_pnl\nFROM backtest_equity_points\nWHERE export_run_id = CAST(${run_id:sqlstring} AS BIGINT)\nORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Cumulative Net PnL",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT exit_time AS time, net_pnl\nFROM backtest_trades\nWHERE export_run_id = CAST(${run_id:sqlstring} AS BIGINT)\n  AND exit_time IS NOT NULL\nORDER BY 1",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Trade Net PnL",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT\n  export_run_id,\n  source_run_id,\n  instrument,\n  template,\n  from_date,\n  to_date,\n  starting_equity,\n  ending_equity,\n  net_pnl,\n  observed_win_rate,\n  closed_trades,\n  wins,\n  losses\nFROM backtest_runs\nWHERE export_run_id = CAST(${run_id:sqlstring} AS BIGINT)",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Run Summary",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 5,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT\n  export_run_id,\n  source_run_id,\n  instrument,\n  template,\n  from_date,\n  to_date,\n  net_pnl,\n  ending_equity,\n  closed_trades,\n  wins,\n  losses,\n  exported_at\nFROM backtest_runs\nWHERE mode = ${mode:sqlstring}\nORDER BY export_run_id DESC\nLIMIT 20",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Recent Exported Runs",
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "sandbox-quant",
+    "backtest",
+    "pnl",
+    "grafana"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "demo",
+          "value": "demo"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Mode",
+        "multi": false,
+        "name": "mode",
+        "options": [
+          {
+            "selected": true,
+            "text": "demo",
+            "value": "demo"
+          },
+          {
+            "selected": false,
+            "text": "real",
+            "value": "real"
+          }
+        ],
+        "query": "demo,real",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "sandbox-quant-postgres"
+        },
+        "definition": "SELECT DISTINCT instrument FROM backtest_runs WHERE mode = ${mode:sqlstring} ORDER BY instrument",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Instrument",
+        "multi": false,
+        "name": "instrument",
+        "options": [],
+        "query": "SELECT DISTINCT instrument FROM backtest_runs WHERE mode = ${mode:sqlstring} ORDER BY instrument",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "sandbox-quant-postgres"
+        },
+        "definition": "SELECT DISTINCT template FROM backtest_runs WHERE mode = ${mode:sqlstring} AND instrument = ${instrument:sqlstring} ORDER BY template",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Template",
+        "multi": false,
+        "name": "template",
+        "options": [],
+        "query": "SELECT DISTINCT template FROM backtest_runs WHERE mode = ${mode:sqlstring} AND instrument = ${instrument:sqlstring} ORDER BY template",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "sandbox-quant-postgres"
+        },
+        "definition": "SELECT format('export %s | run %s | %s | %s -> %s', export_run_id, source_run_id, instrument, from_date, to_date) AS __text, export_run_id AS __value FROM backtest_runs WHERE mode = ${mode:sqlstring} AND instrument = ${instrument:sqlstring} AND template = ${template:sqlstring} ORDER BY export_run_id DESC LIMIT 50",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Run",
+        "multi": false,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT format('export %s | run %s | %s | %s -> %s', export_run_id, source_run_id, instrument, from_date, to_date) AS __text, export_run_id AS __value FROM backtest_runs WHERE mode = ${mode:sqlstring} AND instrument = ${instrument:sqlstring} AND template = ${template:sqlstring} ORDER BY export_run_id DESC LIMIT 50",
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-5y",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "sandbox-quant backtest pnl",
+  "uid": "sandbox-quant-backtest-pnl",
+  "version": 1,
+  "weekStart": ""
+}
