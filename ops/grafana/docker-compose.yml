@@ -21,6 +21,8 @@ services:
     container_name: sandbox-quant-grafana
     restart: unless-stopped
     depends_on:
+      loki:
+        condition: service_started
       postgres:
         condition: service_healthy
     env_file:
@@ -36,5 +38,31 @@ services:
       - ./provisioning:/etc/grafana/provisioning:ro
       - ./dashboards:/var/lib/grafana/dashboards:ro
 
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: sandbox-quant-loki
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/loki/config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+
+  promtail:
+    image: grafana/promtail:3.2.0
+    container_name: sandbox-quant-promtail
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_started
+    command:
+      - -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - ../../var:/workspace/var:ro
+
 volumes:
   postgres-data:
+  loki-data:
