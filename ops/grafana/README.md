@@ -127,6 +127,7 @@ Current sample expectation:
 
 The starter dashboard now uses `raw_klines` rows stored at `interval_name='1m'` as the source of truth for price and volume charts.
 Higher intervals such as `15m`, `30m`, and `1h` are aggregated at query time in Grafana, so separate PostgreSQL backfills for those higher intervals are not required for charting.
+When multiple symbols are selected together, the top chart shows relative return in percent from the first visible point so one-year performance can be compared on the same scale.
 
 ## Copy/paste queries for Grafana panel editor
 
@@ -172,29 +173,50 @@ ORDER BY row_count DESC
 LIMIT 20
 ```
 
-### 4. Price series
+### 4. Relative return series
 
 ```sql
+WITH bucketed AS (
+  SELECT
+    date_bin(
+      CASE ${interval:sqlstring}
+        WHEN '1m' THEN INTERVAL '1 minute'
+        WHEN '15m' THEN INTERVAL '15 minutes'
+        WHEN '30m' THEN INTERVAL '30 minutes'
+        WHEN '1h' THEN INTERVAL '1 hour'
+        ELSE INTERVAL '1 minute'
+      END,
+      open_time,
+      TIMESTAMPTZ '1970-01-01 00:00:00+00'
+    ) AS time,
+    symbol,
+    close,
+    close_time
+  FROM raw_klines
+  WHERE mode = ${mode:sqlstring}
+    AND symbol IN (${symbol:sqlstring})
+    AND interval_name = '1m'
+    AND $__timeFilter(open_time)
+), ranked AS (
+  SELECT
+    time,
+    symbol,
+    close AS close_price,
+    row_number() OVER (PARTITION BY symbol, time ORDER BY close_time DESC) AS row_num
+  FROM bucketed
+), sampled AS (
+  SELECT
+    time,
+    symbol,
+    close_price
+  FROM ranked
+  WHERE row_num = 1
+)
 SELECT
-  date_bin(
-    CASE ${interval:sqlstring}
-      WHEN '1m' THEN INTERVAL '1 minute'
-      WHEN '15m' THEN INTERVAL '15 minutes'
-      WHEN '30m' THEN INTERVAL '30 minutes'
-      WHEN '1h' THEN INTERVAL '1 hour'
-      ELSE INTERVAL '1 minute'
-    END,
-    open_time,
-    TIMESTAMPTZ '1970-01-01 00:00:00+00'
-  ) AS time,
+  time,
   symbol,
-  avg(close) AS close_price
-FROM raw_klines
-WHERE mode = ${mode:sqlstring}
-  AND symbol IN (${symbol:sqlstring})
-  AND interval_name = '1m'
-  AND $__timeFilter(open_time)
-GROUP BY 1, 2
+  ((close_price / nullif(first_value(close_price) OVER (PARTITION BY symbol ORDER BY time), 0)) - 1) * 100 AS relative_return_pct
+FROM sampled
 ORDER BY 1, 2
 ```
 

@@ -31,6 +31,8 @@
           "color": {
             "mode": "palette-classic"
           },
+          "decimals": 2,
+          "unit": "percent",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "linear",
@@ -68,7 +70,7 @@
           },
           "editorMode": "code",
           "format": "time_series",
-          "rawSql": "WITH bucketed AS (\n  SELECT\n    date_bin(\n      CASE ${interval:sqlstring}\n        WHEN '1m' THEN INTERVAL '1 minute'\n        WHEN '15m' THEN INTERVAL '15 minutes'\n        WHEN '30m' THEN INTERVAL '30 minutes'\n        WHEN '1h' THEN INTERVAL '1 hour'\n        ELSE INTERVAL '1 minute'\n      END,\n      open_time,\n      TIMESTAMPTZ '1970-01-01 00:00:00+00'\n    ) AS time,\n    symbol,\n    close,\n    close_time\n  FROM raw_klines\n  WHERE mode = ${mode:sqlstring}\n    AND symbol IN (${symbol:sqlstring})\n    AND interval_name = '1m'\n    AND $__timeFilter(open_time)\n), ranked AS (\n  SELECT\n    time,\n    symbol,\n    close AS close_price,\n    row_number() OVER (PARTITION BY symbol, time ORDER BY close_time DESC) AS row_num\n  FROM bucketed\n)\nSELECT\n  time,\n  symbol,\n  close_price\nFROM ranked\nWHERE row_num = 1\nORDER BY 1, 2",
+          "rawSql": "WITH bucketed AS (\n  SELECT\n    date_bin(\n      CASE ${interval:sqlstring}\n        WHEN '1m' THEN INTERVAL '1 minute'\n        WHEN '15m' THEN INTERVAL '15 minutes'\n        WHEN '30m' THEN INTERVAL '30 minutes'\n        WHEN '1h' THEN INTERVAL '1 hour'\n        ELSE INTERVAL '1 minute'\n      END,\n      open_time,\n      TIMESTAMPTZ '1970-01-01 00:00:00+00'\n    ) AS time,\n    symbol,\n    close,\n    close_time\n  FROM raw_klines\n  WHERE mode = ${mode:sqlstring}\n    AND symbol IN (${symbol:sqlstring})\n    AND interval_name = '1m'\n    AND $__timeFilter(open_time)\n), ranked AS (\n  SELECT\n    time,\n    symbol,\n    close AS close_price,\n    row_number() OVER (PARTITION BY symbol, time ORDER BY close_time DESC) AS row_num\n  FROM bucketed\n), sampled AS (\n  SELECT\n    time,\n    symbol,\n    close_price\n  FROM ranked\n  WHERE row_num = 1\n), normalized AS (\n  SELECT\n    time,\n    symbol,\n    ((close_price / nullif(first_value(close_price) OVER (PARTITION BY symbol ORDER BY time), 0)) - 1) * 100 AS relative_return_pct\n  FROM sampled\n)\nSELECT\n  time,\n  symbol,\n  relative_return_pct\nFROM normalized\nORDER BY 1, 2",
           "refId": "A",
           "sql": {
             "columns": [],
@@ -76,7 +78,7 @@
           }
         }
       ],
-      "title": "Price",
+      "title": "Relative Return",
       "type": "timeseries"
     },
     {
@@ -418,7 +420,7 @@
     ]
   },
   "time": {
-    "from": "now-30d",
+    "from": "now-1y",
     "to": "now"
   },
   "timepicker": {},
