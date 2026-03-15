@@ -124,13 +124,13 @@ Current sample expectation:
 
 - mode: `demo`
 - symbol: `BTCUSDT` or multiple symbols together
-- interval: `15m`
-- default dashboard time range: `now-3y`
+- interval: `1h`
+- default dashboard time range: `now-1y`
 
 The starter dashboard now uses `raw_klines` rows stored at `interval_name='1m'` as the source of truth for price and volume charts.
 Higher intervals such as `15m`, `30m`, and `1h` are aggregated at query time in Grafana, so separate PostgreSQL backfills for those higher intervals are not required for charting.
 When multiple symbols are selected together, the top chart shows relative return in percent from the first visible point so one-year performance can be compared on the same scale.
-The wider default range also keeps older series such as `USD/KRW` visible without requiring a manual time-range change first.
+Older series such as `USD/KRW` remain queryable, but if their data falls outside the default one-year window you need to widen the dashboard time range manually.
 
 ## Backtest PnL dashboard
 
