@@ -6,10 +6,14 @@ This folder provides a minimal PostgreSQL + Grafana starter for operational dash
 
 - local PostgreSQL via Docker
 - local Grafana via Docker
+- local Loki via Docker
+- local Promtail via Docker
 - provisioned PostgreSQL datasource
+- provisioned Loki datasource
 - starter dashboards:
   - `sandbox-quant overview`
   - `sandbox-quant backtest pnl`
+  - `sandbox-quant system`
 
 ## Start
 
@@ -69,6 +73,7 @@ Default endpoints:
 
 - Grafana: `http://localhost:3000`
 - PostgreSQL: `localhost:5432`
+- Loki: `http://localhost:3100`
 
 Credentials:
 
@@ -156,6 +161,21 @@ After export, the dashboard lets you filter by:
 - `instrument`
 - `template`
 - `run`
+
+## System dashboard
+
+The `sandbox-quant system` dashboard combines:
+
+- PostgreSQL operational tables such as `raw_klines`, `snapshot_exports`, and `backtest_runs`
+- Loki log panels backed by Promtail scraping local runtime log files
+
+Promtail currently scrapes:
+
+- `var/*.log`
+- `var/**/*.log`
+- `var/*.jsonl`
+
+The in-process operator `EventLog` now appends JSON lines to `var/operator-events.jsonl` by default, so trading-engine events can also be queried through Loki.
 
 ## Copy/paste queries for Grafana panel editor
 
