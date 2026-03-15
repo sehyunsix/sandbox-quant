@@ -384,8 +384,8 @@
       {
         "current": {
           "selected": false,
-          "text": "15m",
-          "value": "15m"
+          "text": "1h",
+          "value": "1h"
         },
         "hide": 0,
         "includeAll": false,
@@ -399,7 +399,7 @@
             "value": "1m"
           },
           {
-            "selected": true,
+            "selected": false,
             "text": "15m",
             "value": "15m"
           },
@@ -409,7 +409,7 @@
             "value": "30m"
           },
           {
-            "selected": false,
+            "selected": true,
             "text": "1h",
             "value": "1h"
           }
@@ -420,7 +420,7 @@
     ]
   },
   "time": {
-    "from": "now-3y",
+    "from": "now-1y",
     "to": "now"
   },
   "timepicker": {},
