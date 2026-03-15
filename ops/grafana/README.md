@@ -19,16 +19,14 @@ Example contents:
 POSTGRES_DB=your-postgres-db
 POSTGRES_USER=your-postgres-user
 POSTGRES_PASSWORD=your-postgres-password
-POSTGRES_PORT=5432
 
 GF_SECURITY_ADMIN_USER=your-grafana-admin-user
 GF_SECURITY_ADMIN_PASSWORD=your-grafana-admin-password
-GRAFANA_PORT=3000
 ```
 
 ```bash
 cd ops/grafana
-docker compose --env-file .env.example up -d
+docker compose up -d
 ```
 
 When you want shell commands to reuse the same password values, load `.env.example` into your shell first:
@@ -49,7 +47,7 @@ then either:
 1. bootstrap the schema manually:
 
 ```bash
-export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}"
+export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
 cargo run --bin sandbox-quant-collector -- summary --storage postgres
 ```
 
@@ -60,7 +58,7 @@ or
 ```bash
 cd ops/grafana
 docker compose down -v
-docker compose --env-file .env.example up -d
+docker compose up -d
 ```
 
 If the datasource itself is healthy but panels still fail to load after provisioning, verify the dashboard JSON uses `rawSql` for PostgreSQL panel targets. Grafana's PostgreSQL datasource does not execute provisioned panel SQL correctly when the target stores the query under `rawCode`.
@@ -72,7 +70,7 @@ Default endpoints:
 
 Credentials:
 
-- Docker Compose reads passwords from `ops/grafana/.env.example` via `--env-file`
+- Both services load `ops/grafana/.env.example` through `env_file`
 - Keep `ops/grafana/.env.example` local only; it is gitignored
 - Set every required PostgreSQL and Grafana variable explicitly in that file
 
@@ -83,7 +81,7 @@ The Docker starter also ships an init SQL file so fresh PostgreSQL volumes start
 An easy way to bootstrap schema + verify connectivity is:
 
 ```bash
-export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}"
+export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
 cargo run --bin sandbox-quant-collector -- summary --storage postgres
 ```
 
@@ -92,7 +90,7 @@ cargo run --bin sandbox-quant-collector -- summary --storage postgres
 Example historical import:
 
 ```bash
-export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}"
+export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
 cargo run --bin sandbox-quant-collector -- \
   binance-public import \
   --products um \
@@ -117,15 +115,19 @@ The starter dashboard includes:
 Dashboard variables:
 
 - `mode`
-- `symbol`
-- `interval`
+- `symbol` with multi-select support
+- `interval` as `1m`, `15m`, `30m`, `1h`
 
 Current sample expectation:
 
 - mode: `demo`
-- symbol: `BTCUSDT`
+- symbol: `BTCUSDT` or multiple symbols together
 - interval: `15m`
 - default dashboard time range: `now-30d`
+
+The starter dashboard now uses `raw_klines` rows stored at `interval_name='1m'` as the source of truth for price and volume charts.
+Higher intervals such as `15m`, `30m`, and `1h` are aggregated at query time in Grafana, so separate PostgreSQL backfills for those higher intervals are not required for charting.
+When multiple symbols are selected together, the top chart shows relative return in percent from the first visible point so one-year performance can be compared on the same scale.
 
 ## Copy/paste queries for Grafana panel editor
 
@@ -171,19 +173,51 @@ ORDER BY row_count DESC
 LIMIT 20
 ```
 
-### 4. Price series
+### 4. Relative return series
 
 ```sql
+WITH bucketed AS (
+  SELECT
+    date_bin(
+      CASE ${interval:sqlstring}
+        WHEN '1m' THEN INTERVAL '1 minute'
+        WHEN '15m' THEN INTERVAL '15 minutes'
+        WHEN '30m' THEN INTERVAL '30 minutes'
+        WHEN '1h' THEN INTERVAL '1 hour'
+        ELSE INTERVAL '1 minute'
+      END,
+      open_time,
+      TIMESTAMPTZ '1970-01-01 00:00:00+00'
+    ) AS time,
+    symbol,
+    close,
+    close_time
+  FROM raw_klines
+  WHERE mode = ${mode:sqlstring}
+    AND symbol IN (${symbol:sqlstring})
+    AND interval_name = '1m'
+    AND $__timeFilter(open_time)
+), ranked AS (
+  SELECT
+    time,
+    symbol,
+    close AS close_price,
+    row_number() OVER (PARTITION BY symbol, time ORDER BY close_time DESC) AS row_num
+  FROM bucketed
+), sampled AS (
+  SELECT
+    time,
+    symbol,
+    close_price
+  FROM ranked
+  WHERE row_num = 1
+)
 SELECT
-  $__timeGroupAlias(open_time, $__interval),
-  avg(close) AS close_price
-FROM raw_klines
-WHERE mode = ${mode:sqlstring}
-  AND symbol = ${symbol:sqlstring}
-  AND interval_name = ${interval:sqlstring}
-  AND $__timeFilter(open_time)
-GROUP BY 1
-ORDER BY 1
+  time,
+  symbol,
+  ((close_price / nullif(first_value(close_price) OVER (PARTITION BY symbol ORDER BY time), 0)) - 1) * 100 AS relative_return_pct
+FROM sampled
+ORDER BY 1, 2
 ```
 
 ## Notes
