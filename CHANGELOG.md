@@ -1,3 +1,11 @@
+## v1.0.5 - 2026-03-14
+
+- Fix Grafana env-file handling (135ffa6)
+
+## v1.0.4 - 2026-03-14
+
+- Add PostgreSQL snapshot flow and GUI/backtest polish (72e2dd1)
+
 ## v1.0.3 - 2026-03-14
 
 - Document PostgreSQL storage dependency in README (f5c4e70)
