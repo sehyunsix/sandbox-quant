@@ -124,6 +124,7 @@ impl VisualizationService {
                         BacktestExitReason::TakeProfit => SignalKind::TakeProfit,
                         BacktestExitReason::StopLoss => SignalKind::StopLoss,
                         BacktestExitReason::OpenAtEnd => SignalKind::OpenAtEnd,
+                        BacktestExitReason::SignalExit => SignalKind::SignalExit,
                     },
                 });
             }

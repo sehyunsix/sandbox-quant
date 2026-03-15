@@ -7,7 +7,9 @@ This folder provides a minimal PostgreSQL + Grafana starter for operational dash
 - local PostgreSQL via Docker
 - local Grafana via Docker
 - provisioned PostgreSQL datasource
-- a starter dashboard (`sandbox-quant overview`)
+- starter dashboards:
+  - `sandbox-quant overview`
+  - `sandbox-quant backtest pnl`
 
 ## Start
 
@@ -128,6 +130,31 @@ Current sample expectation:
 The starter dashboard now uses `raw_klines` rows stored at `interval_name='1m'` as the source of truth for price and volume charts.
 Higher intervals such as `15m`, `30m`, and `1h` are aggregated at query time in Grafana, so separate PostgreSQL backfills for those higher intervals are not required for charting.
 When multiple symbols are selected together, the top chart shows relative return in percent from the first visible point so one-year performance can be compared on the same scale.
+
+## Backtest PnL dashboard
+
+The `sandbox-quant backtest pnl` dashboard reads exported backtest runs from PostgreSQL tables:
+
+- `backtest_runs`
+- `backtest_trades`
+- `backtest_equity_points`
+
+Export a persisted DuckDB backtest run into PostgreSQL with:
+
+```bash
+export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
+cargo run --bin sandbox-quant-backtest -- \
+  export postgres latest \
+  --mode demo \
+  --base-dir var
+```
+
+After export, the dashboard lets you filter by:
+
+- `mode`
+- `instrument`
+- `template`
+- `run`
 
 ## Copy/paste queries for Grafana panel editor
 

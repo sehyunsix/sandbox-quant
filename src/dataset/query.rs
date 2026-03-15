@@ -772,6 +772,7 @@ fn parse_mode(raw: &str) -> Result<BinanceMode, StorageError> {
 fn parse_template(raw: &str) -> Result<StrategyTemplate, StorageError> {
     match raw {
         "liquidation-breakdown-short" => Ok(StrategyTemplate::LiquidationBreakdownShort),
+        "price-sma-cross-long" => Ok(StrategyTemplate::PriceSmaCrossLong),
         other => Err(StorageError::WriteFailedWithContext {
             message: format!("unsupported backtest template: {other}"),
         }),
@@ -783,6 +784,7 @@ fn parse_exit_reason(raw: &str) -> Result<BacktestExitReason, StorageError> {
         "take_profit" => Ok(BacktestExitReason::TakeProfit),
         "stop_loss" => Ok(BacktestExitReason::StopLoss),
         "open_at_end" => Ok(BacktestExitReason::OpenAtEnd),
+        "signal_exit" => Ok(BacktestExitReason::SignalExit),
         other => Err(StorageError::WriteFailedWithContext {
             message: format!("unsupported backtest exit reason: {other}"),
         }),

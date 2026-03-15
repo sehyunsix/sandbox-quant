@@ -7,12 +7,14 @@ use crate::strategy::command::StrategyStartConfig;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrategyTemplate {
     LiquidationBreakdownShort,
+    PriceSmaCrossLong,
 }
 
 impl StrategyTemplate {
     pub fn slug(self) -> &'static str {
         match self {
             Self::LiquidationBreakdownShort => "liquidation-breakdown-short",
+            Self::PriceSmaCrossLong => "price-sma-cross-long",
         }
     }
 
@@ -26,6 +28,15 @@ impl StrategyTemplate {
                 "Enter short from best bid/ask with slippage cap",
                 "Place reduce-only stop loss and take profit from actual fill",
                 "End the strategy after exchange protection is live",
+            ],
+            Self::PriceSmaCrossLong => &[
+                "Read historical trend state from price bars",
+                "Track moving-average cross signals",
+                "Enter long after confirmed bullish cross",
+                "Apply configured stop and take-profit bounds",
+                "Manage the position until exit",
+                "Record realized PnL for the completed trade",
+                "Close any remaining position at the end of the window",
             ],
         }
     }
