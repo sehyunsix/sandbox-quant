@@ -1,3 +1,7 @@
+## v1.0.8 - 2026-03-15
+
+- Widen Grafana default range for legacy FX symbols (8656dc2)
+
 ## v1.0.7 - 2026-03-15
 
 - Add Grafana backtest PnL dashboard export (84252df)
