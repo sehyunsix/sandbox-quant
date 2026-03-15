@@ -1,3 +1,7 @@
+## v1.0.7 - 2026-03-15
+
+- Add Grafana backtest PnL dashboard export (84252df)
+
 ## v1.0.6 - 2026-03-15
 
 - Scale Grafana multi-symbol chart by relative return (e965af5)
