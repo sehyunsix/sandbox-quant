@@ -1,3 +1,7 @@
+## v1.0.9 - 2026-03-15
+
+- Tune Grafana default overview window and interval (90c859b)
+
 ## v1.0.8 - 2026-03-15
 
 - Widen Grafana default range for legacy FX symbols (8656dc2)
