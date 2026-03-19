@@ -98,6 +98,11 @@ fn normalize_symbols(symbols: Vec<String>) -> Vec<String> {
 }
 
 fn atomic_write(path: PathBuf, bytes: &[u8]) -> Result<(), StorageError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })?;
+    }
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, bytes).map_err(|error| StorageError::WriteFailedWithContext {
         message: error.to_string(),

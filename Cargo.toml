@@ -2,13 +2,13 @@
 name = "sandbox-quant"
 version = "1.0.10"
 edition = "2021"
-description = "Exchange-truth trading core for Binance Spot and Futures"
+description = "Integrated trading project for collector, recorder, backtest, GUI, and execution services"
 repository = "https://github.com/sehyunsix/sandbox-quant"
 readme = "README.md"
-documentation = "https://docs.rs/sandbox-quant"
 keywords = ["trading", "binance", "exchange", "cli", "futures"]
 categories = ["command-line-utilities", "finance"]
 license = "MIT"
+publish = false
 exclude = [
     "archive/**",
     "docs/archive/**",
@@ -22,6 +22,7 @@ gui = ["dep:eframe", "dep:plotters"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["json"] }
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"

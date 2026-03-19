@@ -1,0 +1,73 @@
+services:
+  recorder:
+    description: "Live market event ingest into PostgreSQL via sandbox-quant-recorder"
+    env:
+      SANDBOX_QUANT_RECORDER_STORAGE: "postgres"
+      SANDBOX_QUANT_LOG_DIR: "var/log"
+    command:
+      - cargo
+      - run
+      - --bin
+      - sandbox-quant-recorder
+      - --
+      - run
+      - BTCUSDT
+      - ETHUSDT
+      - SOLUSDT
+      - XRPUSDT
+
+  trading_engine:
+    description: "Long-running trading engine daemon mode"
+    env:
+      BINANCE_MODE: "demo"
+      SANDBOX_QUANT_LOG_DIR: "var/log"
+    command:
+      - cargo
+      - run
+      - --bin
+      - sandbox-quant
+      - --
+      - serve
+      - --mode
+      - demo
+      - --base-dir
+      - var
+
+  backfill_binance:
+    description: "Continuous Binance 1m PostgreSQL kline backfill"
+    env:
+      SANDBOX_QUANT_BACKFILL_SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT"
+      SANDBOX_QUANT_BACKFILL_CONTINUOUS: "1"
+      SANDBOX_QUANT_BACKFILL_POLL_SECONDS: "30"
+      SANDBOX_QUANT_LOG_DIR: "var/log"
+    command:
+      - cargo
+      - run
+      - --bin
+      - postgres_kline_backfill
+
+  backfill_fx:
+    description: "Continuous Twelve Data FX 1m PostgreSQL kline backfill"
+    env:
+      SANDBOX_QUANT_FX_PAIRS: "USD/KRW,JPY/KRW,EUR/KRW,CNY/KRW"
+      SANDBOX_QUANT_FX_CONTINUOUS: "1"
+      SANDBOX_QUANT_FX_POLL_SECONDS: "60"
+      SANDBOX_QUANT_LOG_DIR: "var/log"
+    command:
+      - cargo
+      - run
+      - --bin
+      - postgres_fx_kline_backfill
+
+  backfill_kr:
+    description: "Continuous KR exchange 1m PostgreSQL kline backfill"
+    env:
+      SANDBOX_QUANT_KR_BACKFILL_ASSETS: "BTC,SOL,XRP,ETH"
+      SANDBOX_QUANT_KR_BACKFILL_CONTINUOUS: "1"
+      SANDBOX_QUANT_KR_BACKFILL_POLL_SECONDS: "60"
+      SANDBOX_QUANT_LOG_DIR: "var/log"
+    command:
+      - cargo
+      - run
+      - --bin
+      - postgres_kr_exchange_kline_backfill

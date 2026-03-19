@@ -19,7 +19,7 @@ pub enum RecorderShellInput {
 }
 
 pub fn recorder_help_text() -> &'static str {
-    "/start [symbols...]\n/status\n/stop\n/mode <real|demo>\n/help\n/exit"
+    "/start [symbols...]\n  symbols are optional; liquidation events stream globally, symbols add bookTicker/aggTrade\n/status\n/stop\n/mode <real|demo>\n/help\n/exit"
 }
 
 pub fn parse_recorder_shell_input(line: &str) -> Result<RecorderShellInput, String> {
@@ -87,7 +87,10 @@ pub fn complete_recorder_input(line: &str) -> Vec<ShellCompletion> {
 
     if parts.is_empty() {
         return vec![
-            completion("/start", "start recorder with optional symbols"),
+            completion(
+                "/start",
+                "start recorder; symbols only scope bookTicker and aggTrade streams",
+            ),
             completion("/status", "show recorder status"),
             completion("/stop", "stop recorder"),
             completion("/mode", "switch mode"),

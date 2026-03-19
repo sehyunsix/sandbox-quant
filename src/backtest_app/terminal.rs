@@ -1,4 +1,5 @@
 use crate::app::bootstrap::BinanceMode;
+use crate::backtest_app::export::maybe_export_report_to_postgres;
 use crate::backtest_app::runner::{run_backtest_for_path, BacktestConfig};
 use crate::backtest_app::snapshot::maybe_prepare_snapshot_from_postgres;
 use crate::command::backtest::{
@@ -101,6 +102,11 @@ impl TerminalApp for BacktestTerminal {
                         .map_err(|error| error.to_string())?;
                     let mut report = report;
                     report.run_id = Some(run_id);
+                    if let Some(export_run_id) = maybe_export_report_to_postgres(&report)
+                        .map_err(|error| error.to_string())?
+                    {
+                        eprintln!("postgres export completed: export_run_id={export_run_id}");
+                    }
                     Ok(TerminalEvent::Output(render_backtest_run(&report)))
                 }
                 BacktestCommand::List => {
@@ -110,6 +116,9 @@ impl TerminalApp for BacktestTerminal {
                         .map_err(|error| error.to_string())?;
                     Ok(TerminalEvent::Output(render_backtest_run_list(&runs)))
                 }
+                BacktestCommand::Sweep { .. } => Ok(TerminalEvent::Output(
+                    "backtest sweep\nstate=unsupported_in_terminal\nmessage=run sweep from the CLI, not the interactive terminal".to_string(),
+                )),
                 BacktestCommand::ReportLatest => {
                     let db_path =
                         RecorderCoordination::new(self.base_dir.clone()).db_path(self.mode);

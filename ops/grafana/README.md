@@ -108,6 +108,8 @@ cargo run --bin sandbox-quant-collector -- \
   --storage postgres
 ```
 
+For live websocket event ingest into PostgreSQL, use `sandbox-quant-recorder`. It is the single supported live event ingestion path for liquidation, book ticker, and agg trade data.
+
 ## Provisioned dashboard
 
 The starter dashboard includes:
@@ -121,13 +123,11 @@ The starter dashboard includes:
 
 Dashboard variables:
 
-- `mode`
 - `symbol` with multi-select support
 - `interval` as `1m`, `15m`, `30m`, `1h`
 
 Current sample expectation:
 
-- mode: `demo`
 - symbol: `BTCUSDT` or multiple symbols together
 - interval: `1h`
 - default dashboard time range: `now-1y`
@@ -145,14 +145,14 @@ The `sandbox-quant backtest pnl` dashboard reads exported backtest runs from Pos
 - `backtest_trades`
 - `backtest_equity_points`
 
-Export a persisted DuckDB backtest run into PostgreSQL with:
+Run direct PostgreSQL-backed backtests and export results for Grafana with:
 
 ```bash
 export SANDBOX_QUANT_POSTGRES_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
+export SANDBOX_QUANT_BACKTEST_SOURCE=postgres
+export SANDBOX_QUANT_BACKTEST_EXPORT_POSTGRES=1
 cargo run --bin sandbox-quant-backtest -- \
-  export postgres latest \
-  --mode demo \
-  --base-dir var
+  run price-sma-cross-long BTCUSDT --from 2026-01-01 --to 2026-03-15 --mode demo
 ```
 
 After export, the dashboard lets you filter by:
@@ -169,13 +169,22 @@ The `sandbox-quant system` dashboard combines:
 - PostgreSQL operational tables such as `raw_klines`, `snapshot_exports`, and `backtest_runs`
 - Loki log panels backed by Promtail scraping local runtime log files
 
+## Trading Events dashboard
+
+The `sandbox-quant trading events` dashboard focuses on:
+
+- recorder heartbeat logs
+- trading-engine heartbeat logs
+- `app.execution.started` / `app.execution.completed` decision + execution events
+- strategy watch lifecycle events
+
 Promtail currently scrapes:
 
-- `var/*.log`
-- `var/**/*.log`
+- `var/log/*.jsonl`
+- `var/log/**/*.jsonl`
 - `var/*.jsonl`
 
-The in-process operator `EventLog` now appends JSON lines to `var/operator-events.jsonl` by default, so trading-engine events can also be queried through Loki.
+The in-process operator `EventLog` appends JSON lines to `var/operator-events.jsonl` by default, and the recorder/trading-engine heartbeat logs are written under `var/log/*.jsonl`, so both can be queried through Loki.
 
 ## Copy/paste queries for Grafana panel editor
 
@@ -241,8 +250,7 @@ WITH bucketed AS (
     close,
     close_time
   FROM raw_klines
-  WHERE mode = ${mode:sqlstring}
-    AND symbol IN (${symbol:sqlstring})
+  WHERE symbol IN (${symbol:sqlstring})
     AND interval_name = '1m'
     AND $__timeFilter(open_time)
 ), ranked AS (

@@ -253,7 +253,7 @@
           },
           "editorMode": "code",
           "format": "table",
-          "rawSql": "SELECT max(close_time) AS latest_market_time FROM raw_klines",
+          "rawSql": "SELECT greatest(\n  coalesce((SELECT max(close_time) FROM raw_klines), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n  coalesce((SELECT max(event_time) FROM raw_book_ticker), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n  coalesce((SELECT max(event_time) FROM raw_agg_trades), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n  coalesce((SELECT max(event_time) FROM raw_liquidation_events), TIMESTAMPTZ '1970-01-01 00:00:00+00')\n) AS latest_market_time",
           "refId": "A",
           "sql": {
             "columns": [],
@@ -262,6 +262,446 @@
         }
       ],
       "title": "Latest Market Time",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "sandbox-quant-loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "false"
+                },
+                "1": {
+                  "text": "true"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 10
+      },
+      "id": 14,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "sandbox-quant-loki"
+          },
+          "editorMode": "code",
+          "expr": "(max(max_over_time({job=\"sandbox-quant-var-logs\",service=\"recorder\",kind=\"heartbeat\"} | json | unwrap heartbeat_age_sec [5m])) > bool 30) or (sum(count_over_time({job=\"sandbox-quant-var-logs\",service=\"recorder\",kind=\"heartbeat\"} |= \"\\\"worker_alive\\\":false\" [5m])) > bool 0) or absent_over_time({job=\"sandbox-quant-var-logs\",service=\"recorder\",kind=\"heartbeat\"}[5m])",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Recorder Stale",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "sandbox-quant-loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "false"
+                },
+                "1": {
+                  "text": "true"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 10
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "sandbox-quant-loki"
+          },
+          "editorMode": "code",
+          "expr": "(max(max_over_time({job=\"sandbox-quant-var-logs\",service=\"trading-engine\",kind=\"heartbeat\"} | json | unwrap heartbeat_age_sec [5m])) > bool 30) or absent_over_time({job=\"sandbox-quant-var-logs\",service=\"trading-engine\",kind=\"heartbeat\"}[5m])",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Trading Stale",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "false"
+                },
+                "1": {
+                  "text": "true"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 10
+      },
+      "id": 16,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT CASE WHEN EXTRACT(EPOCH FROM (\n  now() - greatest(\n    coalesce((SELECT max(close_time) FROM raw_klines), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n    coalesce((SELECT max(event_time) FROM raw_book_ticker), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n    coalesce((SELECT max(event_time) FROM raw_agg_trades), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n    coalesce((SELECT max(event_time) FROM raw_liquidation_events), TIMESTAMPTZ '1970-01-01 00:00:00+00')\n  )\n)) > 300 THEN 1 ELSE 0 END AS market_stale",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Market Stale",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "sandbox-quant-loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 5
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "sandbox-quant-loki"
+          },
+          "editorMode": "code",
+          "expr": "max(max_over_time({job=\"sandbox-quant-var-logs\",service=\"recorder\",kind=\"heartbeat\"} | json | unwrap heartbeat_age_sec [5m]))",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Recorder Heartbeat Age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "sandbox-quant-loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 5
+      },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "sandbox-quant-loki"
+          },
+          "editorMode": "code",
+          "expr": "max(max_over_time({job=\"sandbox-quant-var-logs\",service=\"trading-engine\",kind=\"heartbeat\"} | json | unwrap heartbeat_age_sec [5m]))",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Trading Heartbeat Age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "sandbox-quant-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "sandbox-quant-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT EXTRACT(EPOCH FROM (\n  now() - greatest(\n    coalesce((SELECT max(close_time) FROM raw_klines), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n    coalesce((SELECT max(event_time) FROM raw_book_ticker), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n    coalesce((SELECT max(event_time) FROM raw_agg_trades), TIMESTAMPTZ '1970-01-01 00:00:00+00'),\n    coalesce((SELECT max(event_time) FROM raw_liquidation_events), TIMESTAMPTZ '1970-01-01 00:00:00+00')\n  )\n)) AS market_freshness_age_sec",
+          "refId": "A",
+          "sql": {
+            "columns": [],
+            "groupBy": []
+          }
+        }
+      ],
+      "title": "Market Freshness Age",
       "type": "stat"
     },
     {
@@ -286,7 +726,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 5
+        "y": 14
       },
       "id": 5,
       "options": {
@@ -337,7 +777,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 5
+        "y": 14
       },
       "id": 6,
       "options": {
@@ -375,7 +815,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 12
+        "y": 21
       },
       "id": 7,
       "options": {
@@ -412,7 +852,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 12
+        "y": 21
       },
       "id": 8,
       "options": {
@@ -455,7 +895,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 21
+        "y": 30
       },
       "id": 9,
       "options": {
@@ -473,7 +913,7 @@
           },
           "editorMode": "code",
           "format": "table",
-          "rawSql": "SELECT product, symbol, interval_name, count(*) AS row_count, min(open_time) AS first_open_time, max(close_time) AS last_close_time FROM raw_klines GROUP BY 1, 2, 3 ORDER BY last_close_time DESC NULLS LAST LIMIT 20",
+          "rawSql": "WITH kline_rows AS (\n  SELECT 'raw_klines' AS source, product, symbol, interval_name, count(*) AS row_count, min(open_time) AS first_time, max(close_time) AS last_time\n  FROM raw_klines\n  GROUP BY 1, 2, 3, 4\n), book_rows AS (\n  SELECT 'raw_book_ticker' AS source, NULL::text AS product, symbol, 'live' AS interval_name, count(*) AS row_count, min(event_time) AS first_time, max(event_time) AS last_time\n  FROM raw_book_ticker\n  GROUP BY 1, 3, 4\n), trade_rows AS (\n  SELECT 'raw_agg_trades' AS source, NULL::text AS product, symbol, 'live' AS interval_name, count(*) AS row_count, min(event_time) AS first_time, max(event_time) AS last_time\n  FROM raw_agg_trades\n  GROUP BY 1, 3, 4\n), liquidation_rows AS (\n  SELECT 'raw_liquidation_events' AS source, NULL::text AS product, symbol, 'live' AS interval_name, count(*) AS row_count, min(event_time) AS first_time, max(event_time) AS last_time\n  FROM raw_liquidation_events\n  GROUP BY 1, 3, 4\n)\nSELECT source, coalesce(product, 'n/a') AS product, symbol, interval_name, row_count, first_time AS first_observed_time, last_time AS last_observed_time\nFROM (\n  SELECT * FROM kline_rows\n  UNION ALL\n  SELECT * FROM book_rows\n  UNION ALL\n  SELECT * FROM trade_rows\n  UNION ALL\n  SELECT * FROM liquidation_rows\n) combined\nORDER BY last_observed_time DESC NULLS LAST, source, symbol\nLIMIT 20",
           "refId": "A",
           "sql": {
             "columns": [],
@@ -499,7 +939,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 21
+        "y": 30
       },
       "id": 10,
       "options": {

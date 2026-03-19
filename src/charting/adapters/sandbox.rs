@@ -17,9 +17,11 @@ const ENTRY: RgbColor = RgbColor::new(90, 170, 255);
 const TAKE_PROFIT: RgbColor = RgbColor::new(80, 220, 140);
 const STOP_LOSS: RgbColor = RgbColor::new(255, 90, 90);
 const OPEN_AT_END: RgbColor = RgbColor::new(240, 220, 120);
+const SIGNAL_EXIT: RgbColor = RgbColor::new(200, 200, 255);
 const EQUITY: RgbColor = RgbColor::new(120, 180, 255);
 const VOLUME_UP: RgbColor = RgbColor::new(70, 150, 110);
 const VOLUME_DOWN: RgbColor = RgbColor::new(160, 90, 90);
+const SECONDARY_LINE: RgbColor = RgbColor::new(255, 215, 90);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketTimeframe {
@@ -34,6 +36,40 @@ pub enum MarketTimeframe {
     Week1w,
     Day1d,
     Month1mo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketSeriesKind {
+    Candles,
+    MidPrice,
+    CloseLine,
+    Ema20,
+    Vwap,
+    Liquidations,
+}
+
+impl MarketSeriesKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Candles => "Candles",
+            Self::MidPrice => "Mid-price",
+            Self::CloseLine => "Close line",
+            Self::Ema20 => "EMA 20",
+            Self::Vwap => "VWAP",
+            Self::Liquidations => "Liquidations",
+        }
+    }
+
+    pub fn all() -> [Self; 6] {
+        [
+            Self::Candles,
+            Self::MidPrice,
+            Self::CloseLine,
+            Self::Ema20,
+            Self::Vwap,
+            Self::Liquidations,
+        ]
+    }
 }
 
 impl MarketTimeframe {
@@ -111,6 +147,31 @@ pub fn market_scene_from_snapshot_with_timeframe(
     snapshot: &DashboardSnapshot,
     timeframe: MarketTimeframe,
 ) -> ChartScene {
+    build_market_scene(
+        snapshot,
+        timeframe,
+        MarketSeriesKind::Candles,
+        Some(MarketSeriesKind::MidPrice),
+        true,
+    )
+}
+
+pub fn market_scene_from_snapshot_with_overlay(
+    snapshot: &DashboardSnapshot,
+    timeframe: MarketTimeframe,
+    primary: MarketSeriesKind,
+    secondary: Option<MarketSeriesKind>,
+) -> ChartScene {
+    build_market_scene(snapshot, timeframe, primary, secondary, false)
+}
+
+fn build_market_scene(
+    snapshot: &DashboardSnapshot,
+    timeframe: MarketTimeframe,
+    primary: MarketSeriesKind,
+    secondary: Option<MarketSeriesKind>,
+    include_default_annotations: bool,
+) -> ChartScene {
     let effective_timeframe = snapshot
         .market_series
         .kline_interval
@@ -118,75 +179,45 @@ pub fn market_scene_from_snapshot_with_timeframe(
         .and_then(MarketTimeframe::from_interval_label)
         .filter(|source| source.rank() > timeframe.rank())
         .unwrap_or(timeframe);
-    let mut price_series = Vec::new();
-    if !snapshot.market_series.book_tickers.is_empty() {
-        price_series.extend(sampled_mid_price_segments(snapshot, 2_400, 60_000, 1));
-    }
     let display_klines =
         aggregate_klines_for_timeframe(&snapshot.market_series.klines, effective_timeframe);
-    if !display_klines.is_empty() {
-        price_series.push(Series::Candles(CandleSeries {
-            name: "candles".to_string(),
-            up_color: None,
-            down_color: None,
-            candles: display_klines
-                .iter()
-                .map(|row| Candle {
-                    open_time_ms: EpochMs::from(row.open_time_ms),
-                    close_time_ms: EpochMs::from(row.close_time_ms),
-                    open: row.open,
-                    high: row.high,
-                    low: row.low,
-                    close: row.close,
-                })
-                .collect(),
-        }));
-    } else if price_series.is_empty() {
-        price_series.extend(sampled_mid_price_segments(snapshot, 2_400, 60_000, 2));
+    let mut price_series = build_overlay_series(snapshot, &display_klines, primary, false);
+    if let Some(secondary) = secondary.filter(|kind| *kind != primary) {
+        price_series.extend(build_overlay_series(
+            snapshot,
+            &display_klines,
+            secondary,
+            true,
+        ));
     }
 
-    let mut markers = snapshot
-        .market_series
-        .liquidations
-        .iter()
-        .map(|row| Marker {
-            label: row.force_side.clone(),
-            time_ms: EpochMs::from(row.event_time_ms),
-            value: row.price,
-            color: if row.force_side == "BUY" {
-                LIQ_BUY
-            } else {
-                LIQ_OTHER
-            },
-            size: ((row.notional.max(1.0)).log10().clamp(0.0, 7.0) as i32) + 3,
-            shape: MarkerShape::Circle,
-        })
-        .collect::<Vec<_>>();
+    if include_default_annotations {
+        let mut markers = liquidation_marker_series(snapshot);
+        if let Some(report) = snapshot
+            .selected_report
+            .as_ref()
+            .filter(|report| report.instrument == snapshot.symbol)
+        {
+            markers.extend(
+                VisualizationService::signal_markers(&report.trades)
+                    .into_iter()
+                    .map(|marker| Marker {
+                        label: marker.label,
+                        time_ms: EpochMs::from(marker.time_ms),
+                        value: marker.price,
+                        color: signal_color(marker.kind),
+                        size: 8,
+                        shape: MarkerShape::Cross,
+                    }),
+            );
+        }
 
-    if let Some(report) = snapshot
-        .selected_report
-        .as_ref()
-        .filter(|report| report.instrument == snapshot.symbol)
-    {
-        markers.extend(
-            VisualizationService::signal_markers(&report.trades)
-                .into_iter()
-                .map(|marker| Marker {
-                    label: marker.label,
-                    time_ms: EpochMs::from(marker.time_ms),
-                    value: marker.price,
-                    color: signal_color(marker.kind),
-                    size: 8,
-                    shape: MarkerShape::Cross,
-                }),
-        );
-    }
-
-    if !markers.is_empty() {
-        price_series.push(Series::Markers(MarkerSeries {
-            name: "signals".to_string(),
-            markers,
-        }));
+        if !markers.is_empty() {
+            price_series.push(Series::Markers(MarkerSeries {
+                name: "signals".to_string(),
+                markers,
+            }));
+        }
     }
 
     let mut panes = vec![Pane {
@@ -343,8 +374,167 @@ fn signal_color(kind: SignalKind) -> RgbColor {
         SignalKind::TakeProfit => TAKE_PROFIT,
         SignalKind::StopLoss => STOP_LOSS,
         SignalKind::OpenAtEnd => OPEN_AT_END,
-        SignalKind::SignalExit => STOP_LOSS,
+        SignalKind::SignalExit => SIGNAL_EXIT,
     }
+}
+
+fn build_overlay_series(
+    snapshot: &DashboardSnapshot,
+    display_klines: &[crate::dataset::types::DerivedKlineRow],
+    kind: MarketSeriesKind,
+    secondary: bool,
+) -> Vec<Series> {
+    match kind {
+        MarketSeriesKind::Candles if !display_klines.is_empty() => {
+            vec![Series::Candles(CandleSeries {
+                name: if secondary {
+                    "candles-secondary".to_string()
+                } else {
+                    "candles".to_string()
+                },
+                up_color: None,
+                down_color: None,
+                candles: display_klines
+                    .iter()
+                    .map(|row| Candle {
+                        open_time_ms: EpochMs::from(row.open_time_ms),
+                        close_time_ms: EpochMs::from(row.close_time_ms),
+                        open: row.open,
+                        high: row.high,
+                        low: row.low,
+                        close: row.close,
+                    })
+                    .collect(),
+            })]
+        }
+        MarketSeriesKind::MidPrice => {
+            sampled_mid_price_segments(snapshot, 2_400, 60_000, if secondary { 2 } else { 1 })
+        }
+        MarketSeriesKind::CloseLine if !display_klines.is_empty() => {
+            vec![Series::Line(LineSeries {
+                name: if secondary {
+                    "close-secondary".to_string()
+                } else {
+                    "close".to_string()
+                },
+                color: if secondary { SECONDARY_LINE } else { PRICE },
+                width: if secondary { 2 } else { 1 },
+                points: display_klines
+                    .iter()
+                    .map(|row| LinePoint {
+                        time_ms: EpochMs::from(row.close_time_ms),
+                        value: row.close,
+                    })
+                    .collect(),
+            })]
+        }
+        MarketSeriesKind::Ema20 if !display_klines.is_empty() => {
+            let points = ema_points(display_klines, 20);
+            if points.is_empty() {
+                Vec::new()
+            } else {
+                vec![Series::Line(LineSeries {
+                    name: if secondary {
+                        "ema20-secondary".to_string()
+                    } else {
+                        "ema20".to_string()
+                    },
+                    color: if secondary { SECONDARY_LINE } else { PRICE },
+                    width: 2,
+                    points,
+                })]
+            }
+        }
+        MarketSeriesKind::Vwap if !display_klines.is_empty() => {
+            let points = vwap_points(display_klines);
+            if points.is_empty() {
+                Vec::new()
+            } else {
+                vec![Series::Line(LineSeries {
+                    name: if secondary {
+                        "vwap-secondary".to_string()
+                    } else {
+                        "vwap".to_string()
+                    },
+                    color: if secondary { SECONDARY_LINE } else { PRICE },
+                    width: 2,
+                    points,
+                })]
+            }
+        }
+        MarketSeriesKind::Liquidations => {
+            let markers = liquidation_marker_series(snapshot);
+            if markers.is_empty() {
+                Vec::new()
+            } else {
+                vec![Series::Markers(MarkerSeries {
+                    name: if secondary {
+                        "liquidations-secondary".to_string()
+                    } else {
+                        "liquidations".to_string()
+                    },
+                    markers,
+                })]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn liquidation_marker_series(snapshot: &DashboardSnapshot) -> Vec<Marker> {
+    snapshot
+        .market_series
+        .liquidations
+        .iter()
+        .map(|row| Marker {
+            label: row.force_side.clone(),
+            time_ms: EpochMs::from(row.event_time_ms),
+            value: row.price,
+            color: if row.force_side == "BUY" {
+                LIQ_BUY
+            } else {
+                LIQ_OTHER
+            },
+            size: ((row.notional.max(1.0)).log10().clamp(0.0, 7.0) as i32) + 3,
+            shape: MarkerShape::Circle,
+        })
+        .collect()
+}
+
+fn ema_points(
+    display_klines: &[crate::dataset::types::DerivedKlineRow],
+    period: usize,
+) -> Vec<LinePoint> {
+    if display_klines.is_empty() {
+        return Vec::new();
+    }
+    let alpha = 2.0 / (period as f64 + 1.0);
+    let mut ema = display_klines[0].close;
+    display_klines
+        .iter()
+        .map(|row| {
+            ema = row.close * alpha + ema * (1.0 - alpha);
+            LinePoint {
+                time_ms: EpochMs::from(row.close_time_ms),
+                value: ema,
+            }
+        })
+        .collect()
+}
+
+fn vwap_points(display_klines: &[crate::dataset::types::DerivedKlineRow]) -> Vec<LinePoint> {
+    let mut cumulative_quote = 0.0;
+    let mut cumulative_volume = 0.0;
+    let mut points = Vec::new();
+    for row in display_klines {
+        cumulative_quote += row.quote_volume;
+        cumulative_volume += row.volume.max(f64::EPSILON);
+        points.push(LinePoint {
+            time_ms: EpochMs::from(row.close_time_ms),
+            value: cumulative_quote / cumulative_volume,
+        });
+    }
+    points
 }
 
 fn usdt_axis(decimals: u8, include_zero: bool) -> YAxisSpec {

@@ -141,7 +141,9 @@ Storage-specific env vars:
 
 - `SANDBOX_QUANT_RECORDER_STORAGE=duckdb|postgres` selects the live recorder sink
 - `SANDBOX_QUANT_POSTGRES_URL` (or `DATABASE_URL`) is used by PostgreSQL-backed recorder/collector flows
+- `SANDBOX_QUANT_BACKTEST_SOURCE=postgres` makes `sandbox-quant-backtest run` read source market data directly from PostgreSQL
 - `SANDBOX_QUANT_BACKTEST_AUTO_SNAPSHOT=postgres` makes backtest `run` pull the requested symbol/date range from PostgreSQL into DuckDB before executing
+- `SANDBOX_QUANT_BACKTEST_EXPORT_POSTGRES=1` forces backtest runs to export summary, trades, and equity points into PostgreSQL for Grafana
 - `SANDBOX_QUANT_BACKTEST_SNAPSHOT_PRODUCT` / `SANDBOX_QUANT_BACKTEST_SNAPSHOT_INTERVAL` can narrow the imported snapshot
 
 ## Binaries
@@ -158,6 +160,9 @@ Storage-specific env vars:
 - `sandbox-quant-collector`
   - one-shot historical Binance public data backfill
   - `binance-public import`, `summary`, `snapshot postgres-to-duckdb`
+- `sandbox-quant-watchdog`
+  - PostgreSQL freshness probe for recorder market data
+  - non-interactive operational helper for recorder freshness checks
 - `sandbox-quant-gui`
   - optional desktop GUI for charting + backtest exploration
   - requires Cargo feature `gui`
@@ -170,6 +175,33 @@ Operator shell:
 
 ```bash
 cargo run --bin sandbox-quant
+```
+
+Trading-engine daemon mode:
+
+```bash
+cargo run --bin sandbox-quant -- serve --mode demo --base-dir var --listen 127.0.0.1:9782
+```
+
+Trading-engine daemon control:
+
+```bash
+cargo run --bin sandbox-quant -- status --listen 127.0.0.1:9782
+cargo run --bin sandbox-quant -- health --listen 127.0.0.1:9782
+cargo run --bin sandbox-quant -- stop --listen 127.0.0.1:9782
+```
+
+Trading-engine daemon command API examples:
+
+```bash
+curl -s -X POST http://127.0.0.1:9782/refresh
+curl -s -X POST http://127.0.0.1:9782/close-all
+curl -s -X POST http://127.0.0.1:9782/close-symbol \
+  -H 'content-type: application/json' \
+  -d '{"instrument":"BTCUSDT"}'
+curl -s -X POST http://127.0.0.1:9782/set-target-exposure \
+  -H 'content-type: application/json' \
+  -d '{"instrument":"BTCUSDT","target":0.25,"order_type":"market"}'
 ```
 
 Refresh authoritative state:
@@ -209,7 +241,7 @@ Options orders are handled as a separate workflow. They appear in portfolio posi
 Recorder terminal:
 
 ```bash
-cargo run --bin sandbox-quant-recorder -- --mode demo
+cargo run --bin sandbox-quant-recorder
 ```
 
 Recorder terminal with PostgreSQL sink:
@@ -217,7 +249,47 @@ Recorder terminal with PostgreSQL sink:
 ```bash
 export SANDBOX_QUANT_RECORDER_STORAGE=postgres
 export SANDBOX_QUANT_POSTGRES_URL=postgres://localhost/sandbox_quant
-cargo run --bin sandbox-quant-recorder -- --mode demo
+cargo run --bin sandbox-quant-recorder
+```
+
+YAML-based runtime launcher:
+
+```bash
+bash ops/run-runtime.sh ops/grafana/.env recorder
+bash ops/run-runtime.sh ops/grafana/.env trading_engine
+bash ops/run-runtime.sh ops/grafana/.env backfill_binance
+bash ops/run-runtime.sh ops/grafana/.env backfill_fx
+bash ops/run-runtime.sh ops/grafana/.env backfill_kr
+```
+
+The launcher reads service defaults from [ops/runtime.yaml](/Users/yuksehyun/project/sandbox-quant/ops/runtime.yaml) and derives `SANDBOX_QUANT_POSTGRES_URL` from the env file, so operators do not need to type long `export` sequences manually.
+
+Recorder with integrated Binance 1m backfill sidecar:
+
+```bash
+cargo run --bin sandbox-quant-recorder -- \
+  serve BTCUSDT ETHUSDT SOLUSDT XRPUSDT \
+  --backfill \
+  --backfill-poll-seconds 30
+```
+
+This starts the recorder daemon and also spawns `postgres_kline_backfill` as a child process so current-day `raw_klines` stay fresh alongside websocket event ingest.
+
+Long-running recorder processes now emit heartbeat JSON logs every 5 seconds with `kind=heartbeat`, including `ping_at`, `pong_at`, `heartbeat_age_sec`, `reader_alive`, `writer_alive`, `worker_alive`, and watched symbols. Those logs are written to `var/log/recorder.jsonl` by default and are intended for Loki/Grafana operational monitoring.
+
+Recorder daemon control:
+
+```bash
+cargo run --bin sandbox-quant-recorder -- status --listen 127.0.0.1:9781
+cargo run --bin sandbox-quant-recorder -- health --listen 127.0.0.1:9781
+cargo run --bin sandbox-quant-recorder -- freshness --listen 127.0.0.1:9781
+cargo run --bin sandbox-quant-recorder -- stop --listen 127.0.0.1:9781
+```
+
+Recorder watchdog probe against PostgreSQL + recorder heartbeat:
+
+```bash
+cargo run --bin sandbox-quant-watchdog -- probe
 ```
 
 Then inside the recorder terminal:
@@ -237,21 +309,54 @@ cargo run --bin sandbox-quant-backtest -- --mode demo
 One-shot dataset run:
 
 ```bash
-target/debug/sandbox-quant-backtest run liquidation-breakdown-short BTCUSDT --from 2026-03-13 --to 2026-03-13 --mode demo --base-dir var
+cargo run --bin sandbox-quant-backtest -- \
+  run liquidation-breakdown-short BTCUSDT --from 2026-03-13 --to 2026-03-13 --mode demo --base-dir var
 ```
+
+Direct PostgreSQL-backed backtest run without DuckDB source reads:
+
+```bash
+export SANDBOX_QUANT_BACKTEST_SOURCE=postgres
+export SANDBOX_QUANT_BACKTEST_EXPORT_POSTGRES=1
+export SANDBOX_QUANT_POSTGRES_URL=postgres://localhost/sandbox_quant
+cargo run --bin sandbox-quant-backtest -- \
+  run price-sma-cross-long BTCUSDT --from 2026-01-01 --to 2026-03-15 --mode demo
+```
+
+In direct mode, the CLI reads `raw_klines` from PostgreSQL and writes the result set back to PostgreSQL for Grafana. DuckDB is bypassed for the source dataset.
+
+PostgreSQL sweep script for repeated strategy experiments with Grafana-visible exports:
+
+```bash
+ops/backtest-postgres-sweep.sh
+```
+
+Useful overrides:
+
+```bash
+MODE=demo \
+INSTRUMENTS_CSV=BTCUSDT,ETHUSDT,SOLUSDT \
+TEMPLATES_CSV=price-sma-cross-long,price-sma-cross-short,price-sma-cross-long-fast,price-sma-cross-short-fast \
+DATE_WINDOWS_CSV=2026-03-01:2026-03-15,2026-03-16:2026-03-18 \
+ops/backtest-postgres-sweep.sh
+```
+
+The sweep script uses the existing PostgreSQL export path, so each run is inserted into `backtest_runs`, `backtest_trades`, and `backtest_equity_points` for the Grafana `sandbox-quant backtest pnl` dashboard.
+
+When the trading engine runs in shell or explicit `run` mode, it emits heartbeat JSON logs every 5 seconds with `kind=heartbeat`, `heartbeat_age_sec=0`, DuckDB path visibility, and latest local market-data freshness so the process can be monitored from Grafana/Loki.
 
 If `--from` is after `--to`, the command now fails fast with an invalid date-range error before touching the dataset DB.
 
 List recent runs:
 
 ```bash
-target/debug/sandbox-quant-backtest list --mode demo --base-dir var
+cargo run --bin sandbox-quant-backtest -- list --mode demo --base-dir var
 ```
 
 Show the latest persisted report:
 
 ```bash
-target/debug/sandbox-quant-backtest report latest --mode demo --base-dir var
+cargo run --bin sandbox-quant-backtest -- report latest --mode demo --base-dir var
 ```
 
 Export the latest persisted backtest run into PostgreSQL for Grafana:
@@ -310,6 +415,17 @@ PostgreSQL summary:
 ```bash
 cargo run --bin sandbox-quant-collector -- summary --storage postgres
 ```
+
+Unified PostgreSQL backfill wrapper:
+
+```bash
+bash ops/backfill-postgres.sh ops/grafana/.env binance
+bash ops/backfill-postgres.sh ops/grafana/.env fx
+bash ops/backfill-postgres.sh ops/grafana/.env kr
+bash ops/backfill-postgres.sh ops/grafana/.env all
+```
+
+Use this wrapper as the operator-facing entrypoint for source-specific PostgreSQL kline backfills.
 
 Backtest-ready DuckDB snapshot exported from PostgreSQL:
 

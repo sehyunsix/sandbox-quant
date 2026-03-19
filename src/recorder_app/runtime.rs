@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
+    mpsc::{self, RecvTimeoutError, Sender},
     Arc, Mutex,
 };
 use std::thread::JoinHandle;
@@ -13,6 +14,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::{error, warn};
 
 use crate::app::bootstrap::BinanceMode;
 use crate::dataset::query::{backtest_summary_for_path, metrics_for_path};
@@ -21,10 +23,10 @@ use crate::dataset::types::{BacktestDatasetSummary, RecorderMetrics};
 use crate::error::storage_error::StorageError;
 use crate::record::coordination::RecorderCoordination;
 use crate::storage::postgres_market_data::{
-    connect as connect_postgres, init_schema as init_postgres_schema, insert_agg_trade,
-    insert_book_ticker, insert_liquidation, mask_postgres_url, metrics_for_postgres_url,
-    postgres_url_from_env, CollectorStorageBackend, PostgresAggTradeRecord,
-    PostgresBookTickerRecord, PostgresLiquidationRecord,
+    connect as connect_postgres, ensure_recorder_schema_ready, insert_agg_trade, insert_book_ticker,
+    insert_liquidation, mask_postgres_url, metrics_for_postgres_url, postgres_url_from_env,
+    CollectorStorageBackend, PostgresAggTradeRecord, PostgresBookTickerRecord,
+    PostgresLiquidationRecord,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +60,8 @@ pub struct RecorderStatus {
     pub manual_symbols: Vec<String>,
     pub strategy_symbols: Vec<String>,
     pub watched_symbols: Vec<String>,
+    pub reader_alive: bool,
+    pub writer_alive: bool,
     pub worker_alive: bool,
     pub heartbeat_age_sec: i64,
     pub last_error: Option<String>,
@@ -91,6 +95,8 @@ impl RecorderStatus {
             manual_symbols,
             strategy_symbols,
             watched_symbols,
+            reader_alive: true,
+            writer_alive: true,
             worker_alive: true,
             heartbeat_age_sec: 0,
             last_error: None,
@@ -106,6 +112,13 @@ struct WorkerSnapshot {
     last_error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+enum PostgresWriteCommand {
+    Liquidation(PostgresLiquidationRecord),
+    BookTicker(PostgresBookTickerRecord),
+    AggTrade(PostgresAggTradeRecord),
+}
+
 impl WorkerSnapshot {
     fn new(metrics: RecorderMetrics) -> Self {
         Self {
@@ -119,7 +132,8 @@ impl WorkerSnapshot {
 struct ModeWorker {
     stop_flag: Arc<AtomicBool>,
     snapshot: Arc<Mutex<WorkerSnapshot>>,
-    pub(crate) handle: JoinHandle<()>,
+    pub(crate) reader_handle: JoinHandle<()>,
+    pub(crate) writer_handle: Option<JoinHandle<()>>,
 }
 
 pub struct MarketDataRecorder {
@@ -196,7 +210,7 @@ impl MarketDataRecorder {
             init_schema_for_path(&db_path)?;
         } else if let Some(url) = self.postgres_url.as_deref() {
             let mut client = connect_postgres(url)?;
-            let _ = init_postgres_schema(&mut client, url)?;
+            ensure_recorder_schema_ready(&mut client, url)?;
         }
         let manual_symbols = normalize_symbols(manual_symbols);
         let strategy_symbols = normalize_symbols(strategy_symbols);
@@ -235,8 +249,12 @@ impl MarketDataRecorder {
             )
         });
         if let Some(worker) = self.workers.get(&mode) {
-            let worker_alive = !worker.handle.is_finished();
-            status.worker_alive = worker_alive;
+            status.reader_alive = !worker.reader_handle.is_finished();
+            status.writer_alive = worker
+                .writer_handle
+                .as_ref()
+                .is_none_or(|handle| !handle.is_finished());
+            status.worker_alive = status.reader_alive && status.writer_alive;
             if let Ok(snapshot) = worker.snapshot.lock() {
                 status.updated_at = snapshot.updated_at;
                 status.heartbeat_age_sec = (Utc::now() - snapshot.updated_at).num_seconds();
@@ -244,6 +262,8 @@ impl MarketDataRecorder {
                 status.last_error = snapshot.last_error.clone();
             }
         } else {
+            status.reader_alive = false;
+            status.writer_alive = false;
             status.worker_alive = false;
             status.heartbeat_age_sec = (Utc::now() - status.updated_at).num_seconds();
             status.metrics = self.load_metrics(&status.db_path).unwrap_or_default();
@@ -326,6 +346,8 @@ impl MarketDataRecorder {
 
         existing.state = RecorderState::Stopped;
         existing.updated_at = Utc::now();
+        existing.reader_alive = false;
+        existing.writer_alive = false;
         existing.worker_alive = false;
         Ok(existing.clone())
     }
@@ -343,7 +365,7 @@ impl MarketDataRecorder {
     pub fn worker_alive(&self, mode: BinanceMode) -> bool {
         self.workers
             .get(&mode)
-            .is_some_and(|worker| !worker.handle.is_finished())
+            .is_some_and(|worker| !worker.reader_handle.is_finished())
     }
 
     pub fn metrics_for_path(db_path: &Path) -> Result<RecorderMetrics, StorageError> {
@@ -389,12 +411,25 @@ impl MarketDataRecorder {
         let snapshot = Arc::new(Mutex::new(WorkerSnapshot::new(initial_metrics)));
         let worker_snapshot = snapshot.clone();
         let storage_backend = self.storage_backend;
-        let postgres_url = self.postgres_url.clone();
-        let handle = std::thread::Builder::new()
+        let (postgres_writer, writer_handle) = initialize_postgres_writer(
+            storage_backend,
+            self.postgres_url.as_deref(),
+            worker_stop_flag.clone(),
+            worker_snapshot.clone(),
+        )?;
+        let reader_handle = std::thread::Builder::new()
             .name(format!("market-recorder-{}", mode.as_str()))
             .spawn(move || {
                 let _ = rustls::crypto::ring::default_provider().install_default();
-                let runtime = tokio::runtime::Builder::new_current_thread()
+                let duck_connection = match initialize_duckdb_storage(&db_path, storage_backend) {
+                    Ok(storage) => storage,
+                    Err(error) => {
+                        record_worker_error(&worker_snapshot, error.to_string());
+                        return;
+                    }
+                };
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
                     .enable_all()
                     .build();
                 let Ok(runtime) = runtime else {
@@ -404,12 +439,11 @@ impl MarketDataRecorder {
                     );
                     return;
                 };
-                runtime.block_on(async move {
+                runtime.block_on(async {
                     run_market_data_worker(
                         mode,
-                        db_path,
-                        storage_backend,
-                        postgres_url,
+                        duck_connection.as_ref(),
+                        postgres_writer.as_ref(),
                         watched_symbols,
                         worker_stop_flag,
                         worker_snapshot,
@@ -425,7 +459,8 @@ impl MarketDataRecorder {
             ModeWorker {
                 stop_flag,
                 snapshot,
-                handle,
+                reader_handle,
+                writer_handle,
             },
         );
         Ok(())
@@ -469,53 +504,85 @@ impl Drop for MarketDataRecorder {
     }
 }
 
+fn initialize_duckdb_storage(
+    db_path: &Path,
+    storage_backend: CollectorStorageBackend,
+) -> Result<Option<Connection>, StorageError> {
+    if storage_backend != CollectorStorageBackend::DuckDb {
+        return Ok(None);
+    }
+    Connection::open(db_path)
+        .map(Some)
+        .map_err(|_| StorageError::WriteFailedWithContext {
+            message: format!("failed to open duckdb at {}", db_path.display()),
+        })
+}
+
+fn initialize_postgres_writer(
+    storage_backend: CollectorStorageBackend,
+    postgres_url: Option<&str>,
+    stop_flag: Arc<AtomicBool>,
+    snapshot: Arc<Mutex<WorkerSnapshot>>,
+) -> Result<(Option<Sender<PostgresWriteCommand>>, Option<JoinHandle<()>>), StorageError> {
+    if storage_backend != CollectorStorageBackend::Postgres {
+        return Ok((None, None));
+    }
+    let url = postgres_url.ok_or_else(|| StorageError::WriteFailedWithContext {
+        message: "postgres recorder backend missing URL".to_string(),
+    })?;
+    let mut client = connect_postgres(url)?;
+    ensure_recorder_schema_ready(&mut client, url)?;
+    let (sender, receiver) = mpsc::channel::<PostgresWriteCommand>();
+    let handle = std::thread::Builder::new()
+        .name("market-recorder-postgres-writer".to_string())
+        .spawn(move || run_postgres_writer_loop(client, receiver, stop_flag, snapshot))
+        .map_err(|error| StorageError::WriteFailedWithContext {
+            message: error.to_string(),
+        })?;
+    Ok((Some(sender), Some(handle)))
+}
+
+fn run_postgres_writer_loop(
+    mut client: postgres::Client,
+    receiver: mpsc::Receiver<PostgresWriteCommand>,
+    stop_flag: Arc<AtomicBool>,
+    snapshot: Arc<Mutex<WorkerSnapshot>>,
+) {
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(250)) {
+            Ok(PostgresWriteCommand::Liquidation(record)) => {
+                if let Err(error) = insert_liquidation(&mut client, &record) {
+                    record_worker_error(&snapshot, error.to_string());
+                    break;
+                }
+            }
+            Ok(PostgresWriteCommand::BookTicker(record)) => {
+                if let Err(error) = insert_book_ticker(&mut client, &record) {
+                    record_worker_error(&snapshot, error.to_string());
+                    break;
+                }
+            }
+            Ok(PostgresWriteCommand::AggTrade(record)) => {
+                if let Err(error) = insert_agg_trade(&mut client, &record) {
+                    record_worker_error(&snapshot, error.to_string());
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) if stop_flag.load(Ordering::Relaxed) => break,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
 async fn run_market_data_worker(
     mode: BinanceMode,
-    db_path: PathBuf,
-    storage_backend: CollectorStorageBackend,
-    postgres_url: Option<String>,
+    duck_connection: Option<&Connection>,
+    postgres_writer: Option<&Sender<PostgresWriteCommand>>,
     watched_symbols: Vec<String>,
     stop_flag: Arc<AtomicBool>,
     snapshot: Arc<Mutex<WorkerSnapshot>>,
 ) {
-    let duck_connection = if storage_backend == CollectorStorageBackend::DuckDb {
-        match Connection::open(&db_path) {
-            Ok(connection) => Some(connection),
-            Err(_) => {
-                record_worker_error(
-                    &snapshot,
-                    format!("failed to open duckdb at {}", db_path.display()),
-                );
-                return;
-            }
-        }
-    } else {
-        None
-    };
-    let mut postgres_client = if storage_backend == CollectorStorageBackend::Postgres {
-        let Some(url) = postgres_url.as_deref() else {
-            record_worker_error(
-                &snapshot,
-                "postgres recorder backend missing URL".to_string(),
-            );
-            return;
-        };
-        match connect_postgres(url) {
-            Ok(mut client) => {
-                if let Err(error) = init_postgres_schema(&mut client, url) {
-                    record_worker_error(&snapshot, error.to_string());
-                    return;
-                }
-                Some(client)
-            }
-            Err(error) => {
-                record_worker_error(&snapshot, error.to_string());
-                return;
-            }
-        }
-    } else {
-        None
-    };
     let mut agg_trade_bar_seconds = BTreeMap::new();
 
     loop {
@@ -532,11 +599,7 @@ async fn run_market_data_worker(
             Ok((stream, _)) => stream,
             Err(error) => {
                 record_worker_error(&snapshot, format!("forceOrder connect failed: {error}"));
-                eprintln!(
-                    "market recorder: failed to connect forceOrder stream mode={} error={}",
-                    mode.as_str(),
-                    error
-                );
+                warn!(service = "recorder", error = %error, "failed to connect forceOrder stream");
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
@@ -550,12 +613,7 @@ async fn run_market_data_worker(
                         &snapshot,
                         format!("symbol stream connect failed: {error}"),
                     );
-                    eprintln!(
-                        "market recorder: failed to connect symbol streams mode={} symbols={} error={}",
-                        mode.as_str(),
-                        watched_symbols.join(","),
-                        error
-                    );
+                    warn!(service = "recorder", symbols = %watched_symbols.join(","), error = %error, "failed to connect symbol streams");
                     None
                 }
             },
@@ -576,37 +634,26 @@ async fn run_market_data_worker(
                     match message {
                         Some(Ok(message)) => {
                             if let Err(error) = handle_force_order_message(
-                                duck_connection.as_ref(),
-                                postgres_client.as_mut(),
+                                duck_connection,
+                                postgres_writer,
                                 mode,
                                 &mut liquidation_seq,
                                 &snapshot,
                                 message
                             ) {
                                 record_worker_error(&snapshot, error.to_string());
-                                eprintln!(
-                                    "market recorder: forceOrder stream handling failed mode={} error={}",
-                                    mode.as_str(),
-                                    error
-                                );
+                                error!(service = "recorder", error = %error, "forceOrder stream handling failed");
                                 break;
                             }
                         }
                         Some(Err(error)) => {
                             record_worker_error(&snapshot, format!("forceOrder stream disconnected: {error}"));
-                            eprintln!(
-                                "market recorder: forceOrder stream disconnected mode={} error={}",
-                                mode.as_str(),
-                                error
-                            );
+                            warn!(service = "recorder", error = %error, "forceOrder stream disconnected");
                             break
                         }
                         None => {
                             record_worker_error(&snapshot, "forceOrder stream disconnected: eof".to_string());
-                            eprintln!(
-                                "market recorder: forceOrder stream disconnected mode={} error=eof",
-                                mode.as_str()
-                            );
+                            warn!(service = "recorder", "forceOrder stream disconnected: eof");
                             break
                         }
                     }
@@ -615,8 +662,8 @@ async fn run_market_data_worker(
                     match message {
                         Some(Ok(message)) => {
                             if let Err(error) = handle_symbol_message(
-                                duck_connection.as_ref(),
-                                postgres_client.as_mut(),
+                                duck_connection,
+                                postgres_writer,
                                 mode,
                                 &mut ticker_seq,
                                 &mut trade_seq,
@@ -625,31 +672,18 @@ async fn run_market_data_worker(
                                 message,
                             ) {
                                 record_worker_error(&snapshot, error.to_string());
-                                eprintln!(
-                                    "market recorder: symbol stream handling failed mode={} error={}",
-                                    mode.as_str(),
-                                    error
-                                );
+                                error!(service = "recorder", error = %error, "symbol stream handling failed");
                                 break;
                             }
                         }
                         Some(Err(error)) => {
                             record_worker_error(&snapshot, format!("symbol stream disconnected: {error}"));
-                            eprintln!(
-                                "market recorder: symbol stream disconnected mode={} symbols={} error={}",
-                                mode.as_str(),
-                                watched_symbols.join(","),
-                                error
-                            );
+                            warn!(service = "recorder", symbols = %watched_symbols.join(","), error = %error, "symbol stream disconnected");
                             break
                         }
                         None => {
                             record_worker_error(&snapshot, "symbol stream disconnected: eof".to_string());
-                            eprintln!(
-                                "market recorder: symbol stream disconnected mode={} symbols={} error=eof",
-                                mode.as_str(),
-                                watched_symbols.join(",")
-                            );
+                            warn!(service = "recorder", symbols = %watched_symbols.join(","), "symbol stream disconnected: eof");
                             break
                         }
                     }
@@ -679,7 +713,7 @@ async fn next_symbol_message(
 
 fn handle_force_order_message(
     duck_connection: Option<&Connection>,
-    postgres_client: Option<&mut postgres::Client>,
+    postgres_writer: Option<&Sender<PostgresWriteCommand>>,
     mode: BinanceMode,
     sequence: &mut i64,
     snapshot: &Arc<Mutex<WorkerSnapshot>>,
@@ -730,22 +764,24 @@ fn handle_force_order_message(
             .map_err(|error| StorageError::WriteFailedWithContext {
                 message: error.to_string(),
             })?;
-    } else if let Some(client) = postgres_client {
-        insert_liquidation(
-            client,
-            &PostgresLiquidationRecord {
-                mode: mode.as_str().to_string(),
-                product: "um".to_string(),
-                symbol: symbol.clone(),
-                event_time_ms: parsed.event_time,
-                receive_time_ms,
-                force_side: side,
-                price: order.price,
-                qty: order.qty,
-                notional: order.price * order.qty,
-                raw_payload: payload,
-            },
-        )?;
+    } else if let Some(sender) = postgres_writer {
+        sender
+            .send(PostgresWriteCommand::Liquidation(
+                PostgresLiquidationRecord {
+                    product: "um".to_string(),
+                    symbol: symbol.clone(),
+                    event_time_ms: parsed.event_time,
+                    receive_time_ms,
+                    force_side: side,
+                    price: order.price,
+                    qty: order.qty,
+                    notional: order.price * order.qty,
+                    raw_payload: payload,
+                },
+            ))
+            .map_err(|error| StorageError::WriteFailedWithContext {
+                message: format!("postgres liquidation writer disconnected: {error}"),
+            })?;
     } else {
         return Err(StorageError::WriteFailedWithContext {
             message: "no recorder storage backend available".to_string(),
@@ -757,7 +793,7 @@ fn handle_force_order_message(
 
 fn handle_symbol_message(
     duck_connection: Option<&Connection>,
-    postgres_client: Option<&mut postgres::Client>,
+    postgres_writer: Option<&Sender<PostgresWriteCommand>>,
     mode: BinanceMode,
     ticker_sequence: &mut i64,
     trade_sequence: &mut i64,
@@ -824,11 +860,9 @@ fn handle_symbol_message(
                 .map_err(|error| StorageError::WriteFailedWithContext {
                     message: error.to_string(),
                 })?;
-        } else if let Some(client) = postgres_client {
-            insert_book_ticker(
-                client,
-                &PostgresBookTickerRecord {
-                    mode: mode.as_str().to_string(),
+        } else if let Some(sender) = postgres_writer {
+            sender
+                .send(PostgresWriteCommand::BookTicker(PostgresBookTickerRecord {
                     symbol: symbol.clone(),
                     event_time_ms: event_time,
                     receive_time_ms,
@@ -836,8 +870,10 @@ fn handle_symbol_message(
                     bid_qty,
                     ask,
                     ask_qty,
-                },
-            )?;
+                }))
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: format!("postgres book_ticker writer disconnected: {error}"),
+                })?;
         } else {
             return Err(StorageError::WriteFailedWithContext {
                 message: "no recorder storage backend available".to_string(),
@@ -883,19 +919,19 @@ fn handle_symbol_message(
                 .map_err(|error| StorageError::WriteFailedWithContext {
                     message: error.to_string(),
                 })?;
-        } else if let Some(client) = postgres_client {
-            insert_agg_trade(
-                client,
-                &PostgresAggTradeRecord {
-                    mode: mode.as_str().to_string(),
+        } else if let Some(sender) = postgres_writer {
+            sender
+                .send(PostgresWriteCommand::AggTrade(PostgresAggTradeRecord {
                     symbol: symbol.clone(),
                     event_time_ms: event_time,
                     receive_time_ms,
                     price,
                     qty,
                     is_buyer_maker,
-                },
-            )?;
+                }))
+                .map_err(|error| StorageError::WriteFailedWithContext {
+                    message: format!("postgres agg_trade writer disconnected: {error}"),
+                })?;
         } else {
             return Err(StorageError::WriteFailedWithContext {
                 message: "no recorder storage backend available".to_string(),
@@ -1148,4 +1184,95 @@ fn timestamp_string(event_time_ms: i64) -> Option<String> {
                 .format("%Y-%m-%d %H:%M:%S%.3f")
                 .to_string()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dataset::types::RecorderMetrics;
+
+    #[test]
+    fn handle_force_order_message_persists_liquidation_and_updates_metrics() {
+        let connection = Connection::open_in_memory().expect("open duckdb");
+        connection
+            .execute_batch(
+                "CREATE TABLE raw_liquidation_events (
+                    event_id BIGINT,
+                    mode TEXT,
+                    symbol TEXT,
+                    event_time TIMESTAMP,
+                    receive_time TIMESTAMP,
+                    force_side TEXT,
+                    price DOUBLE,
+                    qty DOUBLE,
+                    notional DOUBLE,
+                    raw_payload TEXT
+                );",
+            )
+            .expect("create raw_liquidation_events");
+        let snapshot = Arc::new(Mutex::new(WorkerSnapshot::new(RecorderMetrics::default())));
+        let payload = serde_json::json!({
+            "E": 1_710_000_000_123_i64,
+            "o": {
+                "s": "BTCUSDT",
+                "S": "SELL",
+                "p": "68250.5",
+                "q": "0.125"
+            }
+        })
+        .to_string();
+        let mut sequence = 0i64;
+
+        handle_force_order_message(
+            Some(&connection),
+            None,
+            BinanceMode::Demo,
+            &mut sequence,
+            &snapshot,
+            Message::Text(payload.clone().into()),
+        )
+        .expect("handle force order");
+
+        let mut statement = connection
+            .prepare(
+                "SELECT event_id, mode, symbol, force_side, price, qty, notional, raw_payload
+                 FROM raw_liquidation_events",
+            )
+            .expect("prepare query");
+        let row = statement
+            .query_row([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, f64>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, f64>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })
+            .expect("fetch inserted liquidation");
+        assert_eq!(row.0, 1);
+        assert_eq!(row.1, "demo");
+        assert_eq!(row.2, "BTCUSDT");
+        assert_eq!(row.3, "SELL");
+        assert_eq!(row.4, 68_250.5);
+        assert_eq!(row.5, 0.125);
+        assert_eq!(row.6, 8_531.3125);
+        assert_eq!(row.7, payload);
+        assert_eq!(sequence, 1);
+
+        let snapshot = snapshot.lock().expect("snapshot lock");
+        assert_eq!(snapshot.metrics.liquidation_events, 1);
+        assert_eq!(
+            snapshot.metrics.last_liquidation_event_time.as_deref(),
+            Some("2024-03-09 16:00:00.123")
+        );
+        assert_eq!(
+            snapshot.metrics.top_liquidation_symbols,
+            vec!["BTCUSDT:1".to_string()]
+        );
+        assert!(snapshot.last_error.is_none());
+    }
 }

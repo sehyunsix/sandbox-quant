@@ -11,6 +11,7 @@ pub mod execution;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod market_data;
+pub mod observability;
 pub mod portfolio;
 pub mod record;
 pub mod recorder_app;

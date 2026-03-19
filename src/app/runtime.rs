@@ -7,6 +7,7 @@ use crate::execution::price_source::PriceSource;
 use crate::storage::event_log::log;
 use crate::strategy::command::StrategyCommand;
 use serde_json::json;
+use tracing::info;
 
 #[derive(Debug, Default)]
 pub struct AppRuntime {
@@ -49,6 +50,14 @@ impl AppRuntime {
                         "today_funding_pnl_usdt": today_funding_pnl_usdt,
                         "margin_ratio": margin_ratio,
                     }),
+                );
+                info!(
+                    service = "trading-engine",
+                    mode = app.mode.as_str(),
+                    positions = report.positions,
+                    open_order_groups = report.open_order_groups,
+                    balances = report.balances,
+                    "portfolio refreshed"
                 );
             }
             AppCommand::Execution(command) => {
@@ -111,6 +120,12 @@ impl AppRuntime {
                         );
                     }
                 }
+                info!(service = "trading-engine", mode = app.mode.as_str(), command = ?command, "execution command started");
+                log(
+                    &mut app.event_log,
+                    "app.execution.started",
+                    execution_request_payload(&command),
+                );
                 let outcome = app.execution.execute(
                     &app.exchange,
                     &app.portfolio_store,
@@ -142,6 +157,7 @@ impl AppRuntime {
                         remaining_gross_exposure_usdt(&app.portfolio_store, &app.price_store),
                     ),
                 );
+                info!(service = "trading-engine", mode = app.mode.as_str(), command = ?command, outcome = ?outcome, "execution command completed");
             }
             AppCommand::Strategy(command) => match command {
                 StrategyCommand::Templates | StrategyCommand::List | StrategyCommand::History => {}
@@ -183,6 +199,14 @@ impl AppRuntime {
                             "current_step": watch.current_step,
                         }),
                     );
+                    info!(
+                        service = "trading-engine",
+                        mode = app.mode.as_str(),
+                        watch_id = watch.id,
+                        instrument = watch.instrument.0,
+                        template = watch.template.slug(),
+                        "strategy watch started"
+                    );
                 }
                 StrategyCommand::Stop { watch_id } => {
                     let watch = app.strategy_store.stop_watch(app.mode, watch_id)?;
@@ -200,6 +224,14 @@ impl AppRuntime {
                             "instrument": watch.instrument.0,
                             "state": watch.state.as_str(),
                         }),
+                    );
+                    info!(
+                        service = "trading-engine",
+                        mode = app.mode.as_str(),
+                        watch_id = watch.id,
+                        instrument = watch.instrument.0,
+                        template = watch.template.slug(),
+                        "strategy watch stopped"
                     );
                 }
             },
@@ -222,6 +254,14 @@ impl AppRuntime {
                         "today_funding_pnl_usdt": today_funding_pnl_usdt,
                         "margin_ratio": margin_ratio,
                     }),
+                );
+                info!(
+                    service = "trading-engine",
+                    mode = app.mode.as_str(),
+                    positions = report.positions,
+                    open_order_groups = report.open_order_groups,
+                    balances = report.balances,
+                    "authoritative state refreshed"
                 );
             }
         }
@@ -385,6 +425,42 @@ fn execution_payload(
         _ => json!({
             "command_kind": "unknown",
             "outcome_kind": "unknown",
+        }),
+    }
+}
+
+fn execution_request_payload(command: &ExecutionCommand) -> serde_json::Value {
+    match command {
+        ExecutionCommand::SetTargetExposure {
+            instrument,
+            target,
+            order_type,
+            ..
+        } => json!({
+            "command_kind": "set_target_exposure",
+            "instrument": instrument.0,
+            "target": target.value(),
+            "order_type": format_order_type(*order_type),
+        }),
+        ExecutionCommand::CloseSymbol { instrument, .. } => json!({
+            "command_kind": "close_symbol",
+            "instrument": instrument.0,
+        }),
+        ExecutionCommand::CloseAll { .. } => json!({
+            "command_kind": "close_all",
+        }),
+        ExecutionCommand::SubmitOptionOrder {
+            instrument,
+            side,
+            qty,
+            order_type,
+            ..
+        } => json!({
+            "command_kind": "submit_option_order",
+            "instrument": instrument.0,
+            "side": format!("{side:?}"),
+            "qty": qty,
+            "order_type": format_order_type(*order_type),
         }),
     }
 }

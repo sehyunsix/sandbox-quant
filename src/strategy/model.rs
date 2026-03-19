@@ -8,6 +8,9 @@ use crate::strategy::command::StrategyStartConfig;
 pub enum StrategyTemplate {
     LiquidationBreakdownShort,
     PriceSmaCrossLong,
+    PriceSmaCrossShort,
+    PriceSmaCrossLongFast,
+    PriceSmaCrossShortFast,
 }
 
 impl StrategyTemplate {
@@ -15,10 +18,13 @@ impl StrategyTemplate {
         match self {
             Self::LiquidationBreakdownShort => "liquidation-breakdown-short",
             Self::PriceSmaCrossLong => "price-sma-cross-long",
+            Self::PriceSmaCrossShort => "price-sma-cross-short",
+            Self::PriceSmaCrossLongFast => "price-sma-cross-long-fast",
+            Self::PriceSmaCrossShortFast => "price-sma-cross-short-fast",
         }
     }
 
-    pub fn steps(self) -> &'static [&'static str; 7] {
+    pub fn steps(self) -> &'static [&'static str] {
         match self {
             Self::LiquidationBreakdownShort => &[
                 "Find a liquidation cluster above current price",
@@ -30,19 +36,44 @@ impl StrategyTemplate {
                 "End the strategy after exchange protection is live",
             ],
             Self::PriceSmaCrossLong => &[
-                "Read historical trend state from price bars",
-                "Track moving-average cross signals",
-                "Enter long after confirmed bullish cross",
-                "Apply configured stop and take-profit bounds",
-                "Manage the position until exit",
-                "Record realized PnL for the completed trade",
-                "Close any remaining position at the end of the window",
+                "Read raw futures kline closes from the selected interval",
+                "Compute fast and slow simple moving averages on price",
+                "Enter long when the fast average crosses above the slow average",
+                "Manage the position with stop loss, take profit, or bearish cross exit",
+                "Close any remaining position at the end of the backtest window",
+            ],
+            Self::PriceSmaCrossShort => &[
+                "Read raw futures kline closes from the selected interval",
+                "Compute fast and slow simple moving averages on price",
+                "Enter short when the fast average crosses below the slow average",
+                "Manage the position with stop loss, take profit, or bullish cross exit",
+                "Close any remaining position at the end of the backtest window",
+            ],
+            Self::PriceSmaCrossLongFast => &[
+                "Read raw futures kline closes from the selected interval",
+                "Compute faster 9/21 simple moving averages on price",
+                "Enter long when the fast average crosses above the slow average",
+                "Manage the position with stop loss, take profit, or bearish cross exit",
+                "Close any remaining position at the end of the backtest window",
+            ],
+            Self::PriceSmaCrossShortFast => &[
+                "Read raw futures kline closes from the selected interval",
+                "Compute faster 9/21 simple moving averages on price",
+                "Enter short when the fast average crosses below the slow average",
+                "Manage the position with stop loss, take profit, or bullish cross exit",
+                "Close any remaining position at the end of the backtest window",
             ],
         }
     }
 
-    pub fn all() -> [Self; 1] {
-        [Self::LiquidationBreakdownShort]
+    pub fn all() -> [Self; 5] {
+        [
+            Self::LiquidationBreakdownShort,
+            Self::PriceSmaCrossLong,
+            Self::PriceSmaCrossShort,
+            Self::PriceSmaCrossLongFast,
+            Self::PriceSmaCrossShortFast,
+        ]
     }
 }
 

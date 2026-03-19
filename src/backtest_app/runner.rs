@@ -6,9 +6,15 @@ use chrono::{DateTime, TimeZone, Utc};
 use crate::app::bootstrap::BinanceMode;
 use crate::dataset::query::{
     backtest_summary_for_path, load_book_ticker_rows_for_path, load_liquidation_events_for_path,
+    load_raw_kline_rows_for_path,
 };
-use crate::dataset::types::{BacktestDatasetSummary, BookTickerRow, LiquidationEventRow};
+use crate::dataset::types::{
+    BacktestDatasetSummary, BookTickerRow, DerivedKlineRow, LiquidationEventRow,
+};
 use crate::error::storage_error::StorageError;
+use crate::storage::postgres_market_data::{
+    backtest_summary_for_postgres_url, load_raw_kline_rows_for_postgres_url, mask_postgres_url,
+};
 use crate::strategy::model::StrategyTemplate;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,6 +141,12 @@ enum ReplayEventKind {
     BookTicker(usize),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PriceCrossDirection {
+    Long,
+    Short,
+}
+
 pub fn run_backtest_for_path(
     db_path: &Path,
     mode: BinanceMode,
@@ -145,20 +157,274 @@ pub fn run_backtest_for_path(
     config: BacktestConfig,
 ) -> Result<BacktestReport, StorageError> {
     let dataset = backtest_summary_for_path(db_path, mode, instrument, from, to)?;
-    let liquidation_events = load_liquidation_events_for_path(db_path, instrument, from, to)?;
-    let book_tickers = load_book_ticker_rows_for_path(db_path, instrument, from, to)?;
-    Ok(run_backtest_on_events(
-        template,
-        instrument.to_string(),
-        mode,
-        from,
-        to,
-        db_path.to_path_buf(),
-        dataset,
-        liquidation_events,
-        book_tickers,
-        config,
-    ))
+    ensure_symbol_found(&dataset, template, instrument)?;
+    match template {
+        StrategyTemplate::LiquidationBreakdownShort => {
+            let liquidation_events =
+                load_liquidation_events_for_path(db_path, instrument, from, to)?;
+            let book_tickers = load_book_ticker_rows_for_path(db_path, instrument, from, to)?;
+            ensure_liquidation_dataset_ready(
+                template,
+                instrument,
+                &dataset,
+                liquidation_events.len(),
+                book_tickers.len(),
+            )?;
+            Ok(run_backtest_on_events(
+                template,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path.to_path_buf(),
+                dataset,
+                liquidation_events,
+                book_tickers,
+                config,
+            ))
+        }
+        StrategyTemplate::PriceSmaCrossLong => {
+            let (_, klines) = load_raw_kline_rows_for_path(db_path, instrument, from, to)?
+                .unwrap_or_else(|| ("none".to_string(), Vec::new()));
+            ensure_price_cross_dataset_ready(template, instrument, &dataset, klines.len(), 50)?;
+            Ok(run_price_sma_cross_on_klines(
+                template,
+                PriceCrossDirection::Long,
+                20,
+                50,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path.to_path_buf(),
+                dataset,
+                klines,
+                config,
+            ))
+        }
+        StrategyTemplate::PriceSmaCrossShort => {
+            let (_, klines) = load_raw_kline_rows_for_path(db_path, instrument, from, to)?
+                .unwrap_or_else(|| ("none".to_string(), Vec::new()));
+            ensure_price_cross_dataset_ready(template, instrument, &dataset, klines.len(), 50)?;
+            Ok(run_price_sma_cross_on_klines(
+                template,
+                PriceCrossDirection::Short,
+                20,
+                50,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path.to_path_buf(),
+                dataset,
+                klines,
+                config,
+            ))
+        }
+        StrategyTemplate::PriceSmaCrossLongFast => {
+            let (_, klines) = load_raw_kline_rows_for_path(db_path, instrument, from, to)?
+                .unwrap_or_else(|| ("none".to_string(), Vec::new()));
+            ensure_price_cross_dataset_ready(template, instrument, &dataset, klines.len(), 21)?;
+            Ok(run_price_sma_cross_on_klines(
+                template,
+                PriceCrossDirection::Long,
+                9,
+                21,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path.to_path_buf(),
+                dataset,
+                klines,
+                config,
+            ))
+        }
+        StrategyTemplate::PriceSmaCrossShortFast => {
+            let (_, klines) = load_raw_kline_rows_for_path(db_path, instrument, from, to)?
+                .unwrap_or_else(|| ("none".to_string(), Vec::new()));
+            ensure_price_cross_dataset_ready(template, instrument, &dataset, klines.len(), 21)?;
+            Ok(run_price_sma_cross_on_klines(
+                template,
+                PriceCrossDirection::Short,
+                9,
+                21,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path.to_path_buf(),
+                dataset,
+                klines,
+                config,
+            ))
+        }
+    }
+}
+
+pub fn run_backtest_for_postgres_url(
+    postgres_url: &str,
+    mode: BinanceMode,
+    template: StrategyTemplate,
+    instrument: &str,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
+    config: BacktestConfig,
+) -> Result<BacktestReport, StorageError> {
+    let dataset = backtest_summary_for_postgres_url(postgres_url, mode, instrument, from, to)?;
+    let db_path = PathBuf::from(mask_postgres_url(postgres_url));
+    ensure_symbol_found(&dataset, template, instrument)?;
+    match template {
+        StrategyTemplate::LiquidationBreakdownShort => Err(StorageError::WriteFailedWithContext {
+            message: "liquidation-breakdown-short is not supported in PostgreSQL direct mode yet"
+                .to_string(),
+        }),
+        StrategyTemplate::PriceSmaCrossLong => {
+            let (_, klines) =
+                load_raw_kline_rows_for_postgres_url(postgres_url, mode, instrument, from, to)?
+                    .unwrap_or_else(|| ("none".to_string(), Vec::new()));
+            ensure_price_cross_dataset_ready(template, instrument, &dataset, klines.len(), 50)?;
+            Ok(run_price_sma_cross_on_klines(
+                template,
+                PriceCrossDirection::Long,
+                20,
+                50,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path,
+                dataset,
+                klines,
+                config,
+            ))
+        }
+        StrategyTemplate::PriceSmaCrossShort => {
+            let (_, klines) =
+                load_raw_kline_rows_for_postgres_url(postgres_url, mode, instrument, from, to)?
+                    .unwrap_or_else(|| ("none".to_string(), Vec::new()));
+            ensure_price_cross_dataset_ready(template, instrument, &dataset, klines.len(), 50)?;
+            Ok(run_price_sma_cross_on_klines(
+                template,
+                PriceCrossDirection::Short,
+                20,
+                50,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path,
+                dataset,
+                klines,
+                config,
+            ))
+        }
+        StrategyTemplate::PriceSmaCrossLongFast => {
+            let (_, klines) =
+                load_raw_kline_rows_for_postgres_url(postgres_url, mode, instrument, from, to)?
+                    .unwrap_or_else(|| ("none".to_string(), Vec::new()));
+            ensure_price_cross_dataset_ready(template, instrument, &dataset, klines.len(), 21)?;
+            Ok(run_price_sma_cross_on_klines(
+                template,
+                PriceCrossDirection::Long,
+                9,
+                21,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path,
+                dataset,
+                klines,
+                config,
+            ))
+        }
+        StrategyTemplate::PriceSmaCrossShortFast => {
+            let (_, klines) =
+                load_raw_kline_rows_for_postgres_url(postgres_url, mode, instrument, from, to)?
+                    .unwrap_or_else(|| ("none".to_string(), Vec::new()));
+            ensure_price_cross_dataset_ready(template, instrument, &dataset, klines.len(), 21)?;
+            Ok(run_price_sma_cross_on_klines(
+                template,
+                PriceCrossDirection::Short,
+                9,
+                21,
+                instrument.to_string(),
+                mode,
+                from,
+                to,
+                db_path,
+                dataset,
+                klines,
+                config,
+            ))
+        }
+    }
+}
+
+fn ensure_symbol_found(
+    dataset: &BacktestDatasetSummary,
+    template: StrategyTemplate,
+    instrument: &str,
+) -> Result<(), StorageError> {
+    if dataset.symbol_found {
+        return Ok(());
+    }
+    Err(StorageError::WriteFailedWithContext {
+        message: format!(
+            "backtest failed: template={} instrument={} symbol not found in dataset for range {}..{}",
+            template.slug(),
+            instrument,
+            dataset.from,
+            dataset.to
+        ),
+    })
+}
+
+fn ensure_liquidation_dataset_ready(
+    template: StrategyTemplate,
+    instrument: &str,
+    dataset: &BacktestDatasetSummary,
+    liquidation_count: usize,
+    book_ticker_count: usize,
+) -> Result<(), StorageError> {
+    if liquidation_count > 0 && book_ticker_count > 0 {
+        return Ok(());
+    }
+    Err(StorageError::WriteFailedWithContext {
+        message: format!(
+            "backtest failed: template={} instrument={} insufficient liquidation dataset in range {}..{} (liquidations={} book_tickers={})",
+            template.slug(),
+            instrument,
+            dataset.from,
+            dataset.to,
+            liquidation_count,
+            book_ticker_count
+        ),
+    })
+}
+
+fn ensure_price_cross_dataset_ready(
+    template: StrategyTemplate,
+    instrument: &str,
+    dataset: &BacktestDatasetSummary,
+    kline_count: usize,
+    min_klines: usize,
+) -> Result<(), StorageError> {
+    if kline_count >= min_klines {
+        return Ok(());
+    }
+    Err(StorageError::WriteFailedWithContext {
+        message: format!(
+            "backtest failed: template={} instrument={} insufficient kline rows in range {}..{} (required_at_least={} actual={})",
+            template.slug(),
+            instrument,
+            dataset.from,
+            dataset.to,
+            min_klines,
+            kline_count
+        ),
+    })
 }
 
 fn run_backtest_on_events(
@@ -449,6 +715,329 @@ fn average_net_of(trades: &[BacktestTrade], reason: BacktestExitReason) -> f64 {
     }
 }
 
+fn run_price_sma_cross_on_klines(
+    template: StrategyTemplate,
+    direction: PriceCrossDirection,
+    fast_window: usize,
+    slow_window: usize,
+    instrument: String,
+    mode: BinanceMode,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
+    db_path: PathBuf,
+    dataset: BacktestDatasetSummary,
+    klines: Vec<DerivedKlineRow>,
+    config: BacktestConfig,
+) -> BacktestReport {
+    let closes = klines.iter().map(|row| row.close).collect::<Vec<_>>();
+    let mut open_trade: Option<OpenTrade> = None;
+    let mut trades = Vec::new();
+    let mut trigger_count = 0usize;
+    let mut skipped_triggers = 0usize;
+    let mut equity = config.starting_equity;
+
+    for index in 0..klines.len() {
+        let Some(fast_now) = simple_moving_average(&closes, fast_window, index) else {
+            continue;
+        };
+        let Some(slow_now) = simple_moving_average(&closes, slow_window, index) else {
+            continue;
+        };
+        let Some(fast_prev) = index
+            .checked_sub(1)
+            .and_then(|value| simple_moving_average(&closes, fast_window, value))
+        else {
+            continue;
+        };
+        let Some(slow_prev) = index
+            .checked_sub(1)
+            .and_then(|value| simple_moving_average(&closes, slow_window, value))
+        else {
+            continue;
+        };
+        let candle = &klines[index];
+
+        if let Some(trade) = open_trade.as_ref() {
+            let stop_hit = match direction {
+                PriceCrossDirection::Long => candle.low <= trade.stop_price,
+                PriceCrossDirection::Short => candle.high >= trade.stop_price,
+            };
+            if stop_hit {
+                let exit_price = match direction {
+                    PriceCrossDirection::Long => {
+                        trade.stop_price * (1.0 - config.stop_slippage_pct)
+                    }
+                    PriceCrossDirection::Short => {
+                        trade.stop_price * (1.0 + config.stop_slippage_pct)
+                    }
+                };
+                let gross_pnl = gross_pnl(direction, trade.entry_price, exit_price, trade.qty);
+                let exit_fee = exit_price * trade.qty * config.taker_fee_rate;
+                let fees = trade.entry_fee + exit_fee;
+                let net_pnl = gross_pnl - fees;
+                equity += net_pnl;
+                trades.push(BacktestTrade {
+                    trade_id: trade.trade_id,
+                    trigger_time: timestamp_utc(trade.trigger_time_ms),
+                    entry_time: timestamp_utc(trade.entry_time_ms),
+                    entry_price: trade.entry_price,
+                    stop_price: trade.stop_price,
+                    take_profit_price: trade.take_profit_price,
+                    qty: trade.qty,
+                    exit_time: Some(timestamp_utc(candle.close_time_ms)),
+                    exit_price: Some(exit_price),
+                    exit_reason: Some(BacktestExitReason::StopLoss),
+                    gross_pnl: Some(gross_pnl),
+                    fees: Some(fees),
+                    net_pnl: Some(net_pnl),
+                });
+                open_trade = None;
+                continue;
+            }
+            let take_profit_hit = match direction {
+                PriceCrossDirection::Long => candle.high >= trade.take_profit_price,
+                PriceCrossDirection::Short => candle.low <= trade.take_profit_price,
+            };
+            if take_profit_hit {
+                let exit_price = match direction {
+                    PriceCrossDirection::Long => {
+                        trade.take_profit_price * (1.0 - config.tp_slippage_pct)
+                    }
+                    PriceCrossDirection::Short => {
+                        trade.take_profit_price * (1.0 + config.tp_slippage_pct)
+                    }
+                };
+                let gross_pnl = gross_pnl(direction, trade.entry_price, exit_price, trade.qty);
+                let exit_fee = exit_price * trade.qty * config.taker_fee_rate;
+                let fees = trade.entry_fee + exit_fee;
+                let net_pnl = gross_pnl - fees;
+                equity += net_pnl;
+                trades.push(BacktestTrade {
+                    trade_id: trade.trade_id,
+                    trigger_time: timestamp_utc(trade.trigger_time_ms),
+                    entry_time: timestamp_utc(trade.entry_time_ms),
+                    entry_price: trade.entry_price,
+                    stop_price: trade.stop_price,
+                    take_profit_price: trade.take_profit_price,
+                    qty: trade.qty,
+                    exit_time: Some(timestamp_utc(candle.close_time_ms)),
+                    exit_price: Some(exit_price),
+                    exit_reason: Some(BacktestExitReason::TakeProfit),
+                    gross_pnl: Some(gross_pnl),
+                    fees: Some(fees),
+                    net_pnl: Some(net_pnl),
+                });
+                open_trade = None;
+                continue;
+            }
+        }
+
+        let cross_up = fast_prev <= slow_prev && fast_now > slow_now;
+        let cross_down = fast_prev >= slow_prev && fast_now < slow_now;
+        let entry_signal = match direction {
+            PriceCrossDirection::Long => cross_up,
+            PriceCrossDirection::Short => cross_down,
+        };
+        let exit_signal = match direction {
+            PriceCrossDirection::Long => cross_down,
+            PriceCrossDirection::Short => cross_up,
+        };
+
+        if open_trade.is_none() {
+            if !entry_signal {
+                continue;
+            }
+            if equity <= 0.0 {
+                skipped_triggers += 1;
+                continue;
+            }
+            let entry_price = match direction {
+                PriceCrossDirection::Long => {
+                    candle.close * (1.0 + config.max_entry_slippage_pct * 0.5)
+                }
+                PriceCrossDirection::Short => {
+                    candle.close * (1.0 - config.max_entry_slippage_pct * 0.5)
+                }
+            };
+            let risk_amount = equity * config.risk_pct;
+            let qty = risk_amount / (entry_price * config.stop_distance_pct);
+            if !(qty.is_finite() && qty > 0.0) {
+                skipped_triggers += 1;
+                continue;
+            }
+            trigger_count += 1;
+            let entry_fee = entry_price * qty * config.taker_fee_rate;
+            open_trade = Some(OpenTrade {
+                trade_id: trades.len() + 1,
+                trigger_time_ms: candle.open_time_ms,
+                entry_time_ms: candle.close_time_ms,
+                entry_price,
+                stop_price: match direction {
+                    PriceCrossDirection::Long => entry_price * (1.0 - config.stop_distance_pct),
+                    PriceCrossDirection::Short => entry_price * (1.0 + config.stop_distance_pct),
+                },
+                take_profit_price: match direction {
+                    PriceCrossDirection::Long => {
+                        entry_price * (1.0 + config.stop_distance_pct * config.r_multiple)
+                    }
+                    PriceCrossDirection::Short => {
+                        entry_price * (1.0 - config.stop_distance_pct * config.r_multiple)
+                    }
+                },
+                qty,
+                entry_fee,
+            });
+            continue;
+        }
+
+        if exit_signal {
+            let trade = open_trade.take().expect("open trade");
+            let exit_price = match direction {
+                PriceCrossDirection::Long => {
+                    candle.close * (1.0 - config.max_entry_slippage_pct * 0.5)
+                }
+                PriceCrossDirection::Short => {
+                    candle.close * (1.0 + config.max_entry_slippage_pct * 0.5)
+                }
+            };
+            let gross_pnl = gross_pnl(direction, trade.entry_price, exit_price, trade.qty);
+            let exit_fee = exit_price * trade.qty * config.taker_fee_rate;
+            let fees = trade.entry_fee + exit_fee;
+            let net_pnl = gross_pnl - fees;
+            equity += net_pnl;
+            trades.push(BacktestTrade {
+                trade_id: trade.trade_id,
+                trigger_time: timestamp_utc(trade.trigger_time_ms),
+                entry_time: timestamp_utc(trade.entry_time_ms),
+                entry_price: trade.entry_price,
+                stop_price: trade.stop_price,
+                take_profit_price: trade.take_profit_price,
+                qty: trade.qty,
+                exit_time: Some(timestamp_utc(candle.close_time_ms)),
+                exit_price: Some(exit_price),
+                exit_reason: Some(BacktestExitReason::SignalExit),
+                gross_pnl: Some(gross_pnl),
+                fees: Some(fees),
+                net_pnl: Some(net_pnl),
+            });
+        }
+    }
+
+    if let Some(trade) = open_trade.take() {
+        if let Some(last) = klines.last() {
+            let exit_price = last.close;
+            let gross_pnl = gross_pnl(direction, trade.entry_price, exit_price, trade.qty);
+            let exit_fee = exit_price * trade.qty * config.taker_fee_rate;
+            let fees = trade.entry_fee + exit_fee;
+            let net_pnl = gross_pnl - fees;
+            equity += net_pnl;
+            trades.push(BacktestTrade {
+                trade_id: trade.trade_id,
+                trigger_time: timestamp_utc(trade.trigger_time_ms),
+                entry_time: timestamp_utc(trade.entry_time_ms),
+                entry_price: trade.entry_price,
+                stop_price: trade.stop_price,
+                take_profit_price: trade.take_profit_price,
+                qty: trade.qty,
+                exit_time: Some(timestamp_utc(last.close_time_ms)),
+                exit_price: Some(exit_price),
+                exit_reason: Some(BacktestExitReason::OpenAtEnd),
+                gross_pnl: Some(gross_pnl),
+                fees: Some(fees),
+                net_pnl: Some(net_pnl),
+            });
+        }
+    }
+
+    let realized = trades
+        .iter()
+        .filter_map(|trade| trade.net_pnl)
+        .collect::<Vec<_>>();
+    let wins = realized.iter().filter(|value| **value > 0.0).count();
+    let losses = realized.iter().filter(|value| **value < 0.0).count();
+    let net_pnl = realized.iter().sum::<f64>();
+    let average_net_pnl = if realized.is_empty() {
+        0.0
+    } else {
+        net_pnl / realized.len() as f64
+    };
+    let observed_win_rate = if realized.is_empty() {
+        0.0
+    } else {
+        wins as f64 / realized.len() as f64
+    };
+    let average_win = average_positive(&realized);
+    let average_loss = average_negative_abs(&realized);
+    let configured_expected_value = config.win_rate_assumption * average_win
+        - (1.0 - config.win_rate_assumption) * average_loss;
+
+    BacktestReport {
+        run_id: None,
+        template,
+        instrument,
+        mode,
+        from,
+        to,
+        db_path,
+        dataset,
+        config: config.clone(),
+        trigger_count,
+        trades,
+        wins,
+        losses,
+        open_trades: 0,
+        skipped_triggers,
+        starting_equity: config.starting_equity,
+        ending_equity: equity,
+        net_pnl,
+        observed_win_rate,
+        average_net_pnl,
+        configured_expected_value,
+    }
+}
+
+fn gross_pnl(direction: PriceCrossDirection, entry_price: f64, exit_price: f64, qty: f64) -> f64 {
+    match direction {
+        PriceCrossDirection::Long => (exit_price - entry_price) * qty,
+        PriceCrossDirection::Short => (entry_price - exit_price) * qty,
+    }
+}
+
+fn simple_moving_average(values: &[f64], window: usize, end_index: usize) -> Option<f64> {
+    if end_index + 1 < window {
+        return None;
+    }
+    let start = end_index + 1 - window;
+    let sum = values[start..=end_index].iter().sum::<f64>();
+    Some(sum / window as f64)
+}
+
+fn average_positive(values: &[f64]) -> f64 {
+    let filtered = values
+        .iter()
+        .copied()
+        .filter(|value| *value > 0.0)
+        .collect::<Vec<_>>();
+    if filtered.is_empty() {
+        0.0
+    } else {
+        filtered.iter().sum::<f64>() / filtered.len() as f64
+    }
+}
+
+fn average_negative_abs(values: &[f64]) -> f64 {
+    let filtered = values
+        .iter()
+        .copied()
+        .filter(|value| *value < 0.0)
+        .collect::<Vec<_>>();
+    if filtered.is_empty() {
+        0.0
+    } else {
+        filtered.iter().map(|value| value.abs()).sum::<f64>() / filtered.len() as f64
+    }
+}
+
 fn timestamp_utc(event_time_ms: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(event_time_ms)
         .single()
@@ -551,5 +1140,161 @@ mod tests {
         assert_eq!(report.wins, 0);
         assert_eq!(report.losses, 1);
         assert!(report.net_pnl < 0.0);
+    }
+
+    #[test]
+    fn price_sma_cross_long_backtest_records_trade_from_klines() {
+        let mut klines = Vec::new();
+        for index in 0..80 {
+            let close = if index < 55 {
+                100.0
+            } else {
+                100.0 + (index - 54) as f64
+            };
+            klines.push(DerivedKlineRow {
+                open_time_ms: index as i64 * 60_000,
+                close_time_ms: index as i64 * 60_000 + 59_000,
+                open: close - 0.5,
+                high: close + 2.0,
+                low: close - 1.0,
+                close,
+                volume: 1000.0,
+                quote_volume: close * 1000.0,
+                trade_count: 100,
+            });
+        }
+
+        let report = run_price_sma_cross_on_klines(
+            StrategyTemplate::PriceSmaCrossLong,
+            PriceCrossDirection::Long,
+            20,
+            50,
+            "BTCUSDT".to_string(),
+            BinanceMode::Demo,
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 13).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 13).unwrap(),
+            PathBuf::from("/tmp/test.duckdb"),
+            BacktestDatasetSummary {
+                mode: BinanceMode::Demo,
+                symbol: "BTCUSDT".to_string(),
+                symbol_found: true,
+                from: "2026-03-13".to_string(),
+                to: "2026-03-13".to_string(),
+                liquidation_events: 0,
+                book_ticker_events: 0,
+                agg_trade_events: 0,
+                derived_kline_1s_bars: 0,
+            },
+            klines,
+            BacktestConfig::default(),
+        );
+
+        assert!(report.trigger_count >= 1);
+        assert!(!report.trades.is_empty());
+        assert!(report.net_pnl.is_finite());
+    }
+
+    #[test]
+    fn price_sma_cross_short_backtest_records_trade_from_klines() {
+        let mut klines = Vec::new();
+        for index in 0..80 {
+            let close = if index < 55 {
+                200.0
+            } else {
+                200.0 - (index - 54) as f64
+            };
+            klines.push(DerivedKlineRow {
+                open_time_ms: index as i64 * 60_000,
+                close_time_ms: index as i64 * 60_000 + 59_000,
+                open: close + 0.5,
+                high: close + 1.0,
+                low: close - 2.0,
+                close,
+                volume: 1000.0,
+                quote_volume: close * 1000.0,
+                trade_count: 100,
+            });
+        }
+
+        let report = run_price_sma_cross_on_klines(
+            StrategyTemplate::PriceSmaCrossShort,
+            PriceCrossDirection::Short,
+            20,
+            50,
+            "BTCUSDT".to_string(),
+            BinanceMode::Demo,
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 13).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 13).unwrap(),
+            PathBuf::from("/tmp/test.duckdb"),
+            BacktestDatasetSummary {
+                mode: BinanceMode::Demo,
+                symbol: "BTCUSDT".to_string(),
+                symbol_found: true,
+                from: "2026-03-13".to_string(),
+                to: "2026-03-13".to_string(),
+                liquidation_events: 0,
+                book_ticker_events: 0,
+                agg_trade_events: 0,
+                derived_kline_1s_bars: 0,
+            },
+            klines,
+            BacktestConfig::default(),
+        );
+
+        assert!(report.trigger_count >= 1);
+        assert!(!report.trades.is_empty());
+        assert!(report.net_pnl.is_finite());
+    }
+
+    #[test]
+    fn price_sma_cross_long_fast_backtest_records_trade_from_klines() {
+        let mut klines = Vec::new();
+        for index in 0..60 {
+            let close = if index < 25 {
+                100.0
+            } else {
+                100.0 + (index - 24) as f64 * 0.8
+            };
+            klines.push(DerivedKlineRow {
+                open_time_ms: index as i64 * 60_000,
+                close_time_ms: index as i64 * 60_000 + 59_000,
+                open: close - 0.3,
+                high: close + 1.5,
+                low: close - 0.8,
+                close,
+                volume: 1000.0,
+                quote_volume: close * 1000.0,
+                trade_count: 100,
+            });
+        }
+
+        let report = run_price_sma_cross_on_klines(
+            StrategyTemplate::PriceSmaCrossLongFast,
+            PriceCrossDirection::Long,
+            9,
+            21,
+            "BTCUSDT".to_string(),
+            BinanceMode::Demo,
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 13).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 13).unwrap(),
+            PathBuf::from("/tmp/test.duckdb"),
+            BacktestDatasetSummary {
+                mode: BinanceMode::Demo,
+                symbol: "BTCUSDT".to_string(),
+                symbol_found: true,
+                from: "2026-03-13".to_string(),
+                to: "2026-03-13".to_string(),
+                liquidation_events: 0,
+                book_ticker_events: 0,
+                agg_trade_events: 0,
+                derived_kline_1s_bars: 0,
+            },
+            klines,
+            BacktestConfig::default(),
+        );
+
+        assert!(report.trigger_count >= 1);
+        assert!(!report.trades.is_empty());
+        assert!(report.net_pnl.is_finite());
     }
 }
