@@ -34,18 +34,17 @@ fn render_strategy_output(
 ) -> String {
     match command {
         StrategyCommand::Templates => {
+            let templates = crate::strategy::model::StrategyTemplate::all();
             let mut lines = vec![
                 "strategy templates".to_string(),
                 format!("mode={}", mode.as_str()),
-                "templates=1".to_string(),
-                "template=liquidation-breakdown-short".to_string(),
+                format!("templates={}", templates.len()),
             ];
-            for (index, step) in crate::strategy::model::StrategyTemplate::LiquidationBreakdownShort
-                .steps()
-                .iter()
-                .enumerate()
-            {
-                lines.push(format!("{}. {}", index + 1, step));
+            for template in templates {
+                lines.push(format!("template={}", template.slug()));
+                for (index, step) in template.steps().iter().enumerate() {
+                    lines.push(format!("{}. {}", index + 1, step));
+                }
             }
             lines.join("\n")
         }
@@ -61,12 +60,13 @@ fn render_strategy_output(
             } else {
                 lines.extend(watches.into_iter().map(|watch| {
                     format!(
-                        "- id={} template={} instrument={} state={} step={}/7",
+                        "- id={} template={} instrument={} state={} step={}/{}",
                         watch.id,
                         watch.template.slug(),
                         watch.instrument.0,
                         watch.state.as_str(),
-                        watch.current_step
+                        watch.current_step,
+                        watch.template.steps().len()
                     )
                 }));
             }
@@ -109,7 +109,11 @@ fn render_strategy_output(
                 format!("template={}", watch.template.slug()),
                 format!("instrument={}", watch.instrument.0),
                 format!("state={}", watch.state.as_str()),
-                format!("current_step={}/7", watch.current_step),
+                format!(
+                    "current_step={}/{}",
+                    watch.current_step,
+                    watch.template.steps().len()
+                ),
                 format!("risk_pct={}", watch.config.risk_pct),
                 format!("win_rate={}", watch.config.win_rate),
                 format!("r_multiple={}", watch.config.r_multiple),
@@ -128,12 +132,12 @@ fn render_strategy_output(
             }
             lines.join("\n")
         }
-        StrategyCommand::Start { .. } => {
+        StrategyCommand::Start { template, .. } => {
             let Some(last_event) = event_log.records.last() else {
                 return "strategy started\nlast_event=none".to_string();
             };
             format!(
-                "strategy started\nmode={}\nwatch_id={}\ntemplate={}\ninstrument={}\nstate={}\nrisk_pct={}\nwin_rate={}\nr_multiple={}\nmax_entry_slippage_pct={}\ncurrent_step={}/7",
+                "strategy started\nmode={}\nwatch_id={}\ntemplate={}\ninstrument={}\nstate={}\nrisk_pct={}\nwin_rate={}\nr_multiple={}\nmax_entry_slippage_pct={}\ncurrent_step={}/{}",
                 last_event.payload["mode"].as_str().unwrap_or("unknown"),
                 last_event.payload["watch_id"].as_u64().unwrap_or_default(),
                 last_event.payload["template"].as_str().unwrap_or("unknown"),
@@ -144,6 +148,7 @@ fn render_strategy_output(
                 last_event.payload["r_multiple"].as_f64().unwrap_or_default(),
                 last_event.payload["max_entry_slippage_pct"].as_f64().unwrap_or_default(),
                 last_event.payload["current_step"].as_u64().unwrap_or_default(),
+                template.steps().len(),
             )
         }
         StrategyCommand::Stop { .. } => {

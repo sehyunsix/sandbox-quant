@@ -8,8 +8,8 @@ use sandbox_quant::backtest_app::runner::{
     BacktestConfig, BacktestExitReason, BacktestReport, BacktestTrade,
 };
 use sandbox_quant::charting::adapters::sandbox::{
-    equity_scene_from_report, market_scene_from_snapshot,
-    market_scene_from_snapshot_with_timeframe, MarketTimeframe,
+    equity_scene_from_report, market_scene_from_snapshot, market_scene_from_snapshot_with_overlay,
+    market_scene_from_snapshot_with_timeframe, MarketSeriesKind, MarketTimeframe,
 };
 use sandbox_quant::charting::scene::Series;
 use sandbox_quant::dataset::types::{
@@ -216,6 +216,118 @@ fn market_scene_uses_candles_and_volume_when_klines_exist() {
         .series
         .iter()
         .any(|series| matches!(series, Series::Bars(_))));
+}
+
+#[test]
+fn market_scene_overlay_can_include_two_series_in_one_pane() {
+    let snapshot = sample_snapshot(
+        "BTCUSDT",
+        vec![
+            BookTickerRow {
+                event_time_ms: 1_000,
+                bid: 99.0,
+                ask: 101.0,
+            },
+            BookTickerRow {
+                event_time_ms: 2_000,
+                bid: 100.0,
+                ask: 102.0,
+            },
+        ],
+        vec![
+            DerivedKlineRow {
+                open_time_ms: 1_000,
+                close_time_ms: 1_999,
+                open: 100.0,
+                high: 103.0,
+                low: 99.0,
+                close: 102.0,
+                volume: 25.0,
+                quote_volume: 2_550.0,
+                trade_count: 10,
+            },
+            DerivedKlineRow {
+                open_time_ms: 2_000,
+                close_time_ms: 2_999,
+                open: 102.0,
+                high: 104.0,
+                low: 101.0,
+                close: 101.5,
+                volume: 20.0,
+                quote_volume: 2_035.0,
+                trade_count: 8,
+            },
+        ],
+        None,
+    );
+
+    let scene = market_scene_from_snapshot_with_overlay(
+        &snapshot,
+        MarketTimeframe::Tick1s,
+        MarketSeriesKind::Candles,
+        Some(MarketSeriesKind::CloseLine),
+    );
+
+    let has_candles = scene.panes[0]
+        .series
+        .iter()
+        .any(|series| matches!(series, Series::Candles(_)));
+    let line_count = scene.panes[0]
+        .series
+        .iter()
+        .filter(|series| matches!(series, Series::Line(_)))
+        .count();
+
+    assert!(has_candles);
+    assert!(line_count >= 1);
+}
+
+#[test]
+fn market_scene_overlay_supports_ema_and_vwap_lines() {
+    let snapshot = sample_snapshot(
+        "BTCUSDT",
+        Vec::new(),
+        vec![
+            DerivedKlineRow {
+                open_time_ms: 1_000,
+                close_time_ms: 1_999,
+                open: 100.0,
+                high: 103.0,
+                low: 99.0,
+                close: 102.0,
+                volume: 25.0,
+                quote_volume: 2_550.0,
+                trade_count: 10,
+            },
+            DerivedKlineRow {
+                open_time_ms: 2_000,
+                close_time_ms: 2_999,
+                open: 102.0,
+                high: 104.0,
+                low: 101.0,
+                close: 101.5,
+                volume: 20.0,
+                quote_volume: 2_035.0,
+                trade_count: 8,
+            },
+        ],
+        None,
+    );
+
+    let scene = market_scene_from_snapshot_with_overlay(
+        &snapshot,
+        MarketTimeframe::Tick1s,
+        MarketSeriesKind::Ema20,
+        Some(MarketSeriesKind::Vwap),
+    );
+
+    let line_count = scene.panes[0]
+        .series
+        .iter()
+        .filter(|series| matches!(series, Series::Line(_)))
+        .count();
+
+    assert!(line_count >= 2);
 }
 
 #[test]

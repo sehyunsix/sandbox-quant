@@ -3,18 +3,21 @@ use crate::recorder_app::runtime::RecorderStatus;
 pub fn render_live_recorder_status(header: &str, status: &RecorderStatus) -> String {
     let mut lines = vec![
         header.to_string(),
-        format!("mode={}", status.mode.as_str()),
         format!("state={}", status.state.as_str()),
         format!("desired_running={}", status.state.is_running()),
         format!("process_alive={}", status.worker_alive),
+        format!("reader_alive={}", status.reader_alive),
+        format!("writer_alive={}", status.writer_alive),
         format!("worker_alive={}", status.worker_alive),
-        format!("status_stale={}", status.heartbeat_age_sec > 5),
+        format!(
+            "status_stale={}",
+            status.heartbeat_age_sec > 5 || !status.worker_alive
+        ),
         format!("heartbeat_age_sec={}", status.heartbeat_age_sec),
         "pid=in-process".to_string(),
         format!("binary_version={}", env!("CARGO_PKG_VERSION")),
         format!("storage_backend={}", status.storage_backend),
         format!("storage_target={}", status.storage_target),
-        format!("db_path={}", status.db_path.display()),
         format!(
             "schema_version={}",
             status
@@ -78,6 +81,9 @@ pub fn render_live_recorder_status(header: &str, status: &RecorderStatus) -> Str
             join_symbols(&status.metrics.top_agg_trade_symbols)
         ),
     ];
+    if status.storage_backend == "duckdb" {
+        lines.push(format!("db_path={}", status.db_path.display()));
+    }
     if let Some(error) = &status.last_error {
         lines.push(format!("last_error={error}"));
     }
@@ -113,6 +119,8 @@ mod tests {
             manual_symbols: Vec::new(),
             strategy_symbols: Vec::new(),
             watched_symbols: Vec::new(),
+            reader_alive: false,
+            writer_alive: false,
             worker_alive: false,
             heartbeat_age_sec: 0,
             last_error: None,

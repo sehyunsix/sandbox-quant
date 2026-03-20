@@ -3,7 +3,8 @@ use eframe::egui::{self, vec2, Color32, ComboBox, Grid, RichText, SidePanel, Top
 use crate::app::bootstrap::BinanceMode;
 use crate::backtest_app::runner::{BacktestConfig, BacktestReport};
 use crate::charting::adapters::sandbox::{
-    equity_scene_from_report, market_scene_from_snapshot_with_timeframe, MarketTimeframe,
+    equity_scene_from_report, market_scene_from_snapshot_with_overlay,
+    market_scene_from_snapshot_with_timeframe, MarketSeriesKind, MarketTimeframe,
 };
 use crate::charting::egui::RetainedChartTexture;
 use crate::charting::inspect::{hover_model_at, pan_scene, visible_time_bounds, zoom_scene};
@@ -64,10 +65,24 @@ pub struct SandboxQuantGuiApp {
     equity_chart: RetainedChartTexture,
     market_viewport: Viewport,
     equity_viewport: Viewport,
+    custom_charts: Vec<CustomChartPanel>,
+    next_chart_id: u32,
+}
+
+struct CustomChartPanel {
+    id: u32,
+    title: String,
+    symbol: String,
+    timeframe: MarketTimeframe,
+    primary: MarketSeriesKind,
+    secondary: Option<MarketSeriesKind>,
+    viewport: Viewport,
+    texture: RetainedChartTexture,
 }
 
 impl SandboxQuantGuiApp {
     pub fn new(launch: GuiLaunchConfig) -> Self {
+        let launch_symbol = launch.symbol.clone();
         let mut app = Self {
             service: VisualizationService,
             mode: launch.mode,
@@ -85,6 +100,17 @@ impl SandboxQuantGuiApp {
             equity_chart: RetainedChartTexture::default(),
             market_viewport: Viewport::default(),
             equity_viewport: Viewport::default(),
+            custom_charts: vec![CustomChartPanel {
+                id: 1,
+                title: "Market Chart 1".to_string(),
+                symbol: launch_symbol,
+                timeframe: launch.market_timeframe,
+                primary: MarketSeriesKind::Candles,
+                secondary: Some(MarketSeriesKind::MidPrice),
+                viewport: Viewport::default(),
+                texture: RetainedChartTexture::default(),
+            }],
+            next_chart_id: 2,
         };
         app.refresh_dashboard(None);
         app
@@ -107,6 +133,50 @@ impl SandboxQuantGuiApp {
         let today = chrono::Utc::now().date_naive();
         self.from_input = (today - chrono::Days::new(days.saturating_sub(1))).to_string();
         self.to_input = today.to_string();
+    }
+
+    fn add_custom_chart_panel(&mut self) {
+        self.custom_charts.push(CustomChartPanel {
+            id: self.next_chart_id,
+            title: format!("Market Chart {}", self.next_chart_id),
+            symbol: self.symbol_input.trim().to_ascii_uppercase(),
+            timeframe: self.market_timeframe,
+            primary: MarketSeriesKind::Candles,
+            secondary: Some(MarketSeriesKind::MidPrice),
+            viewport: Viewport::default(),
+            texture: RetainedChartTexture::default(),
+        });
+        self.next_chart_id += 1;
+    }
+
+    fn load_snapshot_for_symbol(&self, symbol: &str) -> Result<DashboardSnapshot, String> {
+        self.service
+            .load_dashboard(DashboardQuery {
+                mode: self.mode,
+                base_dir: self.base_dir_input.trim().into(),
+                symbol: symbol.to_ascii_uppercase(),
+                from: parse_date("from", &self.from_input)?,
+                to: parse_date("to", &self.to_input)?,
+                selected_run_id: None,
+                run_limit: self.run_limit,
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn duplicate_custom_chart_panel(&mut self, index: usize) {
+        if let Some(source) = self.custom_charts.get(index) {
+            self.custom_charts.push(CustomChartPanel {
+                id: self.next_chart_id,
+                title: format!("{} Copy", source.title),
+                symbol: source.symbol.clone(),
+                timeframe: source.timeframe,
+                primary: source.primary,
+                secondary: source.secondary,
+                viewport: source.viewport.clone(),
+                texture: RetainedChartTexture::default(),
+            });
+            self.next_chart_id += 1;
+        }
     }
 
     fn refresh_dashboard(&mut self, selected_run_id: Option<i64>) {
@@ -318,6 +388,109 @@ impl SandboxQuantGuiApp {
             );
         });
         self.show_market_chart(ui, snapshot, 520.0);
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.heading("Custom Charts");
+            if ui.button("Add Chart").clicked() {
+                self.add_custom_chart_panel();
+            }
+        });
+        let available_symbols = snapshot.available_symbols.clone();
+        let mut remove_panel = None;
+        let mut duplicate_panel = None;
+        for index in 0..self.custom_charts.len() {
+            let panel_state = {
+                let panel = &self.custom_charts[index];
+                (
+                    panel.id,
+                    panel.symbol.clone(),
+                    panel.timeframe,
+                    panel.primary,
+                    panel.secondary,
+                )
+            };
+            let panel_snapshot = self.load_snapshot_for_symbol(&panel_state.1).ok();
+            let panel = &mut self.custom_charts[index];
+            ui.group(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("Chart #{}", panel.id));
+                    ui.add_sized([180.0, 22.0], egui::TextEdit::singleline(&mut panel.title));
+                    if ui.small_button("Duplicate").clicked() {
+                        duplicate_panel = Some(index);
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        remove_panel = Some(index);
+                    }
+                });
+                ui.small(format!(
+                    "Legend: {}{}",
+                    panel.primary.label(),
+                    panel
+                        .secondary
+                        .map(|kind| format!(" + {}", kind.label()))
+                        .unwrap_or_default()
+                ));
+                ui.horizontal_wrapped(|ui| {
+                    ComboBox::from_id_salt(format!("chart-symbol-{}", panel.id))
+                        .selected_text(if panel.symbol.is_empty() {
+                            "select symbol"
+                        } else {
+                            panel.symbol.as_str()
+                        })
+                        .show_ui(ui, |ui| {
+                            for symbol in &available_symbols {
+                                ui.selectable_value(&mut panel.symbol, symbol.clone(), symbol);
+                            }
+                        });
+                    ComboBox::from_id_salt(format!("chart-timeframe-{}", panel.id))
+                        .selected_text(panel.timeframe.label())
+                        .show_ui(ui, |ui| {
+                            for timeframe in MarketTimeframe::all() {
+                                ui.selectable_value(
+                                    &mut panel.timeframe,
+                                    timeframe,
+                                    timeframe.label(),
+                                );
+                            }
+                        });
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ComboBox::from_id_salt(format!("chart-primary-{}", panel.id))
+                        .selected_text(panel.primary.label())
+                        .show_ui(ui, |ui| {
+                            for kind in MarketSeriesKind::all() {
+                                ui.selectable_value(&mut panel.primary, kind, kind.label());
+                            }
+                        });
+                    ComboBox::from_id_salt(format!("chart-secondary-{}", panel.id))
+                        .selected_text(panel.secondary.map(|kind| kind.label()).unwrap_or("None"))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut panel.secondary, None, "None");
+                            for kind in MarketSeriesKind::all() {
+                                ui.selectable_value(&mut panel.secondary, Some(kind), kind.label());
+                            }
+                        });
+                });
+                match panel_snapshot {
+                    Some(panel_snapshot) => {
+                        show_custom_market_chart(ui, &panel_snapshot, panel, 300.0);
+                    }
+                    None => {
+                        ui.colored_label(
+                            Color32::from_rgb(255, 120, 120),
+                            "Unable to load symbol snapshot for this chart panel.",
+                        );
+                    }
+                }
+            });
+            ui.add_space(8.0);
+        }
+        if let Some(index) = duplicate_panel {
+            self.duplicate_custom_chart_panel(index);
+        }
+        if let Some(index) = remove_panel {
+            self.custom_charts.remove(index);
+        }
     }
 
     fn render_pnl(&mut self, ui: &mut Ui, snapshot: &DashboardSnapshot) {
@@ -437,6 +610,53 @@ impl SandboxQuantGuiApp {
             Err(error) => {
                 ui.colored_label(Color32::from_rgb(255, 120, 120), error.to_string());
             }
+        }
+    }
+}
+
+fn show_custom_market_chart(
+    ui: &mut Ui,
+    snapshot: &DashboardSnapshot,
+    panel: &mut CustomChartPanel,
+    height: f32,
+) {
+    let size = vec2(ui.available_width().max(320.0), height);
+    let request = render_request(ui, size);
+    let renderer = PlottersRenderer;
+    let mut scene = market_scene_from_snapshot_with_overlay(
+        snapshot,
+        panel.timeframe,
+        panel.primary,
+        panel.secondary,
+    );
+    if panel.viewport.x_range.is_some() {
+        scene.viewport = panel.viewport.clone();
+    }
+    let interval_label = market_period_unit_label(snapshot, panel.timeframe);
+    render_chart_period_label(ui, &scene, &interval_label);
+    match renderer.render(&scene, &request) {
+        Ok(frame) => {
+            panel.texture.update(
+                ui.ctx(),
+                format!("custom-market-chart-{}", panel.id).as_str(),
+                &frame,
+            );
+            if let Some(response) = panel.texture.show(ui, size) {
+                apply_hover(
+                    ui,
+                    &renderer,
+                    &mut scene,
+                    &request,
+                    ChartInteraction {
+                        response,
+                        texture: &mut panel.texture,
+                        viewport: &mut panel.viewport,
+                    },
+                );
+            }
+        }
+        Err(error) => {
+            ui.colored_label(Color32::from_rgb(255, 120, 120), error.to_string());
         }
     }
 }
@@ -1273,5 +1493,28 @@ mod tests {
 
         std::fs::remove_file(db_path).ok();
         std::fs::remove_dir_all(base_dir).ok();
+    }
+
+    #[test]
+    fn duplicate_custom_chart_panel_copies_settings() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 13).expect("date");
+        let mut app = SandboxQuantGuiApp::new(GuiLaunchConfig {
+            mode: BinanceMode::Demo,
+            base_dir: "var".to_string(),
+            symbol: "BTCUSDT".to_string(),
+            from: today,
+            to: today,
+            market_timeframe: MarketTimeframe::Minute15m,
+        });
+        app.custom_charts[0].title = "Primary".to_string();
+        app.custom_charts[0].primary = MarketSeriesKind::Ema20;
+        app.custom_charts[0].secondary = Some(MarketSeriesKind::Vwap);
+
+        app.duplicate_custom_chart_panel(0);
+
+        assert_eq!(app.custom_charts.len(), 2);
+        assert_eq!(app.custom_charts[1].title, "Primary Copy");
+        assert_eq!(app.custom_charts[1].primary, MarketSeriesKind::Ema20);
+        assert_eq!(app.custom_charts[1].secondary, Some(MarketSeriesKind::Vwap));
     }
 }

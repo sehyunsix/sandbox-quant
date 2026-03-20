@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use duckdb::Connection;
 use sandbox_quant::app::bootstrap::BinanceMode;
 use sandbox_quant::collector_app::binance_public::{
@@ -7,12 +7,14 @@ use sandbox_quant::collector_app::binance_public::{
 };
 use sandbox_quant::dataset::schema::{init_schema_for_path, MARKET_DATA_SCHEMA_VERSION};
 use sandbox_quant::error::storage_error::StorageError;
+use sandbox_quant::observability::logging::init_logging;
 use sandbox_quant::record::coordination::RecorderCoordination;
 use sandbox_quant::storage::postgres_market_data::{
     connect as connect_postgres, export_snapshot_to_duckdb, init_schema as init_postgres_schema,
     load_summary as load_postgres_summary, postgres_url_from_env, CollectorStorageBackend,
     PostgresToDuckDbSnapshotConfig,
 };
+use tracing::{error, info};
 
 #[derive(Debug, Clone, PartialEq)]
 struct BatchImportConfig {
@@ -48,13 +50,31 @@ struct SnapshotConfig {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
+    let init_mode = args
+        .windows(2)
+        .find(|window| window[0] == "--mode")
+        .map(|window| window[1].as_str())
+        .unwrap_or("demo");
+    init_logging("collector", Some(init_mode))?;
+    info!(service = "collector", mode = init_mode, args = ?args, "process started");
+
+    let result: Result<(), Box<dyn std::error::Error>> = match args.first().map(String::as_str) {
         Some("binance-public") if args.get(1).map(String::as_str) == Some("import") => {
             let config = parse_import_args(&args[2..])?;
             let report = import_many(&config)?;
+            info!(
+                service = "collector",
+                mode = config.mode.as_str(),
+                storage = config.storage_backend.as_str(),
+                symbols = %config.symbols.join(","),
+                liquidation_rows = report.liquidation_rows,
+                kline_rows = report.kline_rows,
+                "collector import completed"
+            );
             println!(
                 "{}",
-                [
+                {
+                    let mut lines = vec![
                     "collector import".to_string(),
                     format!("storage={}", config.storage_backend.as_str()),
                     format!("products={}", join_products(&config.products)),
@@ -72,9 +92,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("skipped_kline_dates={}", report.skipped_kline_dates),
                     format!("liquidation_rows={}", report.liquidation_rows),
                     format!("kline_rows={}", report.kline_rows),
-                ]
-                .join("\n")
+                    ];
+                    if let Some(warning) = archive_gap_warning(&config, &report) {
+                        lines.push(warning);
+                    }
+                    lines.join("\n")
+                }
             );
+            Ok(())
         }
         Some("summary") => {
             let (mode, base_dir, storage_backend, postgres_url) = parse_summary_args(&args[1..])?;
@@ -82,6 +107,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "{}",
                 render_summary(mode, &base_dir, storage_backend, postgres_url.as_deref())?
             );
+            info!(service = "collector", mode = mode.as_str(), storage = storage_backend.as_str(), "collector summary completed");
+            Ok(())
         }
         Some("snapshot") if args.get(1).map(String::as_str) == Some("postgres-to-duckdb") => {
             let config = parse_snapshot_args(&args[2..])?;
@@ -128,14 +155,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ]
                 .join("\n")
             );
-        }
-        _ => {
-            eprintln!(
-                "usage: sandbox-quant-collector binance-public import (--product <spot|um|cm> | --products <spot,um,cm>) (--symbol <symbol> | --symbols <a,b,c>) (--date <YYYY-MM-DD> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>) [--kline-interval <interval>] [--mode <demo|real>] [--base-dir <path>] [--skip-liquidation] [--skip-klines] [--storage <duckdb|postgres>] [--postgres-url <url>]\n       sandbox-quant-collector summary [--mode <demo|real>] [--base-dir <path>] [--storage <duckdb|postgres>] [--postgres-url <url>]\n       sandbox-quant-collector snapshot postgres-to-duckdb (--symbol <symbol> | --symbols <a,b,c>) (--date <YYYY-MM-DD> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>) [--mode <demo|real>] [--base-dir <path>] [--product <spot|um|cm>] [--interval <interval>] [--postgres-url <url>] [--skip-klines] [--skip-liquidations] [--skip-book-tickers] [--skip-agg-trades] [--no-clear]"
+            info!(
+                service = "collector",
+                mode = config.mode.as_str(),
+                symbols = %config.symbols.join(","),
+                kline_rows = report.kline_rows,
+                liquidation_rows = report.liquidation_rows,
+                book_ticker_rows = report.book_ticker_rows,
+                agg_trade_rows = report.agg_trade_rows,
+                "collector snapshot completed"
             );
-            std::process::exit(2);
+            Ok(())
         }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "usage: sandbox-quant-collector binance-public import (--product <spot|um|cm> | --products <spot,um,cm>) (--symbol <symbol> | --symbols <a,b,c>) (--date <YYYY-MM-DD> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>) [--kline-interval <interval>] [--mode <demo|real>] [--base-dir <path>] [--skip-liquidation] [--skip-klines] [--storage <duckdb|postgres>] [--postgres-url <url>]\n       sandbox-quant-collector summary [--mode <demo|real>] [--base-dir <path>] [--storage <duckdb|postgres>] [--postgres-url <url>]\n       sandbox-quant-collector snapshot postgres-to-duckdb (--symbol <symbol> | --symbols <a,b,c>) (--date <YYYY-MM-DD> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>) [--mode <demo|real>] [--base-dir <path>] [--product <spot|um|cm>] [--interval <interval>] [--postgres-url <url>] [--skip-klines] [--skip-liquidations] [--skip-book-tickers] [--skip-agg-trades] [--no-clear]",
+        )
+        .into()),
+    };
+    if let Err(error) = result {
+        error!(service = "collector", mode = init_mode, error = %error, "process failed");
+        return Err(error);
     }
+    info!(service = "collector", mode = init_mode, "process completed");
     Ok(())
 }
 
@@ -559,6 +601,26 @@ fn import_many(
     }
 
     Ok(total)
+}
+
+fn archive_gap_warning(
+    config: &BatchImportConfig,
+    report: &BinancePublicImportReport,
+) -> Option<String> {
+    if config.storage_backend != CollectorStorageBackend::Postgres {
+        return None;
+    }
+    if report.kline_rows > 0 || report.skipped_kline_dates == 0 {
+        return None;
+    }
+    let today_utc = Utc::now().date_naive();
+    if config.to < today_utc {
+        return None;
+    }
+    Some(format!(
+        "warning=current_day_archive_not_available use=postgres_kline_backfill from={} to={} today_utc={}",
+        config.from, config.to, today_utc
+    ))
 }
 
 fn join_products(products: &[BinancePublicProduct]) -> String {

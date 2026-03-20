@@ -11,7 +11,7 @@ use crate::record::coordination::RecorderCoordination;
 use crate::storage::postgres_market_data::{
     connect as connect_postgres, init_schema as init_postgres_schema, insert_kline,
     insert_liquidation, mask_postgres_url, CollectorStorageBackend, PostgresKlineRecord,
-    PostgresLiquidationRecord,
+    PostgresLiquidationRecord, SHARED_MARKET_DATA_MODE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,7 +275,7 @@ fn import_liquidation_snapshot_bytes_duckdb(
                  )",
                 params![
                     next_id,
-                    record.mode,
+                    mode.as_str(),
                     record.symbol,
                     record.event_time_ms,
                     record.receive_time_ms,
@@ -314,7 +314,7 @@ fn import_liquidation_snapshot_bytes_postgres(
 }
 
 fn parse_liquidation_line(
-    mode: BinanceMode,
+    _mode: BinanceMode,
     product: BinancePublicProduct,
     symbol: &str,
     line: &str,
@@ -336,7 +336,6 @@ fn parse_liquidation_line(
         limit_price
     };
     Ok(PostgresLiquidationRecord {
-        mode: mode.as_str().to_string(),
         product: product.as_str().to_string(),
         symbol: symbol.to_string(),
         event_time_ms: time_ms,
@@ -365,6 +364,7 @@ fn import_kline_bytes_duckdb(
     let csv = first_zip_csv(bytes)?;
     let mut rows = 0usize;
     let mut next_id = next_kline_id(connection)?;
+    let shared_mode = SHARED_MARKET_DATA_MODE.to_string();
     for line in csv.lines() {
         if line.trim().is_empty() || line.starts_with("open_time,") {
             continue;
@@ -382,7 +382,7 @@ fn import_kline_bytes_duckdb(
                  )",
                 params![
                     next_id,
-                    record.mode,
+                    shared_mode.clone(),
                     record.product,
                     record.symbol,
                     record.interval_name,
@@ -429,7 +429,7 @@ fn import_kline_bytes_postgres(
 }
 
 fn parse_kline_line(
-    mode: BinanceMode,
+    _mode: BinanceMode,
     product: BinancePublicProduct,
     symbol: &str,
     interval: &str,
@@ -442,7 +442,6 @@ fn parse_kline_line(
         });
     }
     Ok(PostgresKlineRecord {
-        mode: mode.as_str().to_string(),
         product: product.as_str().to_string(),
         symbol: symbol.to_string(),
         interval_name: interval.to_string(),

@@ -10,19 +10,30 @@ clients:
 
 scrape_configs:
   - job_name: sandbox-quant-var-logs
+    pipeline_stages:
+      - json:
+          expressions:
+            service: service
+            mode: mode
+            kind: kind
+            message: message
+      - labels:
+          service:
+          mode:
+          kind:
     static_configs:
       - targets:
           - localhost
         labels:
           job: sandbox-quant-var-logs
           source: file-log
-          __path__: /workspace/var/*.log
+          __path__: /workspace/var/log/*.jsonl
       - targets:
           - localhost
         labels:
           job: sandbox-quant-var-logs
           source: file-log
-          __path__: /workspace/var/**/*.log
+          __path__: /workspace/var/log/**/*.jsonl
 
   - job_name: sandbox-quant-event-log
     pipeline_stages:

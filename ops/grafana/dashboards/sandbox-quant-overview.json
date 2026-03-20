@@ -70,7 +70,7 @@
           },
           "editorMode": "code",
           "format": "time_series",
-          "rawSql": "WITH bucketed AS (\n  SELECT\n    date_bin(\n      CASE ${interval:sqlstring}\n        WHEN '1m' THEN INTERVAL '1 minute'\n        WHEN '15m' THEN INTERVAL '15 minutes'\n        WHEN '30m' THEN INTERVAL '30 minutes'\n        WHEN '1h' THEN INTERVAL '1 hour'\n        ELSE INTERVAL '1 minute'\n      END,\n      open_time,\n      TIMESTAMPTZ '1970-01-01 00:00:00+00'\n    ) AS time,\n    symbol,\n    close,\n    close_time\n  FROM raw_klines\n  WHERE mode = ${mode:sqlstring}\n    AND symbol IN (${symbol:sqlstring})\n    AND interval_name = '1m'\n    AND $__timeFilter(open_time)\n), ranked AS (\n  SELECT\n    time,\n    symbol,\n    close AS close_price,\n    row_number() OVER (PARTITION BY symbol, time ORDER BY close_time DESC) AS row_num\n  FROM bucketed\n), sampled AS (\n  SELECT\n    time,\n    symbol,\n    close_price\n  FROM ranked\n  WHERE row_num = 1\n), normalized AS (\n  SELECT\n    time,\n    symbol,\n    ((close_price / nullif(first_value(close_price) OVER (PARTITION BY symbol ORDER BY time), 0)) - 1) * 100 AS relative_return_pct\n  FROM sampled\n)\nSELECT\n  time,\n  symbol,\n  relative_return_pct\nFROM normalized\nORDER BY 1, 2",
+          "rawSql": "WITH bucketed AS (\n  SELECT\n    date_bin(\n      CASE ${interval:sqlstring}\n        WHEN '1m' THEN INTERVAL '1 minute'\n        WHEN '15m' THEN INTERVAL '15 minutes'\n        WHEN '30m' THEN INTERVAL '30 minutes'\n        WHEN '1h' THEN INTERVAL '1 hour'\n        ELSE INTERVAL '1 minute'\n      END,\n      open_time,\n      TIMESTAMPTZ '1970-01-01 00:00:00+00'\n    ) AS time,\n    symbol,\n    close,\n    close_time\n  FROM raw_klines\n  WHERE symbol IN (${symbol:sqlstring})\n    AND interval_name = '1m'\n    AND $__timeFilter(open_time)\n), ranked AS (\n  SELECT\n    time,\n    symbol,\n    close AS close_price,\n    row_number() OVER (PARTITION BY symbol, time ORDER BY close_time DESC) AS row_num\n  FROM bucketed\n), sampled AS (\n  SELECT\n    time,\n    symbol,\n    close_price\n  FROM ranked\n  WHERE row_num = 1\n), normalized AS (\n  SELECT\n    time,\n    symbol,\n    ((close_price / nullif(first_value(close_price) OVER (PARTITION BY symbol ORDER BY time), 0)) - 1) * 100 AS relative_return_pct\n  FROM sampled\n)\nSELECT\n  time,\n  symbol,\n  relative_return_pct\nFROM normalized\nORDER BY 1, 2",
           "refId": "A",
           "sql": {
             "columns": [],
@@ -125,7 +125,7 @@
           },
           "editorMode": "code",
           "format": "time_series",
-          "rawSql": "SELECT\n  date_bin(\n    CASE ${interval:sqlstring}\n      WHEN '1m' THEN INTERVAL '1 minute'\n      WHEN '15m' THEN INTERVAL '15 minutes'\n      WHEN '30m' THEN INTERVAL '30 minutes'\n      WHEN '1h' THEN INTERVAL '1 hour'\n      ELSE INTERVAL '1 minute'\n    END,\n    open_time,\n    TIMESTAMPTZ '1970-01-01 00:00:00+00'\n  ) AS time,\n  symbol,\n  sum(volume) AS volume\nFROM raw_klines\nWHERE mode = ${mode:sqlstring}\n  AND symbol IN (${symbol:sqlstring})\n  AND interval_name = '1m'\n  AND $__timeFilter(open_time)\nGROUP BY 1, 2\nORDER BY 1, 2",
+          "rawSql": "SELECT\n  date_bin(\n    CASE ${interval:sqlstring}\n      WHEN '1m' THEN INTERVAL '1 minute'\n      WHEN '15m' THEN INTERVAL '15 minutes'\n      WHEN '30m' THEN INTERVAL '30 minutes'\n      WHEN '1h' THEN INTERVAL '1 hour'\n      ELSE INTERVAL '1 minute'\n    END,\n    open_time,\n    TIMESTAMPTZ '1970-01-01 00:00:00+00'\n  ) AS time,\n  symbol,\n  sum(volume) AS volume\nFROM raw_klines\nWHERE symbol IN (${symbol:sqlstring})\n  AND interval_name = '1m'\n  AND $__timeFilter(open_time)\nGROUP BY 1, 2\nORDER BY 1, 2",
           "refId": "A",
           "sql": {
             "columns": [],
@@ -180,7 +180,7 @@
           },
           "editorMode": "code",
           "format": "time_series",
-          "rawSql": "SELECT\n  date_bin(\n    CASE ${interval:sqlstring}\n      WHEN '1m' THEN INTERVAL '1 minute'\n      WHEN '15m' THEN INTERVAL '15 minutes'\n      WHEN '30m' THEN INTERVAL '30 minutes'\n      WHEN '1h' THEN INTERVAL '1 hour'\n      ELSE INTERVAL '1 minute'\n    END,\n    event_time,\n    TIMESTAMPTZ '1970-01-01 00:00:00+00'\n  ) AS time,\n  symbol,\n  count(*) AS liquidation_events\nFROM raw_liquidation_events\nWHERE mode = ${mode:sqlstring}\n  AND symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(event_time)\nGROUP BY 1, 2\nORDER BY 1, 2",
+          "rawSql": "SELECT\n  date_bin(\n    CASE ${interval:sqlstring}\n      WHEN '1m' THEN INTERVAL '1 minute'\n      WHEN '15m' THEN INTERVAL '15 minutes'\n      WHEN '30m' THEN INTERVAL '30 minutes'\n      WHEN '1h' THEN INTERVAL '1 hour'\n      ELSE INTERVAL '1 minute'\n    END,\n    event_time,\n    TIMESTAMPTZ '1970-01-01 00:00:00+00'\n  ) AS time,\n  symbol,\n  count(*) AS liquidation_events\nFROM raw_liquidation_events\nWHERE symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(event_time)\nGROUP BY 1, 2\nORDER BY 1, 2",
           "refId": "A",
           "sql": {
             "columns": [],
@@ -224,7 +224,7 @@
           },
           "editorMode": "code",
           "format": "table",
-          "rawSql": "SELECT\n  product,\n  symbol,\n  interval_name,\n  count(*) AS row_count,\n  min(open_time) AS first_open_time,\n  max(close_time) AS last_close_time\nFROM raw_klines\nWHERE mode = ${mode:sqlstring}\n  AND symbol IN (${symbol:sqlstring})\nGROUP BY 1, 2, 3\nORDER BY row_count DESC\nLIMIT 20",
+          "rawSql": "SELECT\n  product,\n  symbol,\n  interval_name,\n  count(*) AS row_count,\n  min(open_time) AS first_open_time,\n  max(close_time) AS last_close_time\nFROM raw_klines\nWHERE symbol IN (${symbol:sqlstring})\nGROUP BY 1, 2, 3\nORDER BY row_count DESC\nLIMIT 20",
           "refId": "A",
           "sql": {
             "columns": [],
@@ -334,32 +334,6 @@
   ],
   "templating": {
     "list": [
-      {
-        "current": {
-          "selected": false,
-          "text": "demo",
-          "value": "demo"
-        },
-        "hide": 0,
-        "includeAll": false,
-        "label": "Mode",
-        "multi": false,
-        "name": "mode",
-        "options": [
-          {
-            "selected": true,
-            "text": "demo",
-            "value": "demo"
-          },
-          {
-            "selected": false,
-            "text": "real",
-            "value": "real"
-          }
-        ],
-        "query": "demo,real",
-        "type": "custom"
-      },
       {
         "current": {
           "selected": false,

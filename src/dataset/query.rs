@@ -773,6 +773,9 @@ fn parse_template(raw: &str) -> Result<StrategyTemplate, StorageError> {
     match raw {
         "liquidation-breakdown-short" => Ok(StrategyTemplate::LiquidationBreakdownShort),
         "price-sma-cross-long" => Ok(StrategyTemplate::PriceSmaCrossLong),
+        "price-sma-cross-short" => Ok(StrategyTemplate::PriceSmaCrossShort),
+        "price-sma-cross-long-fast" => Ok(StrategyTemplate::PriceSmaCrossLongFast),
+        "price-sma-cross-short-fast" => Ok(StrategyTemplate::PriceSmaCrossShortFast),
         other => Err(StorageError::WriteFailedWithContext {
             message: format!("unsupported backtest template: {other}"),
         }),

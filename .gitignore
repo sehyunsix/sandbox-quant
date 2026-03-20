@@ -1,4 +1,7 @@
 /target
+/.omx
+/codex-skills
+/watchdog-context
 .env
 .env.example
 *.log
@@ -6,3 +9,4 @@
 data/*.sqlite
 data/*.json
 docs-site/book/
+watchdog-context/*.md

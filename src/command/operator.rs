@@ -169,8 +169,12 @@ fn parse_watch_id(raw: Option<&String>, usage: &str) -> Result<u64, String> {
 fn parse_strategy_template(raw: Option<&String>, usage: &str) -> Result<StrategyTemplate, String> {
     match raw.map(String::as_str) {
         Some("liquidation-breakdown-short") => Ok(StrategyTemplate::LiquidationBreakdownShort),
+        Some("price-sma-cross-long") => Ok(StrategyTemplate::PriceSmaCrossLong),
+        Some("price-sma-cross-short") => Ok(StrategyTemplate::PriceSmaCrossShort),
+        Some("price-sma-cross-long-fast") => Ok(StrategyTemplate::PriceSmaCrossLongFast),
+        Some("price-sma-cross-short-fast") => Ok(StrategyTemplate::PriceSmaCrossShortFast),
         Some(other) => Err(format!(
-            "unsupported strategy template: {other}. expected liquidation-breakdown-short"
+            "unsupported strategy template: {other}. expected liquidation-breakdown-short, price-sma-cross-long, price-sma-cross-short, price-sma-cross-long-fast, or price-sma-cross-short-fast"
         )),
         None => Err(usage.to_string()),
     }

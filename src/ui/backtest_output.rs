@@ -1,5 +1,6 @@
 use crate::backtest_app::runner::BacktestReport;
 use crate::dataset::types::BacktestRunSummaryRow;
+use crate::strategy::model::StrategyTemplate;
 
 pub fn render_backtest_run(report: &BacktestReport) -> String {
     let realized_trade_count = report
@@ -35,18 +36,7 @@ pub fn render_backtest_run(report: &BacktestReport) -> String {
             "derived_kline_1s_bars={}",
             report.dataset.derived_kline_1s_bars
         ),
-        format!(
-            "state={}",
-            if !report.dataset.symbol_found {
-                "symbol_not_found"
-            } else if !has_dataset_rows {
-                "empty_dataset"
-            } else if report.trades.is_empty() {
-                "no_trades"
-            } else {
-                "ok"
-            }
-        ),
+        format!("state={}", report_state(report, has_dataset_rows)),
         "[results]".to_string(),
         format!("trigger_count={}", report.trigger_count),
         format!("closed_trades={}", realized_trade_count),
@@ -61,15 +51,7 @@ pub fn render_backtest_run(report: &BacktestReport) -> String {
         format!("average_net_pnl={:.2}", report.average_net_pnl),
         format!(
             "summary=state:{} trades:{}/{} pnl:{:.2} equity:{:.2}->{:.2}",
-            if !report.dataset.symbol_found {
-                "symbol_not_found"
-            } else if !has_dataset_rows {
-                "empty_dataset"
-            } else if report.trades.is_empty() {
-                "no_trades"
-            } else {
-                "ok"
-            },
+            report_state(report, has_dataset_rows),
             realized_trade_count,
             report.trigger_count,
             report.net_pnl,
@@ -118,6 +100,51 @@ pub fn render_backtest_run(report: &BacktestReport) -> String {
     }
 
     lines.join("\n")
+}
+
+fn report_state(report: &BacktestReport, has_dataset_rows: bool) -> &'static str {
+    if !report.dataset.symbol_found {
+        return "symbol_not_found";
+    }
+    match report.template {
+        StrategyTemplate::LiquidationBreakdownShort => {
+            if !has_dataset_rows {
+                "empty_dataset"
+            } else if report.trades.is_empty() {
+                "no_trades"
+            } else {
+                "ok"
+            }
+        }
+        StrategyTemplate::PriceSmaCrossLong => {
+            if report.trades.is_empty() {
+                "no_trades"
+            } else {
+                "ok"
+            }
+        }
+        StrategyTemplate::PriceSmaCrossShort => {
+            if report.trades.is_empty() {
+                "no_trades"
+            } else {
+                "ok"
+            }
+        }
+        StrategyTemplate::PriceSmaCrossLongFast => {
+            if report.trades.is_empty() {
+                "no_trades"
+            } else {
+                "ok"
+            }
+        }
+        StrategyTemplate::PriceSmaCrossShortFast => {
+            if report.trades.is_empty() {
+                "no_trades"
+            } else {
+                "ok"
+            }
+        }
+    }
 }
 
 pub fn render_backtest_run_list(runs: &[BacktestRunSummaryRow]) -> String {
