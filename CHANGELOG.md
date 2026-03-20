@@ -1,3 +1,8 @@
+## v1.0.11 - 2026-03-20
+
+- Stop tracking local env example file (1bd0ab6)
+- Refactor recorder and trading engine into managed daemons (f25d5b2)
+
 ## v1.0.10 - 2026-03-15
 
 - Add Loki-powered system dashboard (1474f15)
